@@ -83,6 +83,15 @@ export class SessionStore {
     if (removed > 0) this.commit()
     return removed
   }
+
+  /** Deletes a single message (an empty placeholder after a failed stream). */
+  removeMessage(id: string): boolean {
+    const before = this.messages.length
+    this.messages = this.messages.filter((m) => m.id !== id)
+    const hit = before !== this.messages.length
+    if (hit) this.commit()
+    return hit
+  }
 }
 
 function uid(): string {

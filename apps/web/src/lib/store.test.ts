@@ -89,3 +89,15 @@ describe('SessionStore — snapshot & subscription', () => {
     expect(snap2.sessions).toHaveLength(2)
   })
 })
+
+describe('SessionStore — removeMessage', () => {
+  it('retire uniquement le message visé', () => {
+    const s = new SessionStore()
+    const a = s.createSession()
+    const m1 = s.appendMessage(a.id, 'user', 'un')
+    const m2 = s.appendMessage(a.id, 'assistant', 'deux')
+    expect(s.removeMessage(m1.id)).toBe(true)
+    expect(s.removeMessage('inconnu')).toBe(false)
+    expect(s.listMessages(a.id).map((m) => m.id)).toEqual([m2.id])
+  })
+})

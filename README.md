@@ -6,6 +6,12 @@ NyWorkflow est un harness web qui exécute des workflows IA à partir de simples
 
 > Un agent. Des dossiers. Pas de framework d'orchestration.
 
+## Aperçu
+
+![UI NyWorkflow — sessions, chat streamé, sélecteur de modèle](docs/assets/screenshot.png)
+
+*Capture jouée par la CI sur un vrai Chromium et actualisée à chaque push sur main.*
+
 ## Pourquoi
 
 - **Simple** — un workflow = un dossier d'étapes numérotées, chaque étape a un `CONTEXT.md` (Entrées / Process / Sorties).
@@ -34,19 +40,17 @@ pnpm test:e2e     # Playwright — UI réelle (télécharge Chromium au besoin)
 pnpm typecheck    # TypeScript
 ```
 
-L'UI M1 tourne sans backend : chat à réponses simulées, commandes `/new`, `/help`, `/clear`.
+L'UI fonctionne avec ou sans passerelle. Sans `gemini-web2api` : chat en mode simulé (réponses factices, `/new`, `/help`, `/clear`) avec un message clair. Avec la passerelle lancée sur `http://127.0.0.1:8081` (repo ny-gemini-acp) : streaming réel, sélecteur de modèles, le tout same-origin via le proxy `/api` du serveur web — zéro CORS.
 
-CI : à chaque push/PR — typecheck, build, Vitest, Playwright, puis artefacts (UI construite, rapports de tests). Voir l'onglet [Actions](https://github.com/rakmahefa/NyWorkflow/actions).
+CI à chaque push/PR : typecheck, build, Vitest, Playwright, puis artefacts (UI construite, rapports de tests, capture README). Voir l'onglet [Actions](https://github.com/rakmahefa/NyWorkflow/actions).
 
-Pour les réponses Gemini réelles (dès M2) : démarrer la passerelle `gemini-web2api` du repo ny-gemini-acp sur `http://127.0.0.1:8081`.
-
-## Avancement — 30 %
+## Avancement — 45 %
 
 | Milestone | Contenu | Poids | État |
 |---|---|---:|---|
 | M0 | Fondations : docs, architecture, squelette | 10 % | ✅ Terminé |
 | M1 | UI web + tests + CI (chat simulé) | 20 % | ✅ Terminé |
-| M2 | Adaptateur LLM (passerelle web2api) | 15 % | ⬜ À faire |
+| M2 | Adaptateur LLM (passerelle web2api) | 15 % | ✅ Terminé |
 | M3 | Sessions persistantes (JSONL) | 15 % | ⬜ À faire |
 | M4 | Moteur ICM (étapes, CONTEXT.md) | 20 % | ⬜ À faire |
 | M5 | Outils + permissions | 10 % | ⬜ À faire |

@@ -124,3 +124,30 @@ body {
   cursor: pointer;
 }
 .composer button:disabled { opacity: 0.5; cursor: default; }
+
+/* --- Header tools (M2) --- */
+.main-tools { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.model-picker { display: flex; align-items: center; gap: 8px; }
+.model-picker select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  background: var(--panel);
+  color: var(--text);
+  max-width: 200px;
+}
+.model-picker select:disabled { color: var(--muted); }
+.gw-dot { width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; flex: none; }
+.gw-dot[data-state='up'] { background: #22c55e; }
+.gw-dot[data-state='down'] { background: #ef4444; }
+.model-picker button {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.model-picker button:disabled { opacity: 0.5; cursor: default; }

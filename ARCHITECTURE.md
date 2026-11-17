@@ -35,7 +35,7 @@
 | `apps/web` | UI : sessions, chat, vue étapes | logique métier |
 | `packages/core` | parsing workspace ICM, exécution des étapes | appels réseau |
 | `packages/session` | journalisation append-only, relecture, fork | transformations |
-| `packages/adapter-llm` | client OpenAI-compatible, streaming SSE | parsing Gemini |
+| `packages/adapter-llm` | client OpenAI-compatible, streaming SSE (appelé same-origin via le proxy `/api` du serveur web) | parsing Gemini |
 | `packages/tools` | read / write / ls / glob / shell + permissions | politique d'exécution |
 
 ## Workspace ICM (ce que le moteur exécute)

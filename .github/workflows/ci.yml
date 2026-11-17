@@ -30,7 +30,7 @@ jobs:
       - run: pnpm build
 
       - name: Vitest (junit + console)
-        run: pnpm --filter @nyworkflow/web test:ci
+        run: pnpm -r --if-present test:ci
 
       - name: Artefact — UI construite (dist)
         uses: actions/upload-artifact@v4
@@ -38,11 +38,13 @@ jobs:
           name: web-dist
           path: apps/web/dist
 
-      - name: Artefact — rapport Vitest
+      - name: Artefact — rapports Vitest
         uses: actions/upload-artifact@v4
         with:
           name: vitest-junit
-          path: apps/web/test-results
+          path: |
+            apps/web/test-results
+            packages/adapter-llm/test-results
           if-no-files-found: warn
 
   e2e:
@@ -73,3 +75,47 @@ jobs:
             apps/web/playwright-report
             apps/web/test-results
           if-no-files-found: warn
+
+  screenshot:
+    name: Capture README
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build # dist nécessaire au serveur preview
+
+      - run: pnpm --filter @nyworkflow/web exec playwright install --with-deps chromium
+
+      - name: Jouer la scène et capturer l'UI
+        run: pnpm --filter @nyworkflow/web screenshot
+
+      - name: Artefact — capture
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot
+          path: docs/assets/screenshot.png
+          if-no-files-found: error
+
+      - name: Actualiser la capture du README (main uniquement)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/assets/screenshot.png
+          if git diff --cached --quiet; then
+            echo "Capture inchangée — rien à pousser."
+            exit 0
+          fi
+          git commit -m "chore: actualise la capture du README [skip ci]"
+          git push

@@ -5,4 +5,4 @@ Rôle : interface web du harness (React + Vite, port 3080). Inspiration : deepse
 Entrées : types de `packages/core` et `packages/session`.
 Sorties : application web servie sur `127.0.0.1:3080`.
 
-Tâches : M1 (UI + tests), M2 (sélecteur de modèles), M3 (sessions), M6 (vue workflow) — voir MILESTONES.md.
+Tâches : M1 ✅, M2 ✅ (sélecteur de modèles, streaming réel), M3 (sessions), M6 (vue workflow) — voir MILESTONES.md.

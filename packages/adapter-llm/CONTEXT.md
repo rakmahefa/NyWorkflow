@@ -6,4 +6,4 @@ Entrées : requêtes de chat (messages, modèle, signal d'annulation).
 Sorties : flux de tokens (`AsyncIterable<string>`).
 
 Ne fait pas : parsing Gemini, auth cookie — c'est le travail de la passerelle.
-Tâches : M2 — voir MILESTONES.md.
+Tâches : M2 ✅ (2026-11-17) — voir MILESTONES.md.

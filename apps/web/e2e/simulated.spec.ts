@@ -1,0 +1,21 @@
+import { expect, test } from '@playwright/test'
+
+// Passerelle « absente » : chaque appel /api est coupé au niveau de la page.
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/**', (route) => route.abort())
+})
+
+test('passerelle absente : message clair + repli simulé', async ({ page }) => {
+  await page.goto('/')
+
+  await expect(page.locator('[data-test="gateway-status"]')).toHaveAttribute('data-state', 'down')
+  await expect(page.locator('[data-test="model-select"]')).toBeDisabled()
+  await expect(page.locator('.msg.system').last()).toContainText('Passerelle gemini-web2api absente')
+
+  const box = page.getByLabel('Message')
+  await box.fill('Bonjour M2')
+  await box.press('Enter')
+
+  await expect(page.locator('.msg.assistant').last()).toContainText('Réponse simulée', { timeout: 10_000 })
+  await expect(page.locator('.msg.assistant').last()).toContainText('Bonjour M2')
+})

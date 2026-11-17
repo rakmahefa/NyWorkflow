@@ -24,17 +24,18 @@ Objectif : une UI utilisable sans backend, fidèle à l'esprit deepseek-harness.
 
 **Livré quand :** `pnpm test` vert et démo sans backend possible. ✔
 
-## M2 — Adaptateur LLM · 15 %
+## M2 — Adaptateur LLM · 15 % · ✅ Terminé (2026-11-17)
 
 Objectif : parler à la passerelle `gemini-web2api` (OpenAI-compatible).
 
-- [ ] Interface `LlmAdapter` + implémentation fetch/SSE dans `packages/adapter-llm`
-- [ ] Sélecteur de modèle dans l'UI (via `/v1/models`)
-- [ ] Chat réel en streaming depuis l'UI
-- [ ] Message d'erreur clair si la passerelle est absente
-- [ ] Tests : serveur mock OpenAI-compatible (Vitest, sans réseau)
+- [x] Interface `LlmAdapter` + implémentation fetch/SSE dans `packages/adapter-llm` (repli `/v1beta/models` sur 404, annulation mid-flux)
+- [x] Sélecteur de modèle dans l'UI (via `/v1/models`), proxy same-origin `/api` — zéro CORS
+- [x] Chat réel en streaming depuis l'UI
+- [x] Message d'erreur clair si la passerelle est absente (+ repli simulé, jamais d'échec silencieux)
+- [x] Tests : serveur mock OpenAI-compatible — 11 tests Vitest sans réseau
+- [x] CI : capture d'écran README auto-actualisée (job dédié, artefact, commit `[skip ci]`)
 
-**Livré quand :** une question posée dans l'UI obtient une vraie réponse Gemini streamée.
+**Livré quand :** une question posée dans l'UI obtient une vraie réponse Gemini streamée. ✔ (vérifié e2e contre une maquette SSE ; passerelle réelle à la première utilisation)
 
 ## M3 — Sessions persistantes · 15 %
 
