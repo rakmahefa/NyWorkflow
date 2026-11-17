@@ -4,7 +4,7 @@
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { chromium } from 'playwright'
+import { chromium } from '@playwright/test' // dépendance déclarée — 'playwright' nu n'est pas installable ici
 import { preview } from 'vite'
 import { startMockGateway } from '../e2e/mock-gateway.mjs'
 
