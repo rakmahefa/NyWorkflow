@@ -11,5 +11,9 @@ test-results/
 *.local
 cookie.json
 
+# État runtime du harness (journaux de sessions) — local par défaut ;
+# les utilisateurs peuvent choisir de le versionner, le repo de dev non.
+.nyworkflow/
+
 # OS
 .DS_Store

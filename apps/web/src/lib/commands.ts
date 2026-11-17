@@ -1,4 +1,5 @@
 import type { SessionStore } from './store'
+import type { SessionInfo } from './types'
 
 export interface ParsedInput {
   kind: 'chat' | 'command'
@@ -22,9 +23,9 @@ export function parseInput(raw: string): ParsedInput {
 export const HELP_TEXT = [
   'Commandes disponibles :',
   '  /new [titre] — créer une session (et basculer dessus)',
-  '  /clear — effacer les messages de la session courante',
+  '  /clear — vider l’affichage de la session courante (le journal est conservé)',
   '  /help — cette aide',
-  'Une commande inconnue n\'est jamais envoyée au modèle.',
+  'Une commande inconnue n’est jamais envoyée au modèle.',
 ].join('\n')
 
 export interface CommandOutcome {
@@ -34,21 +35,27 @@ export interface CommandOutcome {
   newActiveId?: string
 }
 
-/** Executes a local command against the store. Never calls any model. */
-export function runCommand(
-  store: SessionStore,
-  name: string,
-  args: string,
-  activeSessionId: string,
-): CommandOutcome {
+export interface CommandDeps {
+  store: SessionStore
+  /** Session factory — server journal in server mode, local in memory mode. */
+  createSession: (title?: string) => Promise<SessionInfo>
+  activeSessionId: string
+}
+
+/** Executes a local command. Never calls any model. */
+export async function runCommand(deps: CommandDeps, name: string, args: string): Promise<CommandOutcome> {
   switch (name) {
     case 'new': {
-      const s = store.createSession(args || undefined)
+      const s = await deps.createSession(args || undefined)
       return { systemText: `Session « ${s.title} » créée.`, newActiveId: s.id }
     }
     case 'clear': {
-      const removed = store.clearMessages(activeSessionId)
-      return { systemText: removed > 0 ? `${removed} message(s) effacé(s).` : 'Rien à effacer.' }
+      // The journal is append-only: /clear empties the view, nothing more.
+      const removed = deps.store.clearMessages(deps.activeSessionId)
+      return {
+        systemText:
+          removed > 0 ? `${removed} message(s) effacé(s) — journal conservé (append-only).` : 'Rien à effacer.',
+      }
     }
     case 'help':
       return { systemText: HELP_TEXT }

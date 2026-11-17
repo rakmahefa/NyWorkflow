@@ -101,3 +101,54 @@ describe('SessionStore — removeMessage', () => {
     expect(s.listMessages(a.id).map((m) => m.id)).toEqual([m2.id])
   })
 })
+
+describe('SessionStore — hydratation et fork (M3)', () => {
+  it('ingest remplace tout l’état (boot depuis les journaux)', () => {
+    const s = new SessionStore()
+    s.createSession('Ancienne')
+    s.appendMessage(s.listSessions()[0]!.id, 'user', 'vieux')
+    s.ingest(
+      [{ id: '2026-11-17-a1b2', title: 'Rapport Q3', createdAt: 1 }],
+      [
+        { id: '2026-11-17-a1b2:0', sessionId: '2026-11-17-a1b2', role: 'user', text: 'salut', at: 2 },
+        { id: '2026-11-17-a1b2:1', sessionId: '2026-11-17-a1b2', role: 'assistant', text: 'voici', at: 3 },
+      ],
+    )
+    expect(s.listSessions().map((x) => x.title)).toEqual(['Rapport Q3'])
+    expect(s.listMessages('2026-11-17-a1b2').map((m) => m.text)).toEqual(['salut', 'voici'])
+  })
+
+  it('addSession enregistre une session venue du serveur', () => {
+    const s = new SessionStore()
+    s.createSession('Une')
+    const added = s.addSession({ id: '2026-11-17-b2c3', title: 'Une (fork)', createdAt: 5 })
+    expect(added.id).toBe('2026-11-17-b2c3')
+    expect(s.listSessions().map((x) => x.title)).toEqual(['Une', 'Une (fork)'])
+  })
+
+  it('copyMessages copie le chat user/assistant dans l’ordre, ignore système et vides', () => {
+    const s = new SessionStore()
+    const a = s.createSession('Source')
+    const b = s.createSession('Cible')
+    s.appendMessage(a.id, 'system', 'note')
+    const u = s.appendMessage(a.id, 'user', 'un')
+    s.appendMessage(a.id, 'assistant', '')
+    s.appendMessage(a.id, 'assistant', 'deux')
+    const n = s.copyMessages(a.id, b.id)
+    expect(n).toBe(2)
+    expect(s.listMessages(b.id).map((m) => [m.role, m.text])).toEqual([
+      ['user', 'un'],
+      ['assistant', 'deux'],
+    ])
+    // Ids frais : la copie n’entre pas en collision avec la source.
+    const [first] = s.listMessages(b.id)
+    expect(first!.id).not.toBe(u.id)
+  })
+
+  it('copyMessages sans rien à copier : 0', () => {
+    const s = new SessionStore()
+    const a = s.createSession()
+    const b = s.createSession()
+    expect(s.copyMessages(a.id, b.id)).toBe(0)
+  })
+})

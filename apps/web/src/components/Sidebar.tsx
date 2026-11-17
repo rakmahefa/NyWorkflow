@@ -5,9 +5,10 @@ interface SidebarProps {
   activeId: string | null
   onSelect(id: string): void
   onNew(): void
+  onFork(id: string): void
 }
 
-export function Sidebar({ sessions, activeId, onSelect, onNew }: SidebarProps) {
+export function Sidebar({ sessions, activeId, onSelect, onNew, onFork }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -19,15 +20,25 @@ export function Sidebar({ sessions, activeId, onSelect, onNew }: SidebarProps) {
       </button>
       <nav className="sessions" aria-label="Sessions">
         {sessions.map((s) => (
-          <button
-            key={s.id}
-            className="session-item"
-            data-test="session-item"
-            aria-current={s.id === activeId}
-            onClick={() => onSelect(s.id)}
-          >
-            {s.title}
-          </button>
+          <div className="session-row" data-active={s.id === activeId} key={s.id}>
+            <button
+              className="session-item"
+              data-test="session-item"
+              aria-current={s.id === activeId}
+              onClick={() => onSelect(s.id)}
+            >
+              {s.title}
+            </button>
+            <button
+              className="fork"
+              data-test="fork-btn"
+              title={`Forker « ${s.title} »`}
+              aria-label={`Forker la session « ${s.title} »`}
+              onClick={() => onFork(s.id)}
+            >
+              Fork
+            </button>
+          </div>
         ))}
       </nav>
     </aside>

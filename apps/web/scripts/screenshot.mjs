@@ -32,7 +32,7 @@ try {
   const box = page.getByLabel('Message')
   await box.fill('/new Rapport Q3')
   await box.press('Enter')
-  await page.locator('[data-test="session-item"]').first().click()
+  await page.locator('[data-test="session-item"]').last().click() // la scène se joue dans « Rapport Q3 »
   await page.locator('[data-test="model-select"]').selectOption('gemini-2.5-pro')
 
   await box.fill('Présente NyWorkflow en deux phrases.')

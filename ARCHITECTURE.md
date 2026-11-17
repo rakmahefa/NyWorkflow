@@ -20,6 +20,8 @@
 └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+Le serveur web embarque aussi l'API `/sessions` (plugin Vite, branchée en dev comme en preview) : le navigateur y lit et écrit les journaux JSONL — il ne touche jamais les fichiers directement. L'emplacement par défaut est `.nyworkflow/` à la racine du repo, surchargeable par `NYW_HOME`.
+
 ## Les 5 règles
 
 1. **Le système de fichiers est l'orchestrateur** (ICM). Numérotation = ordre, dossier = périmètre, fichier = état. Aucune séquence codée en dur.
@@ -32,9 +34,9 @@
 
 | Package | Responsabilité | Ne fait pas |
 |---|---|---|
-| `apps/web` | UI : sessions, chat, vue étapes | logique métier |
+| `apps/web` | UI : sessions, chat, vue étapes ; serveur de sessions `/sessions` (plugin Vite, dev et preview) | logique métier |
 | `packages/core` | parsing workspace ICM, exécution des étapes | appels réseau |
-| `packages/session` | journalisation append-only, relecture, fork | transformations |
+| `packages/session` | journalisation append-only, relecture, fork, dérivation | transformations |
 | `packages/adapter-llm` | client OpenAI-compatible, streaming SSE (appelé same-origin via le proxy `/api` du serveur web) | parsing Gemini |
 | `packages/tools` | read / write / ls / glob / shell + permissions | politique d'exécution |
 

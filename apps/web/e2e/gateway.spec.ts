@@ -22,17 +22,20 @@ test('affiche l’app', async ({ page }) => {
 test('sessions : bouton, /new, /help, /clear', async ({ page }) => {
   await page.goto('/')
   const items = page.locator('[data-test="session-item"]')
-  await expect(items).toHaveCount(1)
+  await expect(items.first()).toBeVisible()
 
+  // Bouton : session créée et active (vue = nouvelle session).
   await page.getByRole('button', { name: '+ Nouvelle session' }).click()
-  await expect(items).toHaveCount(2)
+  await expect(page.locator('.msg.system').last()).toContainText('créée')
 
+  // /new avec titre unique — les journaux survivent aux runs précédents,
+  // aucune assertion absolue de comptage.
   const box = page.getByLabel('Message')
-  await box.fill('/new Démo ICM')
+  const titre = `Démo ICM ${Date.now()}`
+  await box.fill(`/new ${titre}`)
   await box.press('Enter')
-  await expect(items).toHaveCount(3)
-  await expect(items.filter({ hasText: 'Démo ICM' })).toBeVisible()
-  await expect(page.locator('.msg.system').last()).toContainText('Session « Démo ICM » créée')
+  await expect(items.filter({ hasText: titre })).toBeVisible()
+  await expect(page.locator('.msg.system').last()).toContainText(`Session « ${titre} » créée`)
 
   await box.fill('/help')
   await box.press('Enter')
@@ -74,7 +77,13 @@ test('erreur passerelle sur envoi : message système clair, pas de message vide'
   await page.goto('/')
 
   await expect(page.locator('[data-test="gateway-status"]')).toHaveAttribute('data-state', 'up')
+
+  // Session neuve pour l'occasion : l'état des autres tests ne compte pas.
   const box = page.getByLabel('Message')
+  await box.fill('/new Erreur test')
+  await box.press('Enter')
+  await expect(page.locator('.msg.system').last()).toContainText('Erreur test')
+
   await box.fill('hello')
   await box.press('Enter')
 

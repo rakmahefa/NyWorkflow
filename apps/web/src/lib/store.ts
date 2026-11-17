@@ -1,7 +1,9 @@
 import type { ChatMsg, Role, SessionInfo } from './types'
 
 /**
- * In-memory session store for M1 (persistence lands in M3).
+ * In-memory session store — the UI's single state (M3).
+ * Hydrated from the /sessions journal at boot (server mode), or grown
+ * locally (memory fallback when the API is unreachable).
  * Snapshot-based: every mutation rebuilds an immutable snapshot, so
  * React's useSyncExternalStore re-renders exactly once per change.
  */
@@ -47,6 +49,20 @@ export class SessionStore {
     return session
   }
 
+  /** Registers a session created elsewhere (server response). */
+  addSession(session: SessionInfo): SessionInfo {
+    this.sessions.push({ ...session })
+    this.commit()
+    return session
+  }
+
+  /** Replaces the whole state — boot hydration from the journals. */
+  ingest(sessions: readonly SessionInfo[], messages: readonly ChatMsg[]): void {
+    this.sessions = [...sessions]
+    this.messages = [...messages]
+    this.commit()
+  }
+
   appendMessage(sessionId: string, role: Role, text: string): ChatMsg {
     const msg: ChatMsg = { id: uid(), sessionId, role, text, at: Date.now() }
     this.messages.push(msg)
@@ -82,6 +98,21 @@ export class SessionStore {
     const removed = before - this.messages.length
     if (removed > 0) this.commit()
     return removed
+  }
+
+  /** Copies a session's settled chat (user/assistant) into another — fork. */
+  copyMessages(fromId: string, toId: string): number {
+    const source = this.messages.filter(
+      (m) =>
+        m.sessionId === fromId &&
+        (m.role === 'user' || m.role === 'assistant') &&
+        !m.streaming &&
+        m.text.trim() !== '',
+    )
+    if (source.length === 0) return 0
+    this.messages.push(...source.map((m) => ({ id: uid(), sessionId: toId, role: m.role, text: m.text, at: m.at })))
+    this.commit()
+    return source.length
   }
 
   /** Deletes a single message (an empty placeholder after a failed stream). */

@@ -180,6 +180,9 @@ importers:
       '@nyworkflow/adapter-llm':
         specifier: workspace:*
         version: link:../../packages/adapter-llm
+      '@nyworkflow/session':
+        specifier: workspace:*
+        version: link:../../packages/session
       react:
         specifier: ^19.3.1
         version: 19.3.1
@@ -190,6 +193,9 @@ importers:
       '@playwright/test':
         specifier: ^1.65.1
         version: 1.65.1
+      '@types/node':
+        specifier: ^26.6.6
+        version: 26.6.6
       '@types/react':
         specifier: ^19.3.0
         version: 19.3.0
@@ -223,7 +229,17 @@ importers:
 
   packages/core: {}
 
-  packages/session: {}
+  packages/session:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.6
+        version: 26.6.6
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^5.1.0
+        version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6))
 
   packages/tools: {}
 

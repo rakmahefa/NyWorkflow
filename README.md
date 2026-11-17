@@ -42,16 +42,18 @@ pnpm typecheck    # TypeScript
 
 L'UI fonctionne avec ou sans passerelle. Sans `gemini-web2api` : chat en mode simulé (réponses factices, `/new`, `/help`, `/clear`) avec un message clair. Avec la passerelle lancée sur `http://127.0.0.1:8081` (repo ny-gemini-acp) : streaming réel, sélecteur de modèles, le tout same-origin via le proxy `/api` du serveur web — zéro CORS.
 
+Les sessions sont journalisées en append-only sous `.nyworkflow/sessions/` (JSONL, un fichier par session). Fermez l'UI, relancez `pnpm dev` : tout revient — titres, messages, forks. Le bouton **Fork** copie un journal pour explorer une variante sans toucher à l'original ; `/clear` vide l'affichage, jamais le journal. Les messages système (retours de commandes, état de la passerelle) restent éphémères : seuls les échanges user/assistant sont journalisés — c'est exactement l'historique renvoyé au modèle.
+
 CI à chaque push/PR : typecheck, build, Vitest, Playwright, puis artefacts (UI construite, rapports de tests, capture README). Voir l'onglet [Actions](https://github.com/rakmahefa/NyWorkflow/actions).
 
-## Avancement — 45 %
+## Avancement — 60 %
 
 | Milestone | Contenu | Poids | État |
 |---|---|---:|---|
 | M0 | Fondations : docs, architecture, squelette | 10 % | ✅ Terminé |
 | M1 | UI web + tests + CI (chat simulé) | 20 % | ✅ Terminé |
 | M2 | Adaptateur LLM (passerelle web2api) | 15 % | ✅ Terminé |
-| M3 | Sessions persistantes (JSONL) | 15 % | ⬜ À faire |
+| M3 | Sessions persistantes (JSONL, fork) | 15 % | ✅ Terminé |
 | M4 | Moteur ICM (étapes, CONTEXT.md) | 20 % | ⬜ À faire |
 | M5 | Outils + permissions | 10 % | ⬜ À faire |
 | M6 | Vue workflow + v0.1.0 | 10 % | ⬜ À faire |

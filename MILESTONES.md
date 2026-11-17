@@ -37,16 +37,16 @@ Objectif : parler à la passerelle `gemini-web2api` (OpenAI-compatible).
 
 **Livré quand :** une question posée dans l'UI obtient une vraie réponse Gemini streamée. ✔ (vérifié e2e contre une maquette SSE ; passerelle réelle à la première utilisation)
 
-## M3 — Sessions persistantes · 15 %
+## M3 — Sessions persistantes · 15 % · ✅ Terminé (2026-11-17)
 
 Objectif : fermer et rouvrir sans perdre l'historique.
 
-- [ ] Événements append-only en JSONL sous `.nyworkflow/sessions/`
-- [ ] Rechargement d'une session au redémarrage
-- [ ] Fork de session (copie du journal)
-- [ ] Tests : écriture, relecture, fork du journal
+- [x] Événements append-only en JSONL sous `.nyworkflow/sessions/` — un fichier par session, jamais réécrit (`session.created` avec titre, `user.message`, `assistant.message`, `session.forked`)
+- [x] Rechargement d'une session au redémarrage — hydratation au boot via `GET /sessions` (plugin Vite, dev **et** preview, home `.nyworkflow/` surchargeable par `NYW_HOME`) ; repli mémoire avec message clair si l'API est absente
+- [x] Fork de session (copie du journal) — copie octet pour octet + un événement `session.forked` ; bouton Fork dans la sidebar, historique hérité, la copie vit sa vie
+- [x] Tests : écriture, relecture, fork du journal — 17 tests dans le package (ligne déchirée, journal corrompu, id invalide) + test d'intégration « redémarrage du serveur Vite » + 3 e2e (rechargement, fork, /clear append-only)
 
-**Livré quand :** redémarrer le serveur restaure les sessions intactes.
+**Livré quand :** redémarrer le serveur restaure les sessions intactes. ✔ (prouvé par le test d'intégration : boot → échange → fork → arrêt/relance du serveur de dev → tout revient à l'identique ; e2e : rechargement de page, fork, /clear)
 
 ## M4 — Moteur ICM · 20 %
 

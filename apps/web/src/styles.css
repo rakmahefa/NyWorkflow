@@ -151,3 +151,19 @@ body {
   cursor: pointer;
 }
 .model-picker button:disabled { opacity: 0.5; cursor: default; }
+
+/* --- Sessions persistantes (M3) --- */
+.session-row { display: flex; align-items: stretch; gap: 6px; margin: 2px 0; }
+.session-row .session-item { flex: 1; min-width: 0; width: auto; margin: 0; }
+.fork {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.fork:hover { background: var(--accent-soft); color: var(--accent); }
+.fork:focus-visible { outline: 2px solid var(--accent-soft); }
