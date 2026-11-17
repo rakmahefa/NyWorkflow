@@ -30,7 +30,7 @@ jobs:
       - run: pnpm build
 
       - name: Vitest (junit + console)
-        run: pnpm --filter @nyworkflow/web test -- --reporter=default --reporter=junit --outputFile.junit=test-results/junit.xml
+        run: pnpm --filter @nyworkflow/web test:ci
 
       - name: Artefact — UI construite (dist)
         uses: actions/upload-artifact@v4

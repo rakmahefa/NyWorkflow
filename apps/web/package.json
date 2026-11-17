@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "test": "vitest run",
+    "test:ci": "vitest run --reporter=default --reporter=junit --outputFile.junit=test-results/junit.xml",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit"
   },
