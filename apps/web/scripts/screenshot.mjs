@@ -1,12 +1,14 @@
 // Capture README : build déjà fait (dist), maquette passerelle sur 9801,
 // serveur preview sur 4173, scène jouée dans un vrai Chromium, PNG écrit
 // dans docs/assets/screenshot.png.
-// Scène M11 : une session ICM agentique — dialogue de création (titre +
+// Scène M15 : une session ICM agentique — dialogue de création (titre +
 // workspace, l'option attendue est attendue AVANT de cliquer), un tour
-// avec read auto-exécuté (ligne d'outil dans le flux), puis un write qui
-// met la carte d'approbation en scène : la capture montre le cœur du
-// produit — l'ICM vers le modèle, les tools standards, l'humain aux
-// commandes. En cas d'échec, l'état de la page est imprimé (CI comprise).
+// réflexion + DEUX lectures parallèles (thinking TITRÉ du protocole deux
+// temps, carte « Actions de l'agent » groupée, lignes d'outils titrées),
+// puis un write qui met la carte d'approbation en scène : la capture montre
+// le cœur du produit — l'ICM vers le modèle, le protocole, les tools
+// standards, l'humain aux commandes. En cas d'échec, l'état de la page est
+// imprimé (CI comprise).
 import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -83,19 +85,23 @@ try {
   await page.locator('.main-head h2').filter({ hasText: 'Les loutres de Madagascar — rapport' }).waitFor({ timeout: 20_000 })
   await page.locator('[data-test="ws-banner"]').waitFor({ state: 'visible' })
 
-  // Premier tour : réflexion + lecture de la carte (read auto-exécuté).
-  // La maquette diffuse du reasoning_content (PENSE) avant la réponse —
-  // le bloc Réflexion de l'UI M12, ouvert ici pour la capture.
-  await box.fill('PENSE et AGENTLIT commence par lire la carte du workspace')
+  // Premier tour : réflexion + DEUX lectures parallèles (le protocole M15 :
+  // thinking titré ouvre la réponse, puis les appels groupés et titrés).
+  // PENSE garde le canal natif pour la réponse finale — les deux familles
+  // de modèles coexistent, la capture montre le bloc titré du tour d'actions.
+  await box.fill('PENSE et AGENTPARALLELE lis tout d’un coup')
   await page.keyboard.press('Enter')
   try {
     await page.locator('[data-test="tool-row"]', { hasText: 'read' }).first().waitFor({ state: 'visible', timeout: 30_000 })
     await page.waitForFunction(
-      () => [...document.querySelectorAll('.msg.assistant')].some((m) => m.textContent?.includes('LIVRABLE FINAL')),
+      () => [...document.querySelectorAll('.msg.assistant')].some((m) => m.textContent?.includes('PARALLÈLE FAIT')),
       undefined,
       { timeout: 30_000 },
     )
-    const thinking = page.locator('[data-test="thinking-block"]')
+    // Deux messages assistant = deux blocs thinking (le tour d'actions titré,
+    // la réponse finale native) — on déplie LE PREMIER : le bloc TITRÉ du
+    // protocole (strict mode : .first(), jamais le locator nu).
+    const thinking = page.locator('[data-test="thinking-block"]').first()
     await thinking.waitFor({ state: 'visible', timeout: 10_000 })
     // Le flux doit être terminé (caret parti) : le clic ouvre alors un bloc
     // que l'auto-repliement ne refermera pas.
@@ -103,7 +109,7 @@ try {
     await thinking.locator('.thinking-head').click() // déplié pour la capture
     await thinking.locator('.thinking-body').waitFor({ state: 'visible', timeout: 10_000 })
   } catch (err) {
-    await dumpOnFailure(page, 'premier tour agentique (PENSE + AGENTLIT)')
+    await dumpOnFailure(page, 'premier tour agentique (PENSE + AGENTPARALLELE)')
     throw err
   }
 

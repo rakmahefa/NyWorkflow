@@ -13,7 +13,7 @@ concurrency:
 jobs:
   test:
     name: Build & tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -54,7 +54,7 @@ jobs:
 
   e2e:
     name: Playwright (UI web)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -83,7 +83,7 @@ jobs:
 
   screenshot:
     name: Capture README
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:

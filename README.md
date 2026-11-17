@@ -10,9 +10,9 @@ L'interface est volontairement calquée sur celle de [DeepSeek Harness](https://
 
 ## Aperçu
 
-![UI NyWorkflow — harness agentique par dossier workspace : groupes, réflexion, outil dépliable, carte d'approbation](docs/assets/screenshot.png)
+![UI NyWorkflow — harness agentique par dossier workspace : thinking titré du protocole deux temps, actions groupées et titrées, carte d'approbation](docs/assets/screenshot.png)
 
-*Capture jouée par la CI sur un vrai Chromium et actualisée à chaque push sur main : sessions groupées par workspace, un tour agentique avec son bloc Réflexion déplié et sa ligne d'outil, puis une écriture proposée — l'aperçu du contenu sur la carte d'approbation, l'humain aux commandes.*
+*Capture jouée par la CI sur un vrai Chromium et actualisée à chaque push sur main : sessions groupées par workspace, un tour agentique conforme au protocole deux temps — thought process TITRÉ déplié, deux lectures groupées dans la carte « Actions de l'agent » — puis une écriture proposée : l'aperçu du contenu sur la carte d'approbation, l'humain aux commandes.*
 
 ## Pourquoi
 
