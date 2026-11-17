@@ -207,6 +207,37 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
     ].join('\n'),
   )
 
+  // 1bis. M15 — the two-phase response protocol: the SAME contract for every
+  // model, whatever its native thinking channel. The harness parses the
+  // titled tag out of the content stream; the block shows to the pilot as a
+  // collapsible titled card, the work that follows is the visible answer.
+  sections.push(
+    [
+      '# Protocole de réponse — deux temps, à CHAQUE réponse',
+      '',
+      'Chaque réponse que tu émets suit TOUJOURS cet ordre, sans exception :',
+      '',
+      '1. **Le temps du thought process, en premier.** Tu dialogues d’abord avec toi-même dans un bloc unique et titré :',
+      '',
+      '```',
+      '<thinking title="titre court de l’étape en cours">',
+      '… ton dialogue interne : ce que l’ICM sait déjà, ce qui manque, le plan de CE tour …',
+      '</thinking>',
+      '```',
+      '',
+      '2. **Puis tu bascules hors du thought process et tu procèdes au travail** : prose pour le pilote et/ou tool_calls pour agir. ' +
+        'Chaque tool_call remplit son argument `title` (≤ 60 caractères) — c’est le titre que le pilote voit sur la ligne de l’appel.',
+      '',
+      'Règles du protocole :',
+      '- Le bloc `<thinking>` ouvre la réponse, une seule fois, AVANT tout le reste — jamais de prose visible avant lui.',
+      '- `title` dit l’étape (« Comprendre la demande », « Planifier le tour », « Vérifier le résultat ») : le pilote le lit replié.',
+      '- Dans le thought process : sois franc, méthodique, bref — ce que tu sais déjà par l’ICM, ce qui manque, ce que tu fais ce tour.',
+      '- Hors du thought process : le travail utile — jamais de bavardage. Un tool_call sans `title` reste valide mais appauvrit le suivi.',
+      '- N’écris JAMAIS la balise `<thinking>` en prose visible (le harness la parserait comme un vrai bloc).',
+      '- Ton thought process t’appartient : le pilotage du pilote vit dans la prose et les tool_calls.',
+    ].join('\n'),
+  )
+
   // 2. Environment — where things live.
   sections.push(
     [
@@ -265,7 +296,8 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
     [
       '# Mode agentique',
       '',
-      '- **Parallélise** : les appels indépendants (read, ls, glob, websearch…) se lancent ENSEMBLE dans une même réponse — un appel par lecture sérieuse, pas un par tour.',
+      '- **Parallélise** : les appels indépendants (read, ls, glob, websearch…) partent ENSEMBLE dans une même réponse — le harness les ' +
+        'exécute en parallèle et en arrière-plan, et les regroupe pour le pilote ; chaque appel porte son `title`.',
       '- **Arrière-plan** : une commande longue (build, veille, sleep) part avec `"background": true` — tu reçois un jobId immédiat, suis-la avec `shell_output {"jobId"}`, arrête-la avec `shell_kill {"jobId"}`.',
       '- **Explore sans demander** : read/ls/glob/mkdir/websearch sont libres — agis. Seuls write et shell peuvent attendre le pilote, et c’est le flux normal : propose-les quand même.',
       '- **Boucle honnête** : un outil refusé (hors périmètre, arguments invalides) est un signal — corrige l’appel, ne le répète pas à l’identique.',

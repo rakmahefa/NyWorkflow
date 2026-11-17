@@ -16,6 +16,15 @@ export interface SessionInfo {
   security?: SecurityLevel
 }
 
+/** M15 — one titled block of the model's thought process: the two-phase
+ * protocol opens each response with a titled <thinking> dialogue; a model
+ * with a native channel (reasoning_content) produces anonymous blocks. */
+export interface ThinkingBlock {
+  /** The block's title ('' when the channel is anonymous). */
+  title: string
+  text: string
+}
+
 /** One chat row: a message, or an agent tool call with its outcome. */
 export interface ChatMsg {
   id: string
@@ -25,11 +34,16 @@ export interface ChatMsg {
   at: number
   /** True while the assistant reply is still streaming. */
   streaming?: boolean
-  /** M12 — the model's thinking, streamed live; display-only, never journaled. */
+  /** M12 — the model's thinking, streamed live; display-only, never journaled.
+   * Raw concatenation of every block (legacy view, stats). */
   thinking?: string
+  /** M15 — the same thinking, cut into titled collapsible blocks. */
+  thinkingBlocks?: ThinkingBlock[]
   /** Tool rows (role === 'tool'): the call and, once resolved, its outcome. */
   tool?: string
   args?: unknown
+  /** M15 — the call's title (its `title` argument), shown on the row. */
+  title?: string
   /** Undefined while the call is paused for a human approval. */
   ok?: boolean
   summary?: string

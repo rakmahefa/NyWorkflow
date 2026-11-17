@@ -16,33 +16,46 @@ const FIXED_REPLY =
 // M12 : PARALLÈLE (deux appels en un tour), ARRIÈRE-PLAN (shell background),
 // SUIVIJOB (shell_output avec le jobId lu dans les résultats d'outils)
 // et la réflexion (PENSE → delta.reasoning_content avant le texte).
+// M15 : le protocole deux temps — chaque réponse commence par un bloc
+// <thinking title="…">…</thinking> DANS LE CONTENU (le canal natif
+// reasoning_content reste pour PENSE), et chaque tool_call porte son
+// argument `title` (PROTOCOLITRE vérifie le tout de bout en bout).
 const TOOL_SCENARIOS = {
   AGENTLIT: {
     name: 'read',
-    arguments: { path: '.workspace/CONTEXT.md' },
+    arguments: { title: 'Lire la carte du workspace', path: '.workspace/CONTEXT.md' },
     final: 'LIVRABLE FINAL AGENT — la carte est lue.',
   },
   AGENTECRIT: {
     name: 'write',
-    arguments: { path: 'outputs/agent-e2e.md', content: 'CONTENU AGENT E2E' },
+    arguments: { title: 'Écrire le livrable', path: 'outputs/agent-e2e.md', content: 'CONTENU AGENT E2E' },
     final: 'ECRITURE FAITE — outputs/agent-e2e.md.',
   },
   AGENTDOSSIER: {
     name: 'mkdir',
-    arguments: { path: 'research/e2e-dossier' },
+    arguments: { title: 'Préparer le dossier', path: 'research/e2e-dossier' },
     final: 'DOSSIER CRÉÉ — research/e2e-dossier.',
   },
   AGENTPARALLELE: {
     twoCalls: [
-      { name: 'read', arguments: { path: '.workspace/CONTEXT.md' } },
-      { name: 'ls', arguments: { path: '.' } },
+      { name: 'read', arguments: { title: 'Lire la carte', path: '.workspace/CONTEXT.md' } },
+      { name: 'ls', arguments: { title: 'Lister la racine', path: '.' } },
     ],
     final: 'PARALLÈLE FAIT — deux lectures en un tour.',
   },
   AGENTARRIEREPLAN: {
     name: 'shell',
-    arguments: { command: 'sleep 3 && echo bg-e2e', background: true },
+    arguments: { title: 'Lancer la veille en arrière-plan', command: 'sleep 3 && echo bg-e2e', background: true },
     final: 'ARRIERE-PLAN LANCE — suis-le.',
+  },
+  AGENTPROTOCOL: {
+    twoCalls: [
+      { name: 'read', arguments: { title: 'Relire la charte', path: '.workspace/CONTEXT.md' } },
+      { name: 'glob', arguments: { title: 'Cartographier les notes', pattern: '**/*.md' } },
+    ],
+    thinkTitle: 'Planifier le tour',
+    thinkBody: 'Deux lectures indépendantes — je les lance ensemble.',
+    final: 'PROTOCOLE DEUX TEMPS — thinking titré, appels groupés et titrés.',
   },
 }
 
@@ -194,6 +207,13 @@ export function startMockGateway(port) {
         // Un appel d'outil : delta.tool_calls standard + finish "tool_calls".
         if (scenario !== null && !hasToolResult) {
           chunk({})
+          // M15 — le protocole deux temps ouvre AUSSI le tour d'outils :
+          // thinking titré dans le contenu, puis les appels (titrés, leur
+          // argument `title` voyagera jusqu'à la ligne du pilote).
+          const title = scenario.thinkTitle ?? 'Agir sur le workspace'
+          const body = scenario.thinkBody ?? 'Je lance les actions de ce tour.'
+          chunk({ content: `<thinking title="${title}">` })
+          chunk({ content: `${body}</thinking>` })
           const calls = scenario.twoCalls ?? (scenario.name ? [scenario] : [])
           calls.forEach((c, i) => {
             chunk({
@@ -214,11 +234,24 @@ export function startMockGateway(port) {
         }
 
         // Réflexion (M12) : le marqueur PENSE diffuse un raisonnement avant
-        // le texte — dialecte DeepSeek (delta.reasoning_content).
+        // le texte — dialecte DeepSeek (delta.reasoning_content). C'est le
+        // modèle « canal natif » : pas de bloc protocole dans le contenu (le
+        // M15 teste le protocole sur TOUTES les autres réponses — deux
+        // familles de modèles, deux chemins dans l'UI).
         const userText = typeof lastUser === 'string' ? lastUser : ''
-        if (userText.includes('PENSE')) {
+        const nativeThinking = userText.includes('PENSE')
+        if (nativeThinking) {
           chunk({ reasoning_content: 'D\u00e9composons la demande… ' })
           chunk({ reasoning_content: 'la r\u00e9ponse s\u2019impose.' })
+        } else {
+          // M15 — le protocole deux temps : le bloc <thinking title="…"> ouvre
+          // la réponse DANS LE CONTENU, coupé en plein milieu de la balise (le
+          // splitter de l'adaptateur doit le recoudre sans perdre un octet).
+          const thinkTitle = scenario?.thinkTitle ?? 'Comprendre la demande'
+          const thinkBody = scenario?.thinkBody ?? 'Je passe en revue ce que l\u2019ICM sait déjà.'
+          chunk({ content: `<thinking title="${thinkTitle}">` })
+          chunk({ content: `${thinkBody}</think` })
+          chunk({ content: `ing>` })
         }
 
         // Réponse finale (texte) — le scénario conclut, sinon la réponse type.

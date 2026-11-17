@@ -9,7 +9,7 @@ import { NewSessionDialog } from './components/NewSessionDialog'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Sidebar } from './components/Sidebar'
 import { ToolApprovalCard } from './components/ToolApprovalCard'
-import { AGENT_TOOLS, isDangerousTool, parseToolArgs } from './lib/agentTools'
+import { AGENT_TOOLS, isDangerousTool, parseToolArgs, titleOfArgs } from './lib/agentTools'
 import { parseInput, runCommand } from './lib/commands'
 import { fakeReply, streamText } from './lib/fakeLLM'
 import { useGatewayStatus } from './lib/gateway'
@@ -241,7 +241,18 @@ export default function App() {
       if (e.type === 'user.message' || e.type === 'assistant.message') {
         out.push({ id: `${sessionId}:${k++}`, sessionId, role: e.type === 'user.message' ? 'user' : 'assistant', text: e.text, at: Date.parse(e.at) || 0 })
       } else if (e.type === 'tool.call') {
-        const row: ChatMsg = { id: `${sessionId}:${k++}`, sessionId, role: 'tool', text: '', at: Date.parse(e.at) || 0, tool: e.tool, args: e.args }
+        // M15 — le titre relancé du journal : l'argument `title` de l'appel.
+        const journaledTitle = titleOfArgs(e.args)
+        const row: ChatMsg = {
+          id: `${sessionId}:${k++}`,
+          sessionId,
+          role: 'tool',
+          text: '',
+          at: Date.parse(e.at) || 0,
+          tool: e.tool,
+          args: e.args,
+          ...(journaledTitle !== '' ? { title: journaledTitle } : {}),
+        }
         out.push(row)
         if (e.callId !== undefined) openByCallId.set(e.callId, row)
       } else if (e.type === 'tool.result') {
@@ -501,7 +512,8 @@ export default function App() {
               signal: controller.signal,
             })) {
               if (ev.type === 'thinking') {
-                if (!store.appendThinking(placeholder.id, ev.delta)) return // session effacée
+                // M15 — un titre ouvre un bloc titré, sans titre il continue le bloc en cours.
+                if (!store.appendThinking(placeholder.id, ev.delta, ev.title)) return // session effacée
                 thinking += ev.delta
               } else if (ev.type === 'text') {
                 if (!store.appendText(placeholder.id, ev.delta)) return // session effacée
@@ -551,9 +563,10 @@ export default function App() {
           turn.toolCalls += calls.length
 
           // Toutes les lignes d'abord (l'ordre du modèle est l'ordre du flux)…
+          // M15 — le `title` argument de l'appel devient le titre de la ligne.
           const plan = calls.map((call) => {
             const args = parseToolArgs(call.function.arguments)
-            const row = store.appendToolCall(session.id, call.function.name, args)
+            const row = store.appendToolCall(session.id, call.function.name, args, titleOfArgs(args))
             return { call, args, row, danger: dangerous(call.function.name) }
           })
 
@@ -677,7 +690,7 @@ export default function App() {
           let failedWhy: string | undefined
           try {
             for await (const ev of client.chatStream({ model, messages: history, signal: controller.signal })) {
-              if (ev.type === 'thinking') store.appendThinking(plain.id, ev.delta)
+              if (ev.type === 'thinking') store.appendThinking(plain.id, ev.delta, ev.title)
               else if (ev.type === 'text') {
                 plainChars += ev.delta.length
                 if (!store.appendText(plain.id, ev.delta)) return

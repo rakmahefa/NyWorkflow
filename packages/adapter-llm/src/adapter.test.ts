@@ -406,3 +406,78 @@ describe('createWeb2ApiClient — thinking (M12)', () => {
     expect(calls).toMatchObject({ type: 'tool_calls', calls: [{ function: { name: 'read' } }] })
   })
 })
+
+describe('createWeb2ApiClient — protocole deux temps (M15)', () => {
+  it('les balises <thinking title="…"> du CONTENU deviennent des blocs titrés', async () => {
+    const server = track(
+      await startServer((_req, res) => {
+        sse(res)
+        // Le contenu arrive en deltas, la balise coupée en plein milieu.
+        res.write(sseChunk({ content: '<thinking tit' }))
+        res.write(sseChunk({ content: 'le="Comprendre la demande">L\'ICM sait déjà' }))
+        res.write(sseChunk({ content: ' l\'essentiel.</thinking>Voici le travail visible.' }))
+        res.write(sseChunk({}, 'stop'))
+        res.write('data: [DONE]\n\n')
+        res.end()
+      }),
+    )
+    const client = createWeb2ApiClient({ baseUrl: server.baseUrl })
+    const events = await collectEvents(client.chatStream({ model: 'gemini-3.6-flash', messages: [{ role: 'user', content: 'q' }] }))
+    const thinking = events.filter((e): e is Extract<ChatStreamEvent, { type: 'thinking' }> => e.type === 'thinking')
+    // Le bloc s'ouvre par un événement titré (delta vide), puis se continue.
+    expect(thinking[0]).toEqual({ type: 'thinking', delta: '', title: 'Comprendre la demande' })
+    expect(thinking.slice(1).map((e) => e.delta).join('')).toBe('L\'ICM sait déjà l\'essentiel.')
+    // Le texte visible ne contient NI les balises NI le dialogue interne.
+    expect(textOf(events)).toBe('Voici le travail visible.')
+  })
+
+  it('un bloc jamais refermé : auto-fermé en fin de flux, rien ne fuit en texte', async () => {
+    const server = track(
+      await startServer((_req, res) => {
+        sse(res)
+        res.write(sseChunk({ content: '<thinking title="Sans fin">je raisonne' }))
+        res.write(sseChunk({}, 'stop'))
+        res.write('data: [DONE]\n\n')
+        res.end()
+      }),
+    )
+    const client = createWeb2ApiClient({ baseUrl: server.baseUrl })
+    const events = await collectEvents(client.chatStream({ model: 'gemini-3.6-flash', messages: [{ role: 'user', content: 'q' }] }))
+    expect(textOf(events)).toBe('')
+    const thinking = events.filter((e): e is Extract<ChatStreamEvent, { type: 'thinking' }> => e.type === 'thinking')
+    expect(thinking.map((e) => e.delta).join('')).toBe('je raisonne')
+  })
+
+  it('protocole + tool_calls : thinking titré, texte visible, appels intacts', async () => {
+    const server = track(
+      await startServer((_req, res) => {
+        sse(res)
+        res.write(sseChunk({ content: '<thinking title="Agir">deux lectures indépendantes</thinking>' }))
+        res.write(sseChunk({ content: 'Je lis la charte et la racine.' }))
+        res.write(
+          sseChunk({
+            tool_calls: [
+              { index: 0, id: 'call-a', type: 'function', function: { name: 'read', arguments: '{"title":"Charte","path":".workspace/CONTEXT.md"}' } },
+              { index: 1, id: 'call-b', type: 'function', function: { name: 'ls', arguments: '{"title":"Racine","path":"."}' } },
+            ],
+          }),
+        )
+        res.write(sseChunk({}, 'tool_calls'))
+        res.write('data: [DONE]\n\n')
+        res.end()
+      }),
+    )
+    const client = createWeb2ApiClient({ baseUrl: server.baseUrl })
+    const events = await collectEvents(client.chatStream({ model: 'gemini-3.6-flash', messages: [{ role: 'user', content: 'q' }] }))
+    expect(events[0]).toEqual({ type: 'thinking', delta: '', title: 'Agir' })
+    expect(textOf(events)).toBe('Je lis la charte et la racine.')
+    const calls = events.find((e) => e.type === 'tool_calls')
+    expect(calls).toMatchObject({
+      type: 'tool_calls',
+      calls: [
+        { function: { name: 'read', arguments: '{"title":"Charte","path":".workspace/CONTEXT.md"}' } },
+        { function: { name: 'ls', arguments: '{"title":"Racine","path":"."}' } },
+      ],
+    })
+  })
+})

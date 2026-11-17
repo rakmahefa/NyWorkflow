@@ -9,3 +9,6 @@ Ne fait pas : parsing Gemini, auth cookie — c'est le travail de `@nyworkflow/w
 Tâches : M2 ✅, M11 ✅ (v1beta + tools, 2026-11-17) — voir MILESTONES.md.
 
 **M12** (2026-11-17) : événement de flux additif `{ type: 'thinking'; delta }` — décodé de `delta.reasoning_content` (dialecte DeepSeek servi par la passerelle) avant le texte ; jamais renvoyé au modèle (affichage seul). `tool_calls` et `finish` inchangés.
+
+
+**M15** (2026-11-18) : le protocole deux temps — `ThinkingSplitter` (`thinking.ts`) découpe le FLUX de contenu : les blocs `<thinking title="…">…</thinking>` deviennent des événements thinking TITRÉS (un titre ouvre un bloc, sans titre il continue le bloc en cours), le reste est du texte visible. Incrémental et jamais perdant (balise coupée en plein chunk recousue par préfixe retenu, bloc non refermé auto-fermé en fin de flux — le dialogue interne ne fuit jamais), cap 256 Kio par bloc. Modèle-agnostique : le contrat vit dans le contenu, le canal natif `reasoning_content` (M12) coexiste en blocs anonymes. Le `title` des tool_calls est l'affaire des déclarations et du prompt (ICM), pas de l'adaptateur — il transite tel quel dans `arguments`.

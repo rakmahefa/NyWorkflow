@@ -188,6 +188,24 @@ describe('buildIcmSystemPrompt — identité harness (M14)', () => {
     expect(prompt).toContain('aucun — ce workspace est vierge')
     expect(prompt).toContain('CONTEXT.md')
   })
+
+  it('M15 — le protocole deux temps : thinking titré en premier, puis le travail, tool_calls titrés', async () => {
+    const root = tmp()
+    await ensureIcmTree(root)
+    const prompt = buildIcmSystemPrompt(await loadIcm(root))
+    // Le contrat : le bloc titré ouvre la réponse, AVANT tout le reste.
+    expect(prompt).toContain('Protocole de réponse — deux temps')
+    expect(prompt).toContain('<thinking title="titre court de l’étape en cours">')
+    expect(prompt).toContain('</thinking>')
+    expect(prompt).toContain('Tu dialogues d’abord avec toi-même')
+    expect(prompt).toContain('Puis tu bascules hors du thought process')
+    // Le titre des tool_calls : l’argument `title` que le pilote lira.
+    expect(prompt).toContain('`title` (≤ 60 caractères)')
+    // Le parallélisme s’étend au harness : exécution groupée, affichage groupé.
+    expect(prompt).toContain('les regroupe pour le pilote')
+    // Modèle-agnostique : jamais la balise en prose visible.
+    expect(prompt).toContain('JAMAIS la balise')
+  })
 })
 
 describe('scaffoldAgenticWorkspace (M14 — arbre dans .workspace/)', () => {

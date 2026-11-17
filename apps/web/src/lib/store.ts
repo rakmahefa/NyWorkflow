@@ -113,9 +113,10 @@ export class SessionStore {
     return msg
   }
 
-  /** M11 — one agent tool call, journaled server-side; ok undefined until resolved. */
-  appendToolCall(sessionId: string, tool: string, args: unknown): ChatMsg {
-    const msg: ChatMsg = { id: uid(), sessionId, role: 'tool', text: '', at: Date.now(), tool, args }
+  /** M11 — one agent tool call, journaled server-side; ok undefined until resolved.
+   * M15 — `title` is the call's `title` argument, shown on its row. */
+  appendToolCall(sessionId: string, tool: string, args: unknown, title = ''): ChatMsg {
+    const msg: ChatMsg = { id: uid(), sessionId, role: 'tool', text: '', at: Date.now(), tool, args, ...(title !== '' ? { title } : {}) }
     this.messages.push(msg)
     this.commit()
     return msg
@@ -145,13 +146,25 @@ export class SessionStore {
     return hit
   }
 
-  /** M12 — grows a message's thinking (live reasoning, display-only). */
-  appendThinking(id: string, delta: string): boolean {
+  /** M12/M15 — grows a message's thinking (live reasoning, display-only).
+   * With a title: OPENS a new titled block (the two-phase protocol's
+   * opening event). Without: continues the current block — a native
+   * reasoning stream, or the body of a titled one. */
+  appendThinking(id: string, delta: string, title?: string): boolean {
     let hit = false
     this.messages = this.messages.map((m) => {
       if (m.id !== id) return m
       hit = true
-      return { ...m, thinking: (m.thinking ?? '') + delta }
+      const blocks = m.thinkingBlocks === undefined ? [] : [...m.thinkingBlocks]
+      if (title !== undefined) {
+        blocks.push({ title, text: delta })
+      } else if (blocks.length === 0) {
+        blocks.push({ title: '', text: delta })
+      } else {
+        const last = blocks[blocks.length - 1]!
+        blocks[blocks.length - 1] = { title: last.title, text: last.text + delta }
+      }
+      return { ...m, thinking: (m.thinking ?? '') + delta, thinkingBlocks: blocks }
     })
     if (hit) this.commit()
     return hit

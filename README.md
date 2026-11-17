@@ -18,6 +18,7 @@ L'interface est volontairement calquée sur celle de [DeepSeek Harness](https://
 
 - **Simple** — une session = **un dossier obligatoire** : un workspace neuf (l'ICM complet naît dans son `.workspace/` caché), **ou l'un de vos propres dossiers** enregistré depuis l'UI (le `.workspace/` de l'agent y est créé dedans, vos fichiers restent intacts) — que le modèle explore, fait grandir et dont il livre les fruits.
 - **Agentique de bout en bout** — `tool_calls` standard (OpenAI) : `read`, `write`, `ls`, `glob`, `mkdir`, `shell` (avant-plan ou **arrière-plan**), `shell_output`, `shell_kill`, `websearch` (contenu web **nettoyé** : scripts, nav et attributs partis, balises sémantiques gardées). Les appels indépendants partent **en parallèle** ; les écritures et commandes attendent **votre approbation**, tout est journalisé et apparié par `callId`.
+- **Un seul contrat de réponse, quel que soit le modèle (M15)** — le protocole **deux temps** : chaque réponse OUVERT par son thought process dans un bloc titré `<thinking title=“…”>…</thinking>` (le harness le sépare du texte visible, jamais un octet perdu), PUIS le travail visible — prose et/ou `tool_calls` **titrés** (`title`) et **groupés** dans l’UI. Le contrat vit dans le prompt système (l’ICM l’enseigne) et dans le contenu (pas dans une capacité native) : un modèle dot’un canal de réflexion natif coexiste, un modèle « muet » suit pareil — **modèle ↔ harness ↔ ICM, cohérents de bout en bout**.
 - **Observable** — l'onglet **Activité** trace chaque requête modèle (modèle, niveau de réflexion, durée, statut) et chaque appel d'outil (arguments + payload exact) ; la **réflexion du modèle** s'affiche en bloc repliable ; le niveau (0–4) se choisit par modèle.
 - **Robuste** — la logique fragile Gemini (cookie, streaming interne) vit dans `packages/webapi`, **dans ce repo** : `bl` auto-découvert, table de modèles data-driven, jetons de page rafraîchis avant chaque retry. Gemini évolue ? On patche un package, jamais le harness.
 - **Agnostique et versionné** — l'adaptateur parle le dialecte OpenAI **sous le namespace `v1beta` par défaut** (le `v2` de demain sera une option) ; `W2A_URL` pointe vers n'importe quel serveur OpenAI-compatible.
@@ -42,8 +43,8 @@ Prérequis : Node.js 22.18+ (la passerelle), pnpm 12+.
 pnpm install
 pnpm dev          # UI sur http://127.0.0.1:3080 — AVEC la passerelle webapi intégrée
 pnpm webapi       # passerelle SEULE en autonome (optionnel — voir USERGUIDE.md)
-pnpm test         # Vitest — unitaires (428, dont 244 webapi sans réseau)
-pnpm test:e2e     # Playwright — UI réelle (30 tests)
+pnpm test         # Vitest — unitaires (453, dont 244 webapi sans réseau)
+pnpm test:e2e     # Playwright — UI réelle (33 tests)
 pnpm typecheck    # TypeScript
 ```
 
@@ -145,6 +146,7 @@ CI à chaque push/PR : typecheck, build, Vitest, Playwright, puis artefacts (UI 
 | M12 | **UI/UX agentique professionnelle par workspace** : sessions groupées par workspace, dossier du disque en workspace (navigateur + manifeste), onglet Activité (tracking requêtes + outils), réflexion affichée (`reasoning_content`) + niveau 0–4, shell parallèle et en arrière-plan (`shell_output`/`shell_kill`), liste des modèles étiquetée, renommage, Stop, file d'attente | 25 % | ✅ Terminé |
 | M13 | **Sécurité, ICM complète & profilage** : niveau de sécurité par session (demander / accepter automatiquement / aucun outil — live), scaffold ICM complet à la création (14 fichiers prêts : plan, tâches, journal, décisions, sources, mémoire, leçons), tours terminés journalisés (onglet Activité durable), logs de profilage `engine/session/activity` sous `.nyworkflow/.logs/` | 25 % | ✅ Terminé |
 | M14 | **Dossier de session obligatoire, ICM dans `.workspace/` & logs par session** (piloté par les premiers logs réels) : sélection de dossier obligatoire, ICM complet dans le `.workspace/` caché du dossier de session (mémoire vivante conservée d'une session à l'autre), trio de logs `.logs/<sessionId>/` DANS le dossier, prompt système harness (« agir = appeler un outil », « ne relis pas ce qui est chargé ») | 25 % | ✅ Terminé |
+| M15 | **Protocole deux temps** : thought process titré qui ouvre chaque réponse (`<thinking title="…">`, repliable dans l’UI), tool_calls **groupés** (carte « Actions de l’agent ») et **titrés** (argument `title`), parallèle & arrière-plan enseignés comme faits du harness — un seul contrat pour tous les modèles (le canal natif coexiste) | 25 % | ✅ Terminé |
 
 > Règle de gouvernance phase 2 : à chaque fin de milestone atteint, les milestones futurs sont réécrits en fin de [MILESTONES.md](MILESTONES.md).
 
@@ -156,7 +158,7 @@ Plan : [PLAN.md](PLAN.md) · Plan phase 1 : [PLAN-old.md](PLAN-old.md)
 apps/web              UI web (React + Vite, port 3080) : sessions ICM agentiques — boucle agentique dans le navigateur, sécurité par session, logs de profilage global + par session
 packages/core         ICM : arbre (.workspace/ + projet), chargement des CONTEXT.md, prompt système harness, scaffold agentique
 packages/session      sessions = journal append-only JSONL (chat + outils, suppression)
-packages/adapter-llm  client OpenAI-compatible sous /v1beta (tools, tool_calls, rôles tool)
+packages/adapter-llm  client OpenAI-compatible sous /v1beta (tools, tool_calls, rôles tool) + parseur du protocole deux temps (thinking titré dans le contenu)
 packages/webapi       passerelle webapi : interface web Gemini servie en OpenAI-compatible (port 8081, v1 + v1beta)
 packages/tools        9 outils (read, write, ls, glob, mkdir, shell, websearch, shell_output, shell_kill) + garde de périmètre + approbation + niveaux de sécurité
 examples/workspaces   workspace d'exemple — l'ICM vit dans son .workspace/ (M14)

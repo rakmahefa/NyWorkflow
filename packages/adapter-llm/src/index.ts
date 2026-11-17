@@ -52,9 +52,11 @@ export interface ChatOptions {
 
 /** What chatStream yields: thinking deltas, text deltas, reassembled tool
  * calls, the finish. Thinking (M12) is display-only: never sent back to
- * the model. */
+ * the model. M15: the two-phase protocol — a thinking event WITH a title
+ * OPENS a new titled block, without one it continues the current block
+ * (native reasoning_content keeps its anonymous channel). */
 export type ChatStreamEvent =
-  | { type: 'thinking'; delta: string }
+  | { type: 'thinking'; delta: string; title?: string }
   | { type: 'text'; delta: string }
   | { type: 'tool_calls'; calls: ToolCallRequest[] }
   | { type: 'finish'; reason: string }
@@ -73,3 +75,5 @@ export interface LlmAdapter {
 // extensionless ESM imports do not resolve.
 export { createWeb2ApiClient, AdapterError, DEFAULT_API_VERSION } from './adapter.ts'
 export type { AdapterErrorKind, ClientOptions } from './adapter.ts'
+export { ThinkingSplitter, parseTagTitle, THINKING_TAG_MAX } from './thinking.ts'
+export type { ThinkingPiece } from './thinking.ts'

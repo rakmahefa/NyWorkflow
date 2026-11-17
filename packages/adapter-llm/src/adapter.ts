@@ -14,6 +14,7 @@
  * tool_call, end to end.
  */
 import type { ChatMessage, ChatOptions, ChatStreamEvent, LlmAdapter, ToolDeclaration, ToolCallRequest } from './index'
+import { ThinkingSplitter } from './thinking.ts'
 
 export type AdapterErrorKind = 'unreachable' | 'http' | 'bad-shape'
 
@@ -192,6 +193,15 @@ export function createWeb2ApiClient(options: ClientOptions): LlmAdapter {
     const acc = new Map<number, AccCall>()
     /** True once a finish_reason was emitted — [DONE] then stays silent. */
     let finished = false
+    /** M15 — the two-phase protocol parser over the content channel. */
+    const think = new ThinkingSplitter()
+    /** Drains the splitter at end of stream (held-back tail, unclosed block). */
+    function* drainThink(): Generator<ChatStreamEvent> {
+      for (const piece of think.finish()) {
+        if (piece.kind === 'text') yield { type: 'text', delta: piece.delta }
+        else yield { type: 'thinking', delta: piece.delta, ...(piece.title !== undefined ? { title: piece.title } : {}) }
+      }
+    }
 
     const feedAcc = (calls: unknown): void => {
       if (!Array.isArray(calls)) return
@@ -230,7 +240,9 @@ export function createWeb2ApiClient(options: ClientOptions): LlmAdapter {
       if (choice !== undefined) {
         const delta = (choice.delta ?? {}) as Record<string, unknown>
         // delta.reasoning_content (M12, dialecte DeepSeek) : la réflexion du
-        // modèle — affichage seul, jamais renvoyée dans l'historique.
+        // modèle — affichage seul, jamais renvoyée dans l'historique. Sans
+        // titre : elle continue le bloc en cours (le protocole M15 et le
+        // canal natif coexistent).
         if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
           yield { type: 'thinking', delta: delta.reasoning_content }
         }
@@ -240,7 +252,14 @@ export function createWeb2ApiClient(options: ClientOptions): LlmAdapter {
         const fallback = typeof message.content === 'string' ? message.content : ''
         const text = content ?? fallback
         if (text !== undefined && text.length > 0) {
-          yield { type: 'text', delta: text }
+          // M15 — le protocole deux temps : le contenu passe au splitter, qui
+          // sépare les blocs <thinking title="…">…</thinking> (le dialogue
+          // interne, titré) du travail visible. Modèle-agnostique : tout ce
+          // qui n'est pas une balise valide reste du texte.
+          for (const piece of think.push(text)) {
+            if (piece.kind === 'text') yield { type: 'text', delta: piece.delta }
+            else yield { type: 'thinking', delta: piece.delta, ...(piece.title !== undefined ? { title: piece.title } : {}) }
+          }
         }
         feedAcc(delta.tool_calls)
         const finish = choice.finish_reason
@@ -270,6 +289,7 @@ export function createWeb2ApiClient(options: ClientOptions): LlmAdapter {
           nl = buffer.indexOf('\n')
           if (line === 'data: [DONE]') {
             const calls = drainAcc() // defensive: calls without finish_reason
+            yield* drainThink()
             if (calls.length > 0) yield { type: 'tool_calls', calls }
             if (!finished) yield { type: 'finish', reason: 'stop' }
             return
@@ -284,6 +304,7 @@ export function createWeb2ApiClient(options: ClientOptions): LlmAdapter {
       if (tail !== '') {
         if (tail === 'data: [DONE]') {
           const calls = drainAcc()
+          yield* drainThink()
           if (calls.length > 0) yield { type: 'tool_calls', calls }
           if (!finished) yield { type: 'finish', reason: 'stop' }
           return
@@ -292,6 +313,7 @@ export function createWeb2ApiClient(options: ClientOptions): LlmAdapter {
         if (parsed !== null) yield* handleChunk(parsed)
       }
       const calls = drainAcc()
+      yield* drainThink()
       if (calls.length > 0) yield { type: 'tool_calls', calls }
     } catch (err) {
       if (err instanceof AdapterError) throw err

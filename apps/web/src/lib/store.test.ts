@@ -64,6 +64,50 @@ describe('SessionStore — messages', () => {
   })
 })
 
+describe('SessionStore — M15 (thinking titrés, tool titrés)', () => {
+  it('appendThinking avec titre ouvre un NOUVEAU bloc titré, sans titre il continue le bloc en cours', () => {
+    const store = new SessionStore()
+    const s = store.createSession('S')
+    const msg = store.appendMessage(s.id, 'assistant', '')
+    store.appendThinking(msg.id, '', 'Comprendre la demande')
+    store.appendThinking(msg.id, 'Je lis ')
+    store.appendThinking(msg.id, "l'ICM.")
+    store.appendThinking(msg.id, '', 'Planifier le tour')
+    store.appendThinking(msg.id, 'Deux lectures.')
+    const m = store.listMessages(s.id).find((x) => x.id === msg.id)
+    // Deux blocs titrés, dans l'ordre du protocole.
+    expect(m?.thinkingBlocks).toEqual([
+      { title: 'Comprendre la demande', text: "Je lis l'ICM." },
+      { title: 'Planifier le tour', text: 'Deux lectures.' },
+    ])
+    // La vue brute (stats M12) reste la concaténation.
+    expect(m?.thinking).toBe("Je lis l'ICM.Deux lectures.")
+  })
+
+  it('appendThinking sans aucun titre : un bloc anonyme (canal natif reasoning_content)', () => {
+    const store = new SessionStore()
+    const s = store.createSession('S')
+    const msg = store.appendMessage(s.id, 'assistant', '')
+    store.appendThinking(msg.id, 'Décomposons ')
+    store.appendThinking(msg.id, 'la demande.')
+    const m = store.listMessages(s.id).find((x) => x.id === msg.id)
+    expect(m?.thinkingBlocks).toEqual([{ title: '', text: 'Décomposons la demande.' }])
+  })
+
+  it('appendToolCall porte son titre, resolveToolCall le conserve', () => {
+    const store = new SessionStore()
+    const s = store.createSession('S')
+    const row = store.appendToolCall(s.id, 'read', { title: 'Lire la charte', path: 'CONTEXT.md' }, 'Lire la charte')
+    store.resolveToolCall(row.id, { ok: true, summary: '1,2 Kio' })
+    const m = store.listMessages(s.id).find((x) => x.id === row.id)
+    expect(m?.title).toBe('Lire la charte')
+    expect(m?.summary).toBe('1,2 Kio')
+    // Sans titre : pas de champ title du tout.
+    const bare = store.appendToolCall(s.id, 'ls', { path: '.' })
+    expect(store.listMessages(s.id).find((x) => x.id === bare.id)?.title).toBeUndefined()
+  })
+})
+
 describe('SessionStore — snapshot & subscription', () => {
   it('notifies subscribers once per mutation', () => {
     const s = new SessionStore()

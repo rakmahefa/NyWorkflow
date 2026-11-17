@@ -4,12 +4,24 @@ import type { ToolDeclaration } from '@nyworkflow/adapter-llm'
  * The agent's tools, declared the modern standard way (OpenAI function
  * declarations) and sent with every agentic request. The gateway teaches
  * the call format upstream (M10 preamble); the ICM system prompt teaches
- * the workspace conventions (M12: parallelism, background); these
- * declarations say WHAT each tool does.
+ * the workspace conventions (M12: parallelism, background; M15: the
+ * two-phase response protocol and titled calls); these declarations say
+ * WHAT each tool does.
+ *
+ * M15 — every tool accepts a `title` argument: the short line the pilot
+ * reads on the call's row (the ICM protocol asks for one on each call;
+ * optional, so a model that omits it stays functional).
  *
  * All nine are available and functional (M12): read, write, ls, glob,
  * mkdir, shell (+ background), websearch, shell_output, shell_kill.
  */
+
+/** The M15 `title` argument, shared by every declaration (optional). */
+const TITLE_ARG = {
+  type: 'string',
+  description: 'Titre court (≤ 60 caractères) de cet appel pour le pilote — ex. « Lire la charte », « Chercher les références ».',
+} as const
+
 export const AGENT_TOOLS: readonly ToolDeclaration[] = [
   {
     type: 'function',
@@ -18,7 +30,10 @@ export const AGENT_TOOLS: readonly ToolDeclaration[] = [
       description: "Lit un fichier texte du workspace (chemin relatif à la racine). Retourne le contenu, tronqué à 32 Kio.",
       parameters: {
         type: 'object',
-        properties: { path: { type: 'string', description: 'Chemin relatif au workspace, ex. CONTEXT.md ou notes/plan.md' } },
+        properties: {
+          title: TITLE_ARG,
+          path: { type: 'string', description: 'Chemin relatif au workspace, ex. CONTEXT.md ou notes/plan.md' },
+        },
         required: ['path'],
       },
     },
@@ -31,6 +46,7 @@ export const AGENT_TOOLS: readonly ToolDeclaration[] = [
       parameters: {
         type: 'object',
         properties: {
+          title: TITLE_ARG,
           path: { type: 'string', description: 'Chemin relatif du fichier à écrire' },
           content: { type: 'string', description: 'Contenu textuel complet du fichier' },
         },
@@ -45,7 +61,10 @@ export const AGENT_TOOLS: readonly ToolDeclaration[] = [
       description: 'Liste un dossier du workspace (nom + type, trié).',
       parameters: {
         type: 'object',
-        properties: { path: { type: 'string', description: 'Dossier relatif — "." pour la racine' } },
+        properties: {
+          title: TITLE_ARG,
+          path: { type: 'string', description: 'Dossier relatif — "." pour la racine' },
+        },
       },
     },
   },
@@ -56,7 +75,10 @@ export const AGENT_TOOLS: readonly ToolDeclaration[] = [
       description: 'Cherche des fichiers par motif : * (un segment), ** (toute profondeur), ? (un caractère).',
       parameters: {
         type: 'object',
-        properties: { pattern: { type: 'string', description: 'Motif relatif au workspace, ex. **/*.md' } },
+        properties: {
+          title: TITLE_ARG,
+          pattern: { type: 'string', description: 'Motif relatif au workspace, ex. **/*.md' },
+        },
         required: ['pattern'],
       },
     },
@@ -68,7 +90,10 @@ export const AGENT_TOOLS: readonly ToolDeclaration[] = [
       description: 'Crée un dossier (récursif) dans le workspace — façonne ton arbre librement.',
       parameters: {
         type: 'object',
-        properties: { path: { type: 'string', description: 'Chemin relatif du dossier à créer, ex. research/ddg' } },
+        properties: {
+          title: TITLE_ARG,
+          path: { type: 'string', description: 'Chemin relatif du dossier à créer, ex. research/ddg' },
+        },
         required: ['path'],
       },
     },
@@ -82,6 +107,7 @@ export const AGENT_TOOLS: readonly ToolDeclaration[] = [
       parameters: {
         type: 'object',
         properties: {
+          title: TITLE_ARG,
           command: { type: 'string', description: 'La commande à exécuter, ex. "ls -la | head -20"' },
           background: { type: 'boolean', description: 'true = détaché : rend un jobId immédiat, 10 min max (suivi via shell_output)' },
         },
@@ -98,6 +124,7 @@ export const AGENT_TOOLS: readonly ToolDeclaration[] = [
       parameters: {
         type: 'object',
         properties: {
+          title: TITLE_ARG,
           query: { type: 'string', description: 'Requête de recherche — retourne titres, URLs et snippets' },
           url: { type: 'string', description: 'URL http(s) à lire — retourne la page nettoyée' },
         },
@@ -112,7 +139,10 @@ export const AGENT_TOOLS: readonly ToolDeclaration[] = [
         "Suit un processus d'arrière-plan lancé par shell {background:true} : stdout/stderr accumulés, code de sortie, en cours ou fini. Libre d'accès.",
       parameters: {
         type: 'object',
-        properties: { jobId: { type: 'string', description: 'Identifiant rendu par le shell en arrière-plan' } },
+        properties: {
+          title: TITLE_ARG,
+          jobId: { type: 'string', description: 'Identifiant rendu par le shell en arrière-plan' },
+        },
         required: ['jobId'],
       },
     },
@@ -124,7 +154,10 @@ export const AGENT_TOOLS: readonly ToolDeclaration[] = [
       description: "Arrête un processus d'arrière-plan lancé par l'agent. Libre d'accès (c'est ton propre processus).",
       parameters: {
         type: 'object',
-        properties: { jobId: { type: 'string', description: 'Identifiant rendu par le shell en arrière-plan' } },
+        properties: {
+          title: TITLE_ARG,
+          jobId: { type: 'string', description: 'Identifiant rendu par le shell en arrière-plan' },
+        },
         required: ['jobId'],
       },
     },
@@ -142,6 +175,15 @@ export function parseToolArgs(raw: string): Record<string, unknown> {
     // unreadable JSON — empty args, the server refuses with a clear reason
   }
   return {}
+}
+
+/** M15 — the `title` argument of a call, when the model filled it ('' otherwise). */
+export function titleOfArgs(args: unknown): string {
+  if (args !== null && typeof args === 'object' && !Array.isArray(args)) {
+    const v = (args as Record<string, unknown>).title
+    if (typeof v === 'string' && v.trim() !== '') return v.trim().slice(0, 60)
+  }
+  return ''
 }
 
 /** The tools a human must approve before they run (write, shell — the
