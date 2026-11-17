@@ -16,7 +16,8 @@ test('sessions : bouton, /new, /help, /clear', async ({ page }) => {
   await expect(items.first()).toBeVisible()
 
   // Bouton : session créée et active (vue = nouvelle session).
-  await page.getByRole('button', { name: '+ Nouvelle session' }).click()
+  // (le « + » est désormais une icône SVG — le nom accessible change)
+  await page.getByRole('button', { name: 'Nouvelle session' }).click()
   await expect(page.locator('.msg.system').last()).toContainText('créée')
 
   // /new avec titre unique — les journaux survivent aux runs précédents,

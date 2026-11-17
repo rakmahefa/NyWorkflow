@@ -6,6 +6,8 @@ NyWorkflow est un harness web qui exécute des workflows IA à partir de simples
 
 > Un agent. Des dossiers. Pas de framework d'orchestration.
 
+L'interface est volontairement calquée sur celle de [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) — palette neutral-bluish, bleu DeepSeek, boutons primaires noirs, composer en carte flottante, thème sombre automatique. Nous gardons l'UX, pas le moteur (décision D1 d'ARCHITECTURE.md) ; les tokens visuels viennent de `dsh/packages/client/ui-theme` (MIT).
+
 ## Aperçu
 
 ![UI NyWorkflow — vue workflow : étapes, progression, sortie prévisualisée](docs/assets/screenshot.png)
@@ -118,3 +120,5 @@ Chaque dossier de code contient son `CONTEXT.md` (rôle, entrées, sorties) — 
 ## Licence
 
 MIT — voir [LICENSE](LICENSE).
+
+Crédit design : l'interface reprend le langage visuel de [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (MIT) — Merci !

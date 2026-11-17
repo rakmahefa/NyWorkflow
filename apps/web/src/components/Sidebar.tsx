@@ -19,6 +19,29 @@ interface SidebarProps {
   onRefreshWorkspaces(): void
 }
 
+/** Icônes de navigation, dans l'esprit dsh (trait 1.5, 16px). */
+function NavIcon({ kind }: { kind: 'chat' | 'flow' }) {
+  if (kind === 'chat') {
+    return (
+      <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
+        <path
+          d="M13.5 7.25a5.25 5.25 0 0 1-7.72 4.63L2.5 13l1.12-3.28A5.25 5.25 0 1 1 13.5 7.25Z"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinejoin="round"
+        />
+      </svg>
+    )
+  }
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
+      <rect x="1.75" y="2.75" width="5" height="4" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="9.25" y="9.25" width="5" height="4" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M4.25 9.25v2a2 2 0 0 0 2 2h3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export function Sidebar({
   view,
   onViewChange,
@@ -35,8 +58,9 @@ export function Sidebar({
   return (
     <aside className="sidebar">
       <div className="brand">
-        <span className="dot" />
+        <span className="brand-mark" aria-hidden="true">N</span>
         <h1>NyWorkflow</h1>
+        <span className="brand-badge">ICM</span>
       </div>
       <div className="tabs" role="tablist" aria-label="Vues">
         <button
@@ -48,6 +72,7 @@ export function Sidebar({
           data-active={view === 'chat'}
           onClick={() => onViewChange('chat')}
         >
+          <NavIcon kind="chat" />
           Sessions
         </button>
         <button
@@ -59,13 +84,17 @@ export function Sidebar({
           data-active={view === 'workflows'}
           onClick={() => onViewChange('workflows')}
         >
+          <NavIcon kind="flow" />
           Workflows
         </button>
       </div>
       {view === 'chat' ? (
         <>
           <button className="new-session" onClick={onNew}>
-            + Nouvelle session
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+              <path d="M8 3.5v9M3.5 8h9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+            Nouvelle session
           </button>
           <nav className="sessions" aria-label="Sessions">
             {sessions.map((s) => (
