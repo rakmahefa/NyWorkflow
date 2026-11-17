@@ -2,10 +2,11 @@
 // serveur preview sur 4173, scène jouée dans un vrai Chromium, PNG écrit
 // dans docs/assets/screenshot.png.
 // Scène M11 : une session ICM agentique — dialogue de création (titre +
-// workspace), un tour avec read auto-exécuté (ligne d'outil dans le flux),
-// puis un write qui met la carte d'approbation en scène : la capture
-// montre le cœur du produit — l'ICM vers le modèle, les tools standards,
-// l'humain aux commandes.
+// workspace, l'option attendue est attendue AVANT de cliquer), un tour
+// avec read auto-exécuté (ligne d'outil dans le flux), puis un write qui
+// met la carte d'approbation en scène : la capture montre le cœur du
+// produit — l'ICM vers le modèle, les tools standards, l'humain aux
+// commandes. En cas d'échec, l'état de la page est imprimé (CI comprise).
 import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -29,41 +30,84 @@ const mock = await startMockGateway(9801)
 const server = await preview({ root: path.resolve(here, '..') })
 const browser = await chromium.launch()
 
+/** En cas d'échec : imprime l'état de la page avant de laisser mourir le processus. */
+async function dumpOnFailure(page, step) {
+  console.error(`[capture] échec à l'étape : ${step}`)
+  try {
+    const state = await page.evaluate(() => ({
+      gateway: document.querySelector('[data-test="gateway-status"]')?.getAttribute('data-state'),
+      banner: document.querySelector('[data-test="ws-banner"]')?.textContent ?? null,
+      dialogOpen: document.querySelector('[data-test="new-session-dialog"]') !== null,
+      dialogError: document.querySelector('[data-test="dialog-error"]')?.textContent ?? null,
+      wsOptions: [...document.querySelectorAll('[data-test="ws-select"] option')].map((o) => o.value),
+      head: document.querySelector('.main-head h2')?.textContent ?? null,
+      msgs: [...document.querySelectorAll('.msg')].map((m) => m.textContent?.slice(0, 90)),
+      toolRows: [...document.querySelectorAll('[data-test="tool-row"]')].map((m) => m.textContent),
+      composerDisabled: document.querySelector('.composer textarea')?.disabled ?? null,
+    }))
+    console.error('[capture] état de la page :', JSON.stringify(state, null, 2))
+  } catch (err) {
+    console.error('[capture] page muette :', err)
+  }
+}
+
 try {
   const page = await browser.newPage({
     viewport: { width: 1280, height: 800 },
     deviceScaleFactor: 2,
   })
+  page.on('console', (m) => {
+    if (m.type() === 'error') console.error('[console]', m.text().slice(0, 300))
+  })
+  page.on('requestfailed', (r) => console.error('[reqfail]', r.method(), r.url(), r.failure()?.errorText))
+  page.on('response', (r) => {
+    if (r.status() >= 400) console.error('[http]', r.status(), r.url())
+  })
+
   await page.goto('http://127.0.0.1:4173/')
 
   // La passerelle (maquette) doit être détectée — elle pilote l'exécution.
-  await page.waitForSelector('[data-test="gateway-status"][data-state="up"]')
+  await page.waitForSelector('[data-test="gateway-status"][data-state="up"]', { timeout: 20_000 })
 
-  // Nouvelle session ICM via le dialogue : titre + workspace d'exemple.
+  // Nouvelle session ICM via le dialogue : le registre des workspaces doit
+  // être chargé AVANT de cliquer (l'option est attendue explicitement —
+  // jamais de session orpheline par course).
   const box = page.getByLabel('Message')
   await box.fill('/new Les loutres de Madagascar — rapport documenté')
   await page.keyboard.press('Enter')
   await page.locator('[data-test="new-session-dialog"]').waitFor({ state: 'visible' })
   await page.locator('[data-test="session-title-input"]').fill('Les loutres de Madagascar — rapport')
+  await page.locator('[data-test="ws-select"] option[value="exemple-agentique"]').waitFor({ state: 'attached', timeout: 20_000 })
   await page.locator('[data-test="create-session-btn"]').click()
+  // La session de la scène est bien l'active (titre dans l'en-tête).
+  await page.locator('.main-head h2').filter({ hasText: 'Les loutres de Madagascar — rapport' }).waitFor({ timeout: 20_000 })
   await page.locator('[data-test="ws-banner"]').waitFor({ state: 'visible' })
 
   // Premier tour : la lecture de la carte (read auto-exécuté) + réponse.
   await box.fill('AGENTLIT commence par lire la carte du workspace')
   await page.keyboard.press('Enter')
-  await page
-    .locator('[data-test="tool-row"]', { hasText: 'read' })
-    .first()
-    .waitFor({ state: 'visible' })
-  await page.waitForFunction(
-    () => [...document.querySelectorAll('.msg.assistant')].some((m) => m.textContent?.includes('LIVRABLE FINAL')),
-  )
+  try {
+    await page.locator('[data-test="tool-row"]', { hasText: 'read' }).first().waitFor({ state: 'visible', timeout: 30_000 })
+    await page.waitForFunction(
+      () => [...document.querySelectorAll('.msg.assistant')].some((m) => m.textContent?.includes('LIVRABLE FINAL')),
+      undefined,
+      { timeout: 30_000 },
+    )
+  } catch (err) {
+    await dumpOnFailure(page, 'premier tour agentique (AGENTLIT)')
+    throw err
+  }
 
   // Deuxième tour : un write proposé — la carte d'approbation reste à
   // l'écran, l'humain aux commandes : c'est la capture.
   await box.fill('AGENTECRIT écris maintenant le brouillon du rapport')
   await page.keyboard.press('Enter')
-  await page.locator('[data-test="approval-card"]').waitFor({ state: 'visible' })
+  try {
+    await page.locator('[data-test="approval-card"]').waitFor({ state: 'visible', timeout: 30_000 })
+  } catch (err) {
+    await dumpOnFailure(page, 'write sous approbation (AGENTECRIT)')
+    throw err
+  }
 
   await mkdir(outDir, { recursive: true })
   await page.screenshot({ path: outFile })

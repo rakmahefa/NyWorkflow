@@ -370,12 +370,39 @@ export default function App() {
       }
 
       // Session agentique : la boucle tourne dans le navigateur (ICM + outils).
-      if (mode === 'server' && active.workspace !== undefined && gw.status === 'up' && gw.selected) {
-        void runAgentTurn(active, parsed.text)
+      if (mode === 'server' && gw.status === 'up' && gw.selected) {
+        if (active.workspace !== undefined) {
+          void runAgentTurn(active, parsed.text)
+          return
+        }
+        // Session sans workspace (anciennes sessions) : conversation réelle,
+        // sans ICM ni outils — le modèle reste branché.
+        const history = toAgentMessages(store.listMessages(active.id))
+        const plain = store.appendMessage(active.id, 'assistant', '')
+        store.setStreaming(plain.id, true)
+        void (async () => {
+          try {
+            for await (const ev of client.chatStream({ model: gw.selected, messages: history })) {
+              if (ev.type === 'text' && !store.appendText(plain.id, ev.delta)) return
+            }
+            store.setStreaming(plain.id, false)
+            journalAssistant(active.id, plain.id)
+          } catch (err) {
+            const remaining = store.listMessages(active.id).find((m) => m.id === plain.id)
+            if (!remaining) return
+            if (remaining.text.trim() === '') store.removeMessage(plain.id)
+            else {
+              store.setStreaming(plain.id, false)
+              journalAssistant(active.id, plain.id)
+            }
+            const why = err instanceof Error ? err.message : String(err)
+            store.appendMessage(active.id, 'system', `Erreur passerelle : ${why}`)
+          }
+        })()
         return
       }
 
-      // Repli simulé (passerelle absente ou session sans workspace).
+      // Repli simulé (passerelle absente ou mode mémoire).
       const placeholder = store.appendMessage(active.id, 'assistant', '')
       store.setStreaming(placeholder.id, true)
       streamText(fakeReply(parsed.text), (token) => store.appendText(placeholder.id, token)).done.then(() => {
