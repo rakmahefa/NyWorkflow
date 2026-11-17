@@ -4,8 +4,9 @@ import { defineConfig } from 'vite'
 import { nyworkflowServerPlugin } from './src/server/plugin.ts'
 
 // Port 3080 — same as deepseek-harness web UI.
-// The gateway (gemini-web2api) is reached same-origin through /api:
-// no CORS, whatever the target (real gateway or test mock).
+// The gateway (@nyworkflow/webapi — pnpm webapi, default 127.0.0.1:8081) is
+// reached same-origin through /api: no CORS, whatever the target (our
+// gateway, or any OpenAI-compatible server via W2A_URL).
 const proxy = {
   '/api': {
     target: process.env.W2A_URL ?? 'http://127.0.0.1:8081',

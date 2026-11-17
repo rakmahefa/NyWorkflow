@@ -1,41 +1,58 @@
-# Plan
+# Plan — Phase 2 : passerelle webapi intégrée
+
+> La phase 1 (v0.1.0, M0..M6) est archivée dans [PLAN-old.md](PLAN-old.md) et [MILESTONES-old.md](MILESTONES-old.md). La numérotation des jalons continue à partir de M7.
 
 ## Vision
 
-Un harness web minimal où les workflows IA sont des dossiers lisibles (ICM), exécutés par un seul agent Gemini — et simple à maintenir même quand Gemini évolue.
+La passerelle qui parle à Gemini vit **dans ce repo** : `packages/webapi` (`@nyworkflow/webapi`). C'est la refonte moderne et maintenue de `ny-gemini-acp` (Rust, non maintenu, dont la méthode cassait à chaque évolution de l'interface web) — pour l'instant avec le provider Gemini, demain d'autres. NyWorkflow redevient auto-suffisant : un seul repo à cloner, un seul endroit à patcher.
+
+## Pourquoi la refonte
+
+`ny-gemini-acp` cassait tout le temps parce que le protocole instable y était **codé en dur** : version `bl` figée, table de modèles dans le code, jetons de page jamais rafraîchis en cas d'échec. La refonte inverse chaque cause :
+
+| Ça cassait parce que… | La refonte répond… |
+|---|---|
+| `bl` (version du serveur web Gemini) périme | auto-découverte depuis la page `/app` à chaque démarrage + sur échec, constante de repli, surcharge env |
+| Google renomme ses modèles / change les modes | table de modèles **data-driven** (`models.json` surchargeable sans toucher au code) |
+| jetons de page (`at`, `push_id`, `pctx`) périmés | TTL 10 min **et** rafraîchissement forcé avant chaque retry HTTP 4xx |
+| divergences du flux (snapshots non préfixes) tuent la réponse | détection de divergence + retry avec backoff exponentiel et jitter (rien de perdu tant que rien n'est émis) |
+| diagnostics muets | erreurs typées (auth / réseau / amont / modèle inconnu / divergence), messages clairs en français, endpoint `/` d'état |
 
 ## Principes
 
-1. **Simple d'abord** : si une feature n'est pas dans un milestone, elle n'existe pas.
-2. **Fichiers plats** : Markdown et JSONL, pas de base de données.
-3. **Isoler l'instable** : Gemini derrière `gemini-web2api`, jamais dans le cœur.
-4. **Testé à chaque milestone** : `pnpm test` vert = milestone livré.
+1. **Simple d'abord** : si une feature n'est pas dans le milestone, elle n'existe pas.
+2. **Isoler l'instable, à l'intérieur** : tout le savoir-faire Gemini vit dans `packages/webapi` ; le reste du monorepo ne le voit qu'à travers l'interface OpenAI-compatible de `adapter-llm`. Gemini évolue → on patche **ce repo**, dans un seul package.
+3. **Zéro dépendance runtime** : `node:http`, `node:crypto`, `fetch` natif. Pas d'Express, pas d'Hono, pas d'SDK.
+4. **Data-driven par défaut** : tout ce que Google peut changer (modèles, `bl`) est une donnée surchargeable, pas une constante cachée.
+5. **Testé sans réseau** : maquette HTTP de l'interface Gemini (page + flux `StreamGenerate`) → toute la chaîne est prouvée en intégration, cookie expiré compris.
+6. **Un milestone à la fois, testé** — et à chaque fin de milestone atteint, **les milestones futurs sont réécrits** (règle de gouvernance, voir MILESTONES.md).
 
 ## Ordre
 
 ```
-M0 fondations ──► M1 UI web + tests ──► M2 adaptateur LLM ──► M3 sessions
-                                                              │
-   v0.1.0 ◄── M6 vue workflow ◄── M5 outils ◄── M4 moteur ICM ◄┘
+M7 webapi cœur (client Gemini + serveur OpenAI-compatible) ──► M8 durcissement
+        │                                                      (multi-comptes, proxy…)
+        ▼
+   provider suivant (Gemini + un autre) ──► …défini à chaque fin de milestone
 ```
-
-Logique : d'abord ce qui se voit et se teste (M1), puis la plomberie (M2–M3), puis le cœur métier (M4–M5), puis la finition (M6).
 
 ## Points de décision
 
-- **Fin M2** : la passerelle web2api tient-elle la charge en usage quotidien ? Sinon, portage TS de l'adaptateur (option documentée, jamais pressentie).
-- **Fin M4** : le format de contrat CONTEXT.md v1 est figé jusqu'à v0.2.0.
+- **Fin M7** : la maquette couvre-t-elle tous les cas d'échec observés historiquement (401, divergence, flux vide) ? Sinon, les cas manquants entrent dans M8.
+- **Fin M8** : dégeler `/v1beta` et les outils dans l'API, ou garder le socle minimal ?
+- Le format de contrat ICM v1 reste figé jusqu'à v0.2.0 (décision M4, inchangée).
 
 ## Risques
 
 | Risque | Parade |
 |---|---|
-| Gemini casse son interface web | isolé dans ny-gemini-acp ; NyWorkflow continue avec tout serveur OpenAI-compatible |
+| Google change le protocole (payload, frames) | tout dans `packages/webapi`, tests de non-régression sur la forme du payload et le décodage des frames ; la parade ultime reste `W2A_URL` : n'importe quel serveur OpenAI-compatible remplace la passerelle |
+| Compte Google bloqué / cookie expiré | erreur typée `authentication` avec message actionnable ; le cookie est un fichier local jamais commis |
+| Exposition réseau accidentelle | boucle 127.0.0.1 par défaut, aucune clé API ni CORS tant que ce n'est pas un milestone |
 | Scope creep | refuser toute feature hors milestone courant |
-| UI trop ambitieuse | M1 = chat simulé, rien de plus |
-| Perte d'historique | sessions append-only JSONL sous Git |
 
 ## Maintenance
 
-- Changement Gemini → patch ny-gemini-acp → aucun commit ici.
+- Changement Gemini → patch `packages/webapi` → un seul repo, un seul commit.
 - L'avancement (% et cases) vit dans README.md et MILESTONES.md, mis à jour à chaque livraison.
+- `ny-gemini-acp` reste en référence historique (`llm-provider` = source du protocole) ; plus aucune dépendance logicielle vers lui.

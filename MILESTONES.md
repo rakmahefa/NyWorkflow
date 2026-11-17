@@ -1,104 +1,39 @@
-# Milestones
+# Milestones — Phase 2 : passerelle webapi intégrée
+
+> Phase 1 (M0..M6, v0.1.0) archivée dans [MILESTONES-old.md](MILESTONES-old.md). La numérotation continue à partir de M7.
 
 Un milestone = petit, testé, livrable. Le suivant ne démarre que si `pnpm test` est vert.
 
-La somme des poids fait 100 %. L'avancement global est mis à jour dans le README à chaque livraison.
+**Règle de gouvernance (phase 2) : à chaque fin de milestone atteint, les milestones futurs sont écrits (ou réécrits) en fin de ce fichier.** Les jalons futurs ne sont jamais gravés dans le marbre plus d'un milestone à l'avance : ils affinent au fil des leçons de livraison. L'avancement global de la phase vit dans le README.
 
-## M0 — Fondations · 10 % · ✅ Terminé (2026-11-17)
+## M7 — Passerelle webapi · 20 % · ✅ Terminé (2026-11-17)
 
-- [x] Docs : README, ARCHITECTURE, PLAN, MILESTONES
-- [x] Squelette : monorepo pnpm, `apps/web` + 4 packages, `CONTEXT.md` par dossier
-- [x] Workspace ICM d'exemple (`examples/workspaces/exemple-rapport`)
+Objectif : la refonte moderne de `ny-gemini-acp`, directement dans le monorepo — pour l'instant Gemini, prouvé sans réseau.
 
-## M1 — UI web + tests · 20 % · ✅ Terminé (2026-11-17)
+- [x] `packages/webapi` (`@nyworkflow/webapi`), zéro dépendance runtime : client web Gemini (auth `SAPISIDHASH`, cookies 3 formats, payload `f.req`, décodage des frames `wrb.fr`, deltas par snapshots avec détection de divergence, retry backoff + jitter)
+- [x] Anti-casseurs : **`bl` auto-découvert** depuis la page `/app` (+ repli constant, surcharge env), **table de modèles data-driven** (`models.json` surchargeable via `NYW_WEBAPI_MODELS_FILE`), **jetons de page rafraîchis sur échec HTTP 4xx** avant retry, erreurs typées
+- [x] Serveur HTTP OpenAI-compatible (`node:http`, SSE) : `GET /` (état), `GET /v1/models`, `POST /v1/chat/completions` (stream **et** complet) — drop-in du port 8081, `adapter-llm` inchangé
+- [x] CLI : `pnpm webapi` (bin `nyworkflow-webapi`), config par env `NYW_WEBAPI_*`
+- [x] Tests : 98 dans le package, dont l'intégration full-chain contre une maquette HTTP de l'interface Gemini (page + `StreamGenerate`, échecs 400/401, divergence, flux vide, cookie expiré, rafraîchissement de jetons entre retries)
+- [x] Docs : README (section passerelle, avancement phase 2), ARCHITECTURE, PLAN, ce fichier
 
-Objectif : une UI utilisable sans backend, fidèle à l'esprit deepseek-harness.
-
-- [x] `pnpm dev` démarre `apps/web` sur `127.0.0.1:3080`
-- [x] Sidebar sessions (liste, nouvelle session)
-- [x] Zone de chat + streaming simulé (réponses factices, aucune API)
-- [x] Commandes locales : `/new`, `/help`, `/clear`
-- [x] Vitest : commandes + état des sessions — 22 tests
-- [x] Playwright : ouvrir la page, envoyer un message, créer une session — 3 tests
-- [x] CI GitHub Actions : typecheck + build + tests + artefacts (dist, rapports)
-
-**Livré quand :** `pnpm test` vert et démo sans backend possible. ✔
-
-## M2 — Adaptateur LLM · 15 % · ✅ Terminé (2026-11-17)
-
-Objectif : parler à la passerelle `gemini-web2api` (OpenAI-compatible).
-
-- [x] Interface `LlmAdapter` + implémentation fetch/SSE dans `packages/adapter-llm` (repli `/v1beta/models` sur 404, annulation mid-flux)
-- [x] Sélecteur de modèle dans l'UI (via `/v1/models`), proxy same-origin `/api` — zéro CORS
-- [x] Chat réel en streaming depuis l'UI
-- [x] Message d'erreur clair si la passerelle est absente (+ repli simulé, jamais d'échec silencieux)
-- [x] Tests : serveur mock OpenAI-compatible — 11 tests Vitest sans réseau
-- [x] CI : capture d'écran README auto-actualisée (job dédié, artefact, commit `[skip ci]`)
-
-**Livré quand :** une question posée dans l'UI obtient une vraie réponse Gemini streamée. ✔ (vérifié e2e contre une maquette SSE ; passerelle réelle à la première utilisation)
-
-## M3 — Sessions persistantes · 15 % · ✅ Terminé (2026-11-17)
-
-Objectif : fermer et rouvrir sans perdre l'historique.
-
-- [x] Événements append-only en JSONL sous `.nyworkflow/sessions/` — un fichier par session, jamais réécrit (`session.created` avec titre, `user.message`, `assistant.message`, `session.forked`)
-- [x] Rechargement d'une session au redémarrage — hydratation au boot via `GET /sessions` (plugin Vite, dev **et** preview, home `.nyworkflow/` surchargeable par `NYW_HOME`) ; repli mémoire avec message clair si l'API est absente
-- [x] Fork de session (copie du journal) — copie octet pour octet + un événement `session.forked` ; bouton Fork dans la sidebar, historique hérité, la copie vit sa vie
-- [x] Tests : écriture, relecture, fork du journal — 17 tests dans le package (ligne déchirée, journal corrompu, id invalide) + test d'intégration « redémarrage du serveur Vite » + 3 e2e (rechargement, fork, /clear append-only)
-
-**Livré quand :** redémarrer le serveur restaure les sessions intactes. ✔ (prouvé par le test d'intégration : boot → échange → fork → arrêt/relance du serveur de dev → tout revient à l'identique ; e2e : rechargement de page, fork, /clear)
-
-## M4 — Moteur ICM · 20 % · ✅ Terminé (2026-11-17)
-
-Objectif : exécuter un workspace d'étapes — le cœur du projet.
-
-- [x] Parsing du workspace : carte racine + contrats `CONTEXT.md` (Entrées / Process / Sorties)
-- [x] Exécution d'une étape : contexte assemblé → LLM → sortie écrite dans `output/`
-- [x] Chaînage : la sortie de l'étape N est proposée en entrée de l'étape N+1
-- [x] Checkpoints : pause entre étapes, reprise manuelle
-- [x] Tests : parsing + exécution sur le workspace d'exemple (LLM mocké)
-
-**Livré quand :** `examples/workspaces/exemple-rapport` s'exécute de bout en bout. ✔ (prouvé en intégration sur le vrai serveur Vite : sujet → étape 1 → checkpoint → étape 2 → done, sorties sur disque, reprise après redémarrage du serveur ; LLM maquette OpenAI-compatible)
+**Livré quand :** `pnpm test` vert sur tout le monorepo, l'UI et l'exécution d'étapes consomment la passerelle sans changer une ligne de `adapter-llm`. ✔ (port 8081 par défaut = remplacement direct de `gemini-web2api` ; protocole prouvé contre la maquette, cookie réel à la première utilisation)
 
 Détail de la livraison :
 
-- `packages/core` — `parse.ts` (carte + contrats, format v1 **figé** jusqu'à v0.2.0 : sections Entrées/Process/Sorties, chemins entre backticks, une entrée non-fichier = le sujet, une sortie par étape), `prompt.ts` (assemblage pur), `engine.ts` (`runStage`, `createRun` avec pause à chaque étape, `runStateFromEvents` — l'état dérivé du journal, donc survivant aux redémarrages). Le LLM est injecté (`StageLlm`) : core ne fait aucun HTTP.
-- Le chaînage est déclaratif : les entrées sont relues sur disque à chaque exécution — un humain peut éditer une sortie au checkpoint, l'étape suivante lit la version éditée.
-- `apps/web` — API `/workspaces` (plugin Vite, dev et preview) : listing, détail + contrats + runs, création de run (le sujet devient une session journalisée), `advance` pour exécuter l'étape suivante côté serveur (garde anti-double-exécution 409). La vue workflow dans l'UI arrive en M6 ; l'API est pilotable aujourd'hui.
+- **Client** (`src/gemini.ts`) — tour de force anti-casseurs : `refreshPage()` extrait `at`/`push_id`/`pctx` **et** le `bl` (regex `boq_assistant-bard-web-server_…`) ; le tour d'exécution réessaie (3×, backoff exponentiel 2 s → 30 s, jitter ±25 %) tant que rien n'a été émis, rafraîchit les jetons de page sur HTTP 4xx avant de réessayer, refuse de réessayer les erreurs fatales (cookie expiré, amont rejeté, modèle inconnu, blocage sécurité). Les snapshots divergents sont ignorés jusqu'à compatibilité ; la divergence résiduelle en fin de flux n'est retentée que si rien n'a été émis (délibéré : chaque tentative est une nouvelle conversation, réémettre dupliquerait la réponse).
+- **Frames** (`src/frames.ts`) — port défensif du décodeur Rust : lignes, `)]}'` ignoré, `wrb.fr` uniquement, candidat le plus long de `inner[4]`, nettoyage des blocs `code_reference` et `card_content`, détection `BardErrorInfo [n]` sur métadonnées décodées uniquement (la prose qui cite le marqueur reste de la prose).
+- **Serveur** (`src/server.ts`) — SSE écrit à la main sur `node:http` : chunk initial vide, deltas, `finish_reason` `stop`… ou chunk d'erreur `error` + `[DONE]` (jamais un `stop` déguisé), ping 15 s, annulation propagée à l'amont quand le client coupe.
+- **Bornes** : corps de requête 4 Mio, frame 8 Mio, accumulateur brut 64 Kio — plafonds explicites, pas de confiance aveugle en l'amont.
+- Tests : 237 unitaires au total (21 session + 11 adapter + 16 tools + 43 core + 48 web + **98 webapi**) + 12 e2e inchangés, tous verts.
 
-## M5 — Outils + permissions · 10 % · ✅ Terminé (2026-11-17)
+## Milestones futurs
 
-Objectif : laisser l'agent lire/écrire dans le workspace, sous contrôle.
+> Réécrits à chaque fin de milestone atteint (règle de gouvernance ci-dessus).
 
-- [x] Outils : `read`, `write`, `ls`, `glob` (`shell` reste optionnel — hors périmètre v0.1.0)
-- [x] Permissions : périmètre = racine du workspace, approbation via l'UI
-- [x] Appels d'outils journalisés dans la session
-- [x] Tests : exécution + refus hors périmètre
+- **M8 — Durcissement & diagnostics** (20 %) : page d'état détaillée de la passerelle dans l'UI (cookie présent/expiré, `bl` découvert, derniers échecs typés) ; multi-comptes cookies (rotation sur erreur d'authentification) ; support proxy sortant ; journal structuré des requêtes amont.
+- **M9 — API élargie** (20 %) : routes Google-style `/v1beta/models` (list + generateContent) et `tools` dans `/v1/chat/completions` (blocs `tool_call` façon OpenAI) — si un besoin réel apparaît, sinon reporté.
+- **M10 — Provider suivant** (20 %) : l'abstraction `Provider` reçoit son deuxième implémentateur (à définir fin M8 : interface web d'un autre modèle, ou API officielle) — NyWorkflow choisit son provider par simple env.
+- **M11 — v0.2.0** (20 %) : dégel du format de contrat ICM si les usages le réclament, `shell` optionnel sous approbation, multi-workspaces à la volée, tag et release.
 
-**Livré quand :** un outil hors périmètre est refusé et journalisé. ✔ (prouvé en unitaire dans `packages/tools` et `packages/core`, en intégration sur le vrai serveur Vite — journal JSONL relu ligne à ligne — et en e2e : la carte d'approbation s'affiche dans l'UI, l'humain décide, l'étape reprend)
-
-Détail de la livraison :
-
-- `packages/tools` — garde de périmètre lexicale **et** realpath (un symlink ne sort pas du workspace), `read`/`ls`/`glob` auto-exécutés, `write` seul outil dangereux. Bornes : read 32 Kio, write 128 Kio, ls/glob 500 entrées, glob profondeur 8. Tout refus est un résultat structuré avec résumé français — jamais une exception silencieuse.
-- `packages/core` — la boucle d'agent dans `runStage` (`tools: true`) : protocole JSON une-ligne strict (`{"tool":"…","args":{…}}`, toute autre réponse = l'artefact final, comportement M4 inchangé), 8 appels max par tentative. Un write valide et dans le périmètre **met l'étape en pause** (état `approval`), `resolve('approve'|'refuse')` exécute ou refuse puis poursuit la boucle ; `resumeStage` rejoue la conversation depuis le journal (`tool.result.data`, champ additif) — la reprise est identique après un redémarrage serveur.
-- `packages/session` — contrat gelé étendu de façon additive : `data` sur `tool.result`, `model` sur `stage.started` (l'approbation n'a pas à redemander le modèle). Les journaux antérieurs restent lisibles ; `deriveSession` expose l'activité d'outils (appel apparié à son résultat, en attente = sans résultat).
-- `apps/web` — API : `advance` accepte `tools`, nouvel endpoint `POST /workspaces/:name/runs/:id/approval` (garde 409 anti double-exécution partagée, `advance` pendant une approbation = 409 clair) ; `RunDto` porte l'activité d'outils. UI : carte d'approbation (Approuver / Refuser) et activité d'outils pour la session de run active — la décision se prend dans l'UI, plus besoin de curl.
-- Tests : 131 unitaires (21 session + 11 adapter + 16 tools + 43 core + 40 web dont 4 intégration outils) + 10 e2e (2 nouveaux : approbation et refus depuis l'UI).
-
-## M6 — Vue workflow + v0.1.0 · 10 % · ✅ Terminé (2026-11-17)
-
-Objectif : voir le pipeline, livrer.
-
-- [x] Vue workflow : étapes, progression, prévisualisation des sorties
-- [x] README final (captures, guide utilisateur)
-- [x] Nettoyage et tag `v0.1.0`
-
-**Livré quand :** tag `v0.1.0` poussé et docs à jour. ✔
-
-Détail de la livraison :
-
-- `apps/web` — onglets Sessions / Workflows dans la barre latérale ; la vue workflow affiche la carte du workspace (dépliable), le pipeline d'étapes (Fait / En cours / À venir, dérivé de l'état du run — `lib/progress.ts`, pur et testé), la liste des runs, la création de run et l'exécution d'étape depuis l'UI (modèle piloté par le sélecteur d'en-tête), la carte d'approbation M5 rejouée dans la vue, et la prévisualisation des sorties — un clic, le contenu **actuel** du fichier, lu sur disque.
-- API additive : `GET /workspaces/:name/file?path=…` (aperçu en lecture seule sous la même garde de périmètre que les outils — lexicale **et** realpath, 128 Kio max) ; `RunDto.outputs` (fichiers écrits par étape, dérivés du journal, ordre de première écriture). Le run créé dans l'UI apparaît aussitôt dans l'onglet Sessions (store synchronisé) — un run EST une session.
-- Capture README : la scène joue désormais la vue workflow (run créé, étape exécutée, sortie prévisualisée) sur un vrai Chromium en CI.
-- Nettoyage : versions 0.1.0 partout (racine + 5 packages + `APP_VERSION`), guide utilisateur dans le README, avancement 100 %.
-- Tests : 139 unitaires (21 session + 11 adapter + 16 tools + 43 core + 48 web dont 4 intégration /workspaces) + 12 e2e (2 nouveaux : pipeline complet depuis l'UI — progression, prévisualisation, session synchronisée — et approbation d'un write depuis la vue workflow). Le spec e2e travaille sur une copie dédiée du workspace (créée puis supprimée) : aucune course avec les autres specs.
+> Ces jalons sont une intention, pas un engagement : chacun sera réévalué — et réécrit — au milestone précédent.

@@ -1,10 +1,11 @@
 /**
  * @nyworkflow/adapter-llm — the single model boundary.
  *
- * Speaks the OpenAI-compatible protocol. Default target: gemini-web2api
- * (from the ny-gemini-acp repo) — that gateway owns all fragile Gemini
- * knowledge (cookies/OAuth, streaming internals). In the browser, the app
- * calls it same-origin through the web server's `/api` proxy.
+ * Speaks the OpenAI-compatible protocol. Default target: the integrated
+ * webapi gateway (@nyworkflow/webapi, `pnpm webapi`, 127.0.0.1:8081) — that
+ * package owns all fragile Gemini knowledge (cookies, streaming internals).
+ * Any OpenAI-compatible server can replace it via W2A_URL. In the browser,
+ * the app calls it same-origin through the web server's `/api` proxy.
  */
 
 export interface ChatMessage {

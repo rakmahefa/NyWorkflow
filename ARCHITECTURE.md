@@ -10,22 +10,26 @@
 │  packages/core — moteur ICM : lit le workspace, exécute les étapes             │
 │    │         │                                                                 │
 │    │         ├── packages/session — journal append-only JSONL                  │
-│    │         └── packages/tools — outils fichier/shell + permissions           │
+│    │         └── packages/tools — outils fichier + permissions                 │
 │    │                                                                           │
 │  packages/adapter-llm — client OpenAI-compatible (unique sortie modèle)        │
+│    │                                                                           │
+│  packages/webapi — passerelle : interface web Gemini ↔ OpenAI-compatible       │
 └──────┬─────────────────────────────────────────────────────────────────────────┘
-       │ HTTP OpenAI-compatible — http://127.0.0.1:8081
-┌──────▼──────────────────── ny-gemini-acp (repo séparé) ────────────────────────┐
-│  gemini-web2api ── cookie/OAuth ──► interface web Gemini ──► modèle            │
+       │ HTTPS (cookies de session, protocole batchexecute interne)
+┌──────▼────────────────────────────────────────────────────────────────────────┐
+│  gemini.google.com — l'interface web Gemini (non officielle)                   │
 └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 Le serveur web embarque aussi deux API same-origin (plugin Vite, branchées en dev comme en preview) : `/sessions` (journaux — le navigateur y lit et écrit les échanges, il ne touche jamais les fichiers) et `/workspaces` (moteur ICM — exécution des étapes côté serveur, état des runs, approbations d'outils et aperçu des fichiers sous garde de périmètre). Les journaux vivent sous `.nyworkflow/` à la racine du repo, les workspaces sous `examples/workspaces/` — deux emplacements surchargeables par `NYW_HOME` et `NYW_WORKSPACES`.
 
+La passerelle `packages/webapi` (`pnpm webapi`, 127.0.0.1:8081 par défaut) est la refonte moderne de ny-gemini-acp — directement dans le monorepo. Le proxy `/api` du serveur web la rejoint en same-origin ; `W2A_URL` permet de lui substituer n'importe quel serveur OpenAI-compatible.
+
 ## Les 5 règles
 
 1. **Le système de fichiers est l'orchestrateur** (ICM). Numérotation = ordre, dossier = périmètre, fichier = état. Aucune séquence codée en dur.
-2. **Gemini n'est jamais touché directement.** Seul `gemini-web2api` connaît Gemini. Gemini évolue → on patche ny-gemini-acp, NyWorkflow ne bouge pas.
+2. **Gemini n'est jamais touché directement.** Seul `packages/webapi` connaît Gemini (cookies, SAPISIDHASH, payload `f.req`, frames, `bl`). Gemini évolue → on patche ce package, le reste du monorepo ne bouge pas. Et si le protocole venait à casser durablement : `W2A_URL` pointe l'adaptateur vers n'importe quel serveur OpenAI-compatible.
 3. **Tout est fichier plat.** Contrats en Markdown, sessions en JSONL, sorties en Markdown. Observable par défaut, diffable via Git.
 4. **Pas de framework d'injection.** Des imports directs et des interfaces TypeScript. Zéro magie, zéro Cordis.
 5. **Un milestone à la fois, testé.** Voir MILESTONES.md.
@@ -38,6 +42,7 @@ Le serveur web embarque aussi deux API same-origin (plugin Vite, branchées en d
 | `packages/core` | parsing workspace ICM, exécution des étapes, boucle d'agent (outils) | appels réseau |
 | `packages/session` | journalisation append-only, relecture, fork, dérivation (messages + activité d'outils) | transformations |
 | `packages/adapter-llm` | client OpenAI-compatible, streaming SSE (appelé same-origin via le proxy `/api` du serveur web) | parsing Gemini |
+| `packages/webapi` | passerelle : interface web Gemini servie en OpenAI-compatible (auth SAPISIDHASH, f.req, frames wrb.fr, `bl` auto-découvert, retries) — serveur HTTP + CLI `pnpm webapi` | orchestration, sessions, outils |
 | `packages/tools` | read / write / ls / glob, garde de périmètre (racine du workspace) | politique d'exécution |
 
 ## Workspace ICM (ce que le moteur exécute)
@@ -86,15 +91,17 @@ modèle ──► {"tool":"read","args":{…}}   (JSON une-ligne strict)
 
 | Quand ça casse… | On touche… | Taille du patch |
 |---|---|---|
-| Gemini change son interface web | ny-gemini-acp uniquement | petit |
-| On veut un autre modèle | URL de base de l'adaptateur | trivial |
+| Gemini change son interface web | `packages/webapi` uniquement (modèles = une donnée via `NYW_WEBAPI_MODELS_FILE`) | petit |
+| Google renomme ses modèles | un JSON de table de modèles, zéro code | trivial |
+| On veut un autre modèle/serveur | `W2A_URL` de l'adaptateur | trivial |
 | Nouveau workflow ou étape | un dossier + CONTEXT.md | zéro code |
 | Nouvel outil | `packages/tools` | petit |
 
 ## Décisions clés
 
 - **D1 — Projet neuf en TypeScript**, pas un fork de deepseek-harness : ses 45 packages Cordis sont exactement la dette que NyWorkflow veut éviter. On garde l'UX, pas le moteur.
-- **D2 — Passerelle, pas portage** : réutiliser `gemini-web2api` tel quel plutôt que de réécrire auth/stream en TS. Le savoir-faire Gemini reste à un seul endroit.
+- **D2 — Passerelle, pas portage** (phase 1) : réutiliser `gemini-web2api` (ny-gemini-acp) plutôt que réécrire auth/stream en TS. **Révisée en phase 2 (M7)** : ny-gemini-acp est non maintenu et cassait à chaque évolution — la passerelle est désormais **réimplémentée dans le repo** (`packages/webapi`), en portant le protocole mais en inversant chaque cause de casse (`bl` auto-découvert, modèles data-driven, jetons rafraîchis avant retry). L'isolement demeure : un seul package connaît Gemini.
+- **D2bis — Zéro dépendance runtime** pour la passerelle : `node:http`, `node:crypto`, `fetch` natif — la chaîne de test ne dépend d'aucun serveur externe (maquette HTTP de l'interface Gemini).
 - **D3 — ICM pur** : pas de chat libre, pas de multi-agents. Un agent, des étapes, des fichiers.
 - **D4 — Sessions en JSONL append-only** : l'historique envoyé au modèle est toujours re-dérivé du journal.
 - **D5 — Outils enfermés dans le workspace** : tout chemin sortant de la racine est refusé.

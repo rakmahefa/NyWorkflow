@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rakmahefa/NyWorkflow/actions/workflows/ci.yml/badge.svg)](https://github.com/rakmahefa/NyWorkflow/actions/workflows/ci.yml)
 
-NyWorkflow est un harness web qui exécute des workflows IA à partir de simples dossiers — la méthode ICM (Interpretable Context Methodology) — propulsé par Gemini via votre passerelle locale `gemini-web2api`.
+NyWorkflow est un harness web qui exécute des workflows IA à partir de simples dossiers — la méthode ICM (Interpretable Context Methodology) — propulsé par Gemini via **sa propre passerelle webapi intégrée** (`packages/webapi`, refonte moderne et maintenue de l’ancien ny-gemini-acp).
 
 > Un agent. Des dossiers. Pas de framework d'orchestration.
 
@@ -17,14 +17,14 @@ L'interface est volontairement calquée sur celle de [DeepSeek Harness](https://
 ## Pourquoi
 
 - **Simple** — un workflow = un dossier d'étapes numérotées, chaque étape a un `CONTEXT.md` (Entrées / Process / Sorties).
-- **Robuste** — la logique fragile Gemini (cookie/OAuth, streaming) reste isolée dans [ny-gemini-acp](https://github.com/rakmahefa/ny-gemini-acp). Gemini évolue ? On patche la passerelle, jamais le harness.
+- **Robuste** — la logique fragile Gemini (cookie, streaming interne) vit dans `packages/webapi`, **dans ce repo** : `bl` auto-découvert, table de modèles data-driven, jetons de page rafraîchis avant chaque retry. Gemini évolue ? On patche un package, jamais le harness.
 - **Agnostique** — l'adaptateur parle OpenAI-compatible : n'importe quel serveur de modèle convient.
 
 ## Architecture en 10 secondes
 
 ```
-UI web (apps/web) ──► core (moteur ICM) ──► adapter-llm ──► gemini-web2api ──► Gemini
-      │                   │                                     (repo ny-gemini-acp)
+UI web (apps/web) ──► core (moteur ICM) ──► adapter-llm ──► webapi (packages/webapi) ──► interface web Gemini
+      │                   │                  │                  (OpenAI-compatible, port 8081)
       └──── session (journal JSONL) ◄──── tools (permissions)
 ```
 
@@ -32,17 +32,29 @@ Détails : [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ## Démarrage
 
-Prérequis : Node.js 20+, pnpm 12+.
+Prérequis : Node.js 22.18+ (la passerelle), pnpm 12+.
 
 ```sh
 pnpm install
 pnpm dev          # UI sur http://127.0.0.1:3080
-pnpm test         # Vitest — unitaires
+pnpm webapi       # passerelle sur http://127.0.0.1:8081 (voir ci-dessous)
+pnpm test         # Vitest — unitaires (237, dont 98 webapi sans réseau)
 pnpm test:e2e     # Playwright — UI réelle (télécharge Chromium au besoin)
 pnpm typecheck    # TypeScript
 ```
 
-L'UI fonctionne avec ou sans passerelle. Sans `gemini-web2api` : chat en mode simulé (réponses factices, `/new`, `/help`, `/clear`) avec un message clair, et l'exécution des étapes attend une passerelle. Avec la passerelle lancée sur `http://127.0.0.1:8081` (repo ny-gemini-acp) : streaming réel, sélecteur de modèles, exécution des workflows — le tout same-origin via le proxy `/api` du serveur web, zéro CORS.
+L'UI fonctionne avec ou sans passerelle. Sans `webapi` : chat en mode simulé (réponses factices, `/new`, `/help`, `/clear`) avec un message clair, et l'exécution des étapes attend une passerelle. Avec la passerelle lancée sur `http://127.0.0.1:8081` : streaming réel, sélecteur de modèles, exécution des workflows — le tout same-origin via le proxy `/api` du serveur web, zéro CORS. Tout serveur OpenAI-compatible peut la remplacer via `W2A_URL`.
+
+### La passerelle webapi (Gemini)
+
+La passerelle parle à l'interface web Gemini avec vos cookies de session — aucun compte développeur nécessaire :
+
+1. Connectez-vous à [gemini.google.com](https://gemini.google.com) dans votre navigateur.
+2. Exportez vos cookies Google (extension type EditThisCookie, ou copiez la chaîne `Cookie` de la requête).
+3. Posez-les dans `.nyworkflow/cookies/gemini.json` (déjà gitignoré) — 3 formats acceptés : export EditThisCookie, objet `{"cookie": "…", "sapisid": "…"}`, ou chaîne brute `"k=v; k2=v2"`.
+4. `pnpm webapi` — et c'est parti. Le fichier est relu à chaud : changer de cookie ne redémarre rien.
+
+Configuration par environnement (`NYW_WEBAPI_*`) : `PORT`, `HOST`, `MODEL`, `MODELS_FILE` (table de modèles de remplacement — le réflexe anti-« Google a encore renommé ses modèles »), `GEMINI_BL` (force la version d'interface), `COOKIES` (chaîne directe), `AUTH_USER` (compte multi-session), `TIMEOUT_MS`, `RETRY_ATTEMPTS`, `RETRY_DELAY_MS`. Le diagnostic vit sur `GET /` (cookies présents ? `bl` découvert ? modèles ?).
 
 ## Guide utilisateur
 
@@ -69,7 +81,7 @@ curl -s http://127.0.0.1:3080/workspaces            # listing
 RUN=$(curl -s -X POST http://127.0.0.1:3080/workspaces/exemple-rapport/runs \
   -H 'content-type: application/json' -d '{"subject": "Les loutres de Madagascar"}' | jq -r .id)
 curl -s -X POST http://127.0.0.1:3080/workspaces/exemple-rapport/runs/$RUN/advance \
-  -H 'content-type: application/json' -d '{"model": "gemini-2.5-flash", "tools": true}'
+  -H 'content-type: application/json' -d '{"model": "gemini-3.6-flash", "tools": true}'
 curl -s "http://127.0.0.1:3080/workspaces/exemple-rapport/file?path=01-recherche/output/faits.md"
 ```
 
@@ -90,19 +102,23 @@ Le format de contrat est figé en v1 jusqu'à v0.2.0 : sections `## Entrées` / 
 
 CI à chaque push/PR : typecheck, build, Vitest, Playwright, puis artefacts (UI construite, rapports de tests, capture README). Voir l'onglet [Actions](https://github.com/rakmahefa/NyWorkflow/actions).
 
-## Avancement — 100 % · v0.1.0
+## Avancement
+
+**Phase 1 — v0.1.0 · 100 % · terminée et archivée** ([MILESTONES-old.md](MILESTONES-old.md)) : M0 fondations, M1 UI web, M2 adaptateur LLM, M3 sessions persistantes, M4 moteur ICM, M5 outils + permissions, M6 vue workflow + tag v0.1.0.
+
+**Phase 2 — passerelle webapi intégrée · en cours** ([MILESTONES.md](MILESTONES.md)) :
 
 | Milestone | Contenu | Poids | État |
 |---|---|---:|---|
-| M0 | Fondations : docs, architecture, squelette | 10 % | ✅ Terminé |
-| M1 | UI web + tests + CI (chat simulé) | 20 % | ✅ Terminé |
-| M2 | Adaptateur LLM (passerelle web2api) | 15 % | ✅ Terminé |
-| M3 | Sessions persistantes (JSONL, fork) | 15 % | ✅ Terminé |
-| M4 | Moteur ICM (étapes, CONTEXT.md) | 20 % | ✅ Terminé |
-| M5 | Outils + permissions (approbation UI) | 10 % | ✅ Terminé |
-| M6 | Vue workflow + v0.1.0 | 10 % | ✅ Terminé |
+| M7 | Passerelle webapi (refonte de ny-gemini-acp dans le repo) | 20 % | ✅ Terminé |
+| M8 | Durcissement & diagnostics (multi-comptes, proxy, état UI) | 20 % | ⏳ Futur |
+| M9 | API élargie (`/v1beta`, tools) | 20 % | ⏳ Futur |
+| M10 | Provider suivant | 20 % | ⏳ Futur |
+| M11 | v0.2.0 (dégel du format de contrat, shell optionnel) | 20 % | ⏳ Futur |
 
-Détail et critères de livraison : [MILESTONES.md](MILESTONES.md) · Plan : [PLAN.md](PLAN.md)
+> Règle de gouvernance phase 2 : à chaque fin de milestone atteint, les milestones futurs sont réécrits en fin de [MILESTONES.md](MILESTONES.md).
+
+Plan : [PLAN.md](PLAN.md) · Plan phase 1 : [PLAN-old.md](PLAN-old.md)
 
 ## Structure
 
@@ -110,7 +126,8 @@ Détail et critères de livraison : [MILESTONES.md](MILESTONES.md) · Plan : [PL
 apps/web              UI web (React + Vite, port 3080) : sessions, chat, vue workflow
 packages/core         moteur ICM : étapes, contrats, exécution, boucle d'agent
 packages/session      sessions = journal append-only JSONL
-packages/adapter-llm  client OpenAI-compatible (→ gemini-web2api)
+packages/adapter-llm  client OpenAI-compatible (unique sortie modèle)
+packages/webapi       passerelle webapi : interface web Gemini servie en OpenAI-compatible (port 8081)
 packages/tools        outils fichier + garde de périmètre + approbation
 examples/workspaces   workspace ICM d'exemple
 ```

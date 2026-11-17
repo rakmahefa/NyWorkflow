@@ -2,7 +2,7 @@
   "name": "nyworkflow",
   "private": true,
   "version": "0.1.0",
-  "description": "Harness web ICM — workflows IA en dossiers, propulsés par Gemini via gemini-web2api",
+  "description": "Harness web ICM — workflows IA en dossiers, propulsés par Gemini via la passerelle webapi intégrée (@nyworkflow/webapi)",
   "license": "MIT",
   "packageManager": "pnpm@12.21.0",
   "engines": {
@@ -10,6 +10,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @nyworkflow/web dev",
+    "webapi": "pnpm --filter @nyworkflow/webapi start",
     "build": "pnpm -r --if-present build",
     "test": "pnpm -r --if-present test",
     "test:e2e": "pnpm --filter @nyworkflow/web test:e2e",
