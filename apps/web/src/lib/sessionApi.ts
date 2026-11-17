@@ -54,7 +54,7 @@ export function forkSession(id: string): Promise<SessionDto> {
 
 // --- Workspaces (M5): the run side of a session that executes a workflow. ---
 
-/** What /workspaces returns for one run (state + tool activity). */
+/** What /workspaces returns for one run (state + tool activity + outputs). */
 export interface RunStateDto {
   id: string
   title: string
@@ -67,6 +67,69 @@ export interface RunStateDto {
     | { status: 'error'; stage: string; message: string }
     | { status: 'approval'; stage: string; tool: string; args: unknown }
   tools: { tool: string; args: unknown; at: number; ok?: boolean; summary?: string }[]
+  /** Files written by each stage, in first-write order. (M6) */
+  outputs: { stage: string; files: string[] }[]
+}
+
+/** One workspace as listed — parsed, or the reason it is not. (M6) */
+export interface WorkspaceSummaryDto {
+  name: string
+  stages?: { stage: string; title: string }[]
+  error?: string
+}
+
+/** A stage contract, as the detail view consumes it. (M6) */
+export interface StageDto {
+  stage: string
+  title: string
+  inputs: { source: string; scope: string; origin?: string; why?: string }[]
+  process: string[]
+  outputs: string[]
+}
+
+/** The detail view: the map, the contracts, this workspace's runs. (M6) */
+export interface WorkspaceDetailDto {
+  name: string
+  map: string
+  stages: StageDto[]
+  runs: RunStateDto[]
+}
+
+/** All workspaces, parsed or with their parse error. (M6) */
+export function listWorkspaces(): Promise<WorkspaceSummaryDto[]> {
+  return jsonFetch<{ workspaces: WorkspaceSummaryDto[] }>('/workspaces').then((b) => b.workspaces)
+}
+
+/** The detail view of one workspace. (M6) */
+export function getWorkspace(name: string): Promise<WorkspaceDetailDto> {
+  return jsonFetch<WorkspaceDetailDto>(`/workspaces/${encodeURIComponent(name)}`)
+}
+
+/** Creates a run: the subject becomes a journaled session. (M6) */
+export function createRun(name: string, subject: string): Promise<RunStateDto> {
+  return jsonFetch<RunStateDto>(`/workspaces/${encodeURIComponent(name)}/runs`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify({ subject }),
+  })
+}
+
+/** Executes the next stage server-side, then pauses at the checkpoint. (M6) */
+export function advanceRun(
+  name: string,
+  id: string,
+  body: { model: string; tools?: boolean },
+): Promise<{ state: RunStateDto['state']; outputs: string[] }> {
+  return jsonFetch(`/workspaces/${encodeURIComponent(name)}/runs/${encodeURIComponent(id)}/advance`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify(body),
+  })
+}
+
+/** Read-only preview of a workspace file (scope-guarded server-side). (M6) */
+export function readWorkspaceFile(name: string, path: string): Promise<{ path: string; content: string; bytes: number }> {
+  return jsonFetch(`/workspaces/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`)
 }
 
 /** Fetches a run's state and tool activity (for the active run session). */

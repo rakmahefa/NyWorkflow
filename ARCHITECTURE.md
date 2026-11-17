@@ -20,7 +20,7 @@
 └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Le serveur web embarque aussi deux API same-origin (plugin Vite, branchées en dev comme en preview) : `/sessions` (journaux — le navigateur y lit et écrit les échanges, il ne touche jamais les fichiers) et `/workspaces` (moteur ICM — exécution des étapes côté serveur, état des runs et approbations d'outils dérivés des journaux). Les journaux vivent sous `.nyworkflow/` à la racine du repo, les workspaces sous `examples/workspaces/` — deux emplacements surchargeables par `NYW_HOME` et `NYW_WORKSPACES`.
+Le serveur web embarque aussi deux API same-origin (plugin Vite, branchées en dev comme en preview) : `/sessions` (journaux — le navigateur y lit et écrit les échanges, il ne touche jamais les fichiers) et `/workspaces` (moteur ICM — exécution des étapes côté serveur, état des runs, approbations d'outils et aperçu des fichiers sous garde de périmètre). Les journaux vivent sous `.nyworkflow/` à la racine du repo, les workspaces sous `examples/workspaces/` — deux emplacements surchargeables par `NYW_HOME` et `NYW_WORKSPACES`.
 
 ## Les 5 règles
 
@@ -34,7 +34,7 @@ Le serveur web embarque aussi deux API same-origin (plugin Vite, branchées en d
 
 | Package | Responsabilité | Ne fait pas |
 |---|---|---|
-| `apps/web` | UI : sessions, chat, carte d'approbation des outils ; serveurs `/sessions` + `/workspaces` (plugin Vite, dev et preview) | logique métier |
+| `apps/web` | UI : sessions, chat, vue workflow (étapes, progression, sorties) ; serveurs `/sessions` + `/workspaces` (plugin Vite, dev et preview) | logique métier |
 | `packages/core` | parsing workspace ICM, exécution des étapes, boucle d'agent (outils) | appels réseau |
 | `packages/session` | journalisation append-only, relecture, fork, dérivation (messages + activité d'outils) | transformations |
 | `packages/adapter-llm` | client OpenAI-compatible, streaming SSE (appelé same-origin via le proxy `/api` du serveur web) | parsing Gemini |
@@ -57,11 +57,11 @@ Exemple complet : `examples/workspaces/exemple-rapport/`.
 
 ## Flux d'une exécution
 
-1. L'utilisateur crée un run (le sujet devient une session) et lance l'étape suivante via `/workspaces/.../advance`.
+1. L'utilisateur crée un run dans l'onglet Workflows (le sujet devient une session journalisée) et lance l'étape suivante — depuis l'UI ou via `/workspaces/.../advance`.
 2. `core` lit la carte (CONTEXT.md racine) puis le contrat de l'étape, et charge les entrées **sur disque, à l'instant** — la sortie de l'étape N est l'entrée de l'étape N+1, version éditée comprise.
 3. `core` assemble le contexte et l'envoie via le client LLM injecté (server-side, vers la passerelle).
 4. La réponse est écrite telle quelle dans `output/` — vérifiable, éditable, versionnable — et chaque événement (`stage.started`, `stage.output`, `run.completed`) est journalisé par `session` (JSONL).
-5. Pause au checkpoint : l'humain relit, édite, puis relance `advance`. L'état du run se dérive du journal — il survit aux redémarrages.
+5. Pause au checkpoint : l'humain relit (la vue workflow prévisualise le contenu actuel des sorties via `/workspaces/:name/file`, même garde de périmètre que les outils), édite, puis relance l'étape suivante. L'état du run se dérive du journal — il survit aux redémarrages.
 
 ## Outils et permissions (M5)
 

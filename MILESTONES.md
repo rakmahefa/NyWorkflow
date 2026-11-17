@@ -85,12 +85,20 @@ Détail de la livraison :
 - `apps/web` — API : `advance` accepte `tools`, nouvel endpoint `POST /workspaces/:name/runs/:id/approval` (garde 409 anti double-exécution partagée, `advance` pendant une approbation = 409 clair) ; `RunDto` porte l'activité d'outils. UI : carte d'approbation (Approuver / Refuser) et activité d'outils pour la session de run active — la décision se prend dans l'UI, plus besoin de curl.
 - Tests : 131 unitaires (21 session + 11 adapter + 16 tools + 43 core + 40 web dont 4 intégration outils) + 10 e2e (2 nouveaux : approbation et refus depuis l'UI).
 
-## M6 — Vue workflow + v0.1.0 · 10 %
+## M6 — Vue workflow + v0.1.0 · 10 % · ✅ Terminé (2026-11-17)
 
 Objectif : voir le pipeline, livrer.
 
-- [ ] Vue workflow : étapes, progression, prévisualisation des sorties
-- [ ] README final (captures, guide utilisateur)
-- [ ] Nettoyage et tag `v0.1.0`
+- [x] Vue workflow : étapes, progression, prévisualisation des sorties
+- [x] README final (captures, guide utilisateur)
+- [x] Nettoyage et tag `v0.1.0`
 
-**Livré quand :** tag `v0.1.0` poussé et docs à jour.
+**Livré quand :** tag `v0.1.0` poussé et docs à jour. ✔
+
+Détail de la livraison :
+
+- `apps/web` — onglets Sessions / Workflows dans la barre latérale ; la vue workflow affiche la carte du workspace (dépliable), le pipeline d'étapes (Fait / En cours / À venir, dérivé de l'état du run — `lib/progress.ts`, pur et testé), la liste des runs, la création de run et l'exécution d'étape depuis l'UI (modèle piloté par le sélecteur d'en-tête), la carte d'approbation M5 rejouée dans la vue, et la prévisualisation des sorties — un clic, le contenu **actuel** du fichier, lu sur disque.
+- API additive : `GET /workspaces/:name/file?path=…` (aperçu en lecture seule sous la même garde de périmètre que les outils — lexicale **et** realpath, 128 Kio max) ; `RunDto.outputs` (fichiers écrits par étape, dérivés du journal, ordre de première écriture). Le run créé dans l'UI apparaît aussitôt dans l'onglet Sessions (store synchronisé) — un run EST une session.
+- Capture README : la scène joue désormais la vue workflow (run créé, étape exécutée, sortie prévisualisée) sur un vrai Chromium en CI.
+- Nettoyage : versions 0.1.0 partout (racine + 5 packages + `APP_VERSION`), guide utilisateur dans le README, avancement 100 %.
+- Tests : 139 unitaires (21 session + 11 adapter + 16 tools + 43 core + 48 web dont 4 intégration /workspaces) + 12 e2e (2 nouveaux : pipeline complet depuis l'UI — progression, prévisualisation, session synchronisée — et approbation d'un write depuis la vue workflow). Le spec e2e travaille sur une copie dédiée du workspace (créée puis supprimée) : aucune course avec les autres specs.

@@ -14,7 +14,8 @@ test('un write en attente est approuvé depuis l’UI, l’étape reprend', asyn
   const marker = `E2E outils APPROVE2E ${Date.now()}`
   const subject = `${marker} — les loutres`
 
-  // Le run naît côté serveur (comme en M4 — la vue workflow arrive en M6).
+  // Le run naît côté serveur (la vue workflow — M6 — a son propre spec ;
+  // ici on teste la carte d'approbation dans la vue session, comme en M5).
   const created = await request.post(`/workspaces/${WS}/runs`, {
     data: { subject },
   })

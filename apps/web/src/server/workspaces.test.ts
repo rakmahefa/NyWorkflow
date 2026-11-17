@@ -308,3 +308,67 @@ it(
     }
   },
 )
+
+it(
+  'vue workflow (M6) : sorties du run dans le détail, aperçu /file sous garde de périmètre',
+  { timeout: 120_000 },
+  async () => {
+    const base = await boot()
+    const marker = `M6-Apercu-${Date.now()}`
+    const run = await api(base, '/workspaces/exemple-rapport/runs', {
+      method: 'POST',
+      body: JSON.stringify({ subject: marker }),
+    })
+    const id: string = run.body.id
+
+    // Aucune sortie tant que rien n'a tourné.
+    expect(run.body.outputs).toEqual([])
+
+    // Les deux étapes s'exécutent ; le détail porte les sorties par étape.
+    await api(base, `/workspaces/exemple-rapport/runs/${id}/advance`, {
+      method: 'POST',
+      body: JSON.stringify({ model: 'gemini-test' }),
+    })
+    await api(base, `/workspaces/exemple-rapport/runs/${id}/advance`, {
+      method: 'POST',
+      body: JSON.stringify({ model: 'gemini-test' }),
+    })
+
+    const detail = await api(base, '/workspaces/exemple-rapport')
+    const mine = detail.body.runs.find((r: { id: string }) => r.id === id)
+    expect(mine.state.status).toBe('done')
+    expect(mine.outputs).toEqual([
+      { stage: '01-recherche', files: ['01-recherche/output/faits.md'] },
+      { stage: '02-redaction', files: ['02-redaction/output/rapport.md'] },
+    ])
+
+    // Aperçu : le contenu renvoyé est le contenu disque, octet pour octet.
+    const faitsOnDisk = readFileSync(join(spacesDir, 'exemple-rapport/01-recherche/output/faits.md'), 'utf8')
+    const preview = await api(base, `/workspaces/exemple-rapport/file?path=${encodeURIComponent('01-recherche/output/faits.md')}`)
+    expect(preview.status).toBe(200)
+    expect(preview.body).toEqual({
+      path: '01-recherche/output/faits.md',
+      content: faitsOnDisk,
+      bytes: Buffer.byteLength(faitsOnDisk, 'utf8'),
+    })
+
+    // La carte est lisible aussi (fichier du workspace, pas seulement output/).
+    const map = await api(base, `/workspaces/exemple-rapport/file?path=CONTEXT.md`)
+    expect(map.status).toBe(200)
+    expect(map.body.content).toContain('rapport Markdown court')
+
+    // Refus prévisibles : chemin manquant, vide, absolu, hors périmètre,
+    // dossier, fichier absent — messages clairs, jamais d'exception nue.
+    expect((await api(base, '/workspaces/exemple-rapport/file')).status).toBe(400)
+    expect((await api(base, '/workspaces/exemple-rapport/file?path=')).status).toBe(400)
+    expect((await api(base, `/workspaces/exemple-rapport/file?path=${encodeURIComponent('/etc/passwd')}`)).status).toBe(400)
+    const escape = await api(base, `/workspaces/exemple-rapport/file?path=${encodeURIComponent('../secrets.txt')}`)
+    expect(escape.status).toBe(400)
+    expect(escape.body.error).toMatch(/hors workspace/)
+    const dir = await api(base, `/workspaces/exemple-rapport/file?path=${encodeURIComponent('01-recherche')}`)
+    expect(dir.status).toBe(400)
+    expect(dir.body.error).toMatch(/dossier/)
+    expect((await api(base, `/workspaces/exemple-rapport/file?path=${encodeURIComponent('01-recherche/output/absent.md')}`)).status).toBe(404)
+    expect((await api(base, `/workspaces/casse/file?path=CONTEXT.md`)).status).toBe(400)
+  },
+)

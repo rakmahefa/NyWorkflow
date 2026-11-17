@@ -5,18 +5,20 @@ import { Composer } from './components/Composer'
 import { ModelPicker } from './components/ModelPicker'
 import { RunPanel } from './components/RunPanel'
 import { Sidebar } from './components/Sidebar'
+import type { View } from './components/Sidebar'
+import { WorkflowsView } from './components/WorkflowsView'
 import { parseInput, runCommand } from './lib/commands'
 import { fakeReply, streamText } from './lib/fakeLLM'
 import { useGatewayStatus } from './lib/gateway'
 import { toLlmHistory } from './lib/history'
 import * as api from './lib/sessionApi'
-import type { RunStateDto } from './lib/sessionApi'
+import type { RunStateDto, WorkspaceSummaryDto } from './lib/sessionApi'
 import { SessionStore } from './lib/store'
 import type { ChatMsg, SessionInfo } from './lib/types'
 import { APP_VERSION } from './lib/version'
 
 const WELCOME =
-  'Bienvenue dans NyWorkflow (M5). Sessions journalisées sur disque, moteur ICM avec outils — les écritures du modèle attendent votre approbation. /help pour les commandes.'
+  'Bienvenue dans NyWorkflow (v0.1.0). Sessions journalisées sur disque, moteur ICM avec outils — onglet Workflows pour exécuter un pipeline, écritures du modèle sous approbation. /help pour les commandes.'
 const GATEWAY_DOWN =
   'Passerelle gemini-web2api absente (127.0.0.1:8081) — réponses simulées. Lancez la passerelle du repo ny-gemini-acp pour le streaming réel.'
 const MEMORY_FALLBACK =
@@ -26,11 +28,13 @@ type Mode = 'booting' | 'server' | 'memory'
 
 /**
  * M3 shell: sessions persisted as JSONL journals through /sessions.
- * M4: the ICM engine runs workspaces server-side through /workspaces
- * (chat UI unchanged — the workflow view lands in M6).
+ * M4: the ICM engine runs workspaces server-side through /workspaces.
  * M5: a session that runs a workflow shows its tool activity and, when a
  * write pauses for a human, an approval card — the one-click decision the
  * engine resumes from.
+ * M6: a second view — Workflows — drives the whole pipeline from the UI:
+ * runs are created and advanced there, stages light up as they finish,
+ * outputs preview from disk. The chat view stays for conversation.
  * Boot hydrates from the journals; chat messages are journaled as they
  * settle; forking copies a journal. When /sessions is unreachable the
  * app degrades to in-memory sessions with a clear notice — never a
@@ -43,6 +47,11 @@ export default function App() {
   const [activeId, setActiveId] = useState<string | null>(null)
   /** Run side of the active session, when it executes a workflow (M5). */
   const [run, setRun] = useState<RunStateDto | null>(null)
+  /** M6: which face of the app is shown, and the workflows selection. */
+  const [view, setView] = useState<View>('chat')
+  const [wsList, setWsList] = useState<readonly WorkspaceSummaryDto[] | null>(null)
+  const [wsName, setWsName] = useState<string | null>(null)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const gw = useGatewayStatus(client)
 
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot)
@@ -152,6 +161,47 @@ export default function App() {
       return store.createSession(title)
     },
     [mode, store],
+  )
+
+  // --- Vue Workflows (M6) : listing, sélection, création de run. ---
+
+  const refreshWorkspaces = useCallback(() => {
+    if (mode !== 'server') return
+    let cancelled = false
+    void api
+      .listWorkspaces()
+      .then((list) => {
+        if (!cancelled) setWsList(list)
+      })
+      .catch(() => {
+        if (!cancelled) setWsList([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [mode])
+
+  useEffect(() => {
+    if (view !== 'workflows') return
+    return refreshWorkspaces()
+  }, [view, refreshWorkspaces])
+
+  // Premier workspace parsable sélectionné d'office à l'ouverture de l'onglet.
+  useEffect(() => {
+    if (wsName !== null || wsList === null || wsList.length === 0) return
+    const first = wsList.find((w) => w.error === undefined) ?? wsList[0]!
+    setWsName(first.name)
+  }, [wsList, wsName])
+
+  /** Crée le run côté serveur et synchronise le store (la session apparaît dans l'onglet Sessions). */
+  const createWorkflowRun = useCallback(
+    (workspace: string, subject: string): Promise<RunStateDto> => {
+      return api.createRun(workspace, subject).then((dto) => {
+        store.addSession({ id: dto.id, title: dto.title, createdAt: dto.createdAt, workspace })
+        return dto
+      })
+    },
+    [store],
   )
 
   /** Fork d'une session : copie du journal, historique hérité, bascule dessus. */
@@ -280,18 +330,29 @@ export default function App() {
 
   if (!active) return null
 
+  const headerTitle = view === 'workflows' ? (wsName ?? 'Workflows') : active.title
+
   return (
     <div className="app">
       <Sidebar
+        view={view}
+        onViewChange={setView}
         sessions={snap.sessions}
         activeId={active.id}
         onSelect={setActiveId}
         onNew={() => void openNewSession()}
         onFork={(id) => void doFork(id)}
+        workspaces={mode === 'server' ? wsList : null}
+        activeWorkspace={wsName}
+        onSelectWorkspace={(name) => {
+          setWsName(name)
+          setSelectedRunId(null)
+        }}
+        onRefreshWorkspaces={() => refreshWorkspaces()}
       />
       <main className="main">
         <header className="main-head">
-          <h2>{active.title}</h2>
+          <h2>{headerTitle}</h2>
           <div className="main-tools">
             <ModelPicker
               status={gw.status}
@@ -300,19 +361,34 @@ export default function App() {
               onSelect={gw.select}
               onRefresh={() => void gw.refresh()}
             />
-            <span className="tag">M5 · v{APP_VERSION}</span>
+            <span className="tag">v{APP_VERSION}</span>
           </div>
         </header>
-        <ChatView messages={messages} />
-        {mode === 'server' && active.workspace && run ? (
-          <RunPanel
-            workspace={active.workspace}
-            run={run}
-            onResolved={handleResolved}
-            onError={(why) => active && store.appendMessage(active.id, 'system', `Décision impossible : ${why}`)}
+        {view === 'workflows' ? (
+          <WorkflowsView
+            key={wsName ?? 'none'}
+            name={wsName}
+            memory={mode === 'memory'}
+            model={gw.selected}
+            modelAvailable={gw.status === 'up' && gw.selected !== ''}
+            selectedRunId={selectedRunId}
+            onSelectRun={setSelectedRunId}
+            onCreateRun={(subject) => createWorkflowRun(wsName ?? '', subject)}
           />
-        ) : null}
-        <Composer onSend={handleSend} />
+        ) : (
+          <>
+            <ChatView messages={messages} />
+            {mode === 'server' && active.workspace && run ? (
+              <RunPanel
+                workspace={active.workspace}
+                run={run}
+                onResolved={handleResolved}
+                onError={(why) => active && store.appendMessage(active.id, 'system', `Décision impossible : ${why}`)}
+              />
+            ) : null}
+            <Composer onSend={handleSend} />
+          </>
+        )}
       </main>
     </div>
   )

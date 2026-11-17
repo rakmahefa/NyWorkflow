@@ -5,9 +5,8 @@ import { resolveApproval } from '../lib/sessionApi'
 /**
  * The run side of a workflow session (M5): the pending-approval card (the
  * one place a human grants a write) and the tool activity, journaled and
- * re-derived — visible after reloads, like everything else. The workflow
- * view itself (stages, progression) arrives in M6; this panel is
- * deliberately minimal: it exists so an approval never needs curl.
+ * re-derived — visible after reloads, like everything else. Reused as-is by
+ * the workflow view (M6): an approval is decided where the human looks.
  */
 
 /** Compact path display of a pending call's args. */

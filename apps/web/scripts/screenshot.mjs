@@ -1,6 +1,8 @@
 // Capture README : build déjà fait (dist), maquette passerelle sur 9801,
 // serveur preview sur 4173, scène jouée dans un vrai Chromium, PNG écrit
 // dans docs/assets/screenshot.png.
+// Scène M6 : la vue workflow — un run créé depuis l'UI, la première étape
+// exécutée (checkpoint), la progression visible et la sortie prévisualisée.
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,24 +28,28 @@ try {
   })
   await page.goto('http://127.0.0.1:4173/')
 
-  // Attendre la passerelle (maquette) puis jouer la scène.
+  // La passerelle (maquette) doit être détectée — elle pilote l'exécution.
   await page.waitForSelector('[data-test="gateway-status"][data-state="up"]')
-  await page.getByRole('button', { name: '+ Nouvelle session' }).click()
-  const box = page.getByLabel('Message')
-  await box.fill('/new Rapport Q3')
-  await box.press('Enter')
-  await page.locator('[data-test="session-item"]').last().click() // la scène se joue dans « Rapport Q3 »
-  await page.locator('[data-test="model-select"]').selectOption('gemini-2.5-pro')
 
-  await box.fill('Présente NyWorkflow en deux phrases.')
-  await box.press('Enter')
+  // Onglet Workflows, workspace d'exemple, sujet du run.
+  await page.locator('[data-test="tab-workflows"]').click()
+  await page.locator('[data-test="workspace-item"]', { hasText: 'exemple-rapport' }).click()
+  await page.locator('[data-test="subject-input"]').fill('Les loutres de Madagascar — rapport court')
+  await page.locator('[data-test="create-run-btn"]').click()
 
-  // Fin du flux : dernier message assistant complet, sans curseur.
+  // Étape 1 exécutée : checkpoint, carte Fait, sortie prévisualisée.
+  await page.locator('[data-test="advance-btn"]').click()
+  await page
+    .locator('[data-test="stage-card"]')
+    .first()
+    .filter({ hasText: '01-recherche' })
+    .waitFor({ state: 'visible' })
   await page.waitForFunction(() => {
-    const msgs = document.querySelectorAll('.msg.assistant')
-    const last = msgs[msgs.length - 1]
-    return !!last && !last.querySelector('.caret') && (last.textContent ?? '').includes('output/')
+    const first = document.querySelector('[data-test="stage-card"]')
+    return first?.getAttribute('data-status') === 'done'
   })
+  await page.locator('[data-test="output-toggle"]').first().click()
+  await page.waitForSelector('[data-test="output-preview"]')
 
   await mkdir(outDir, { recursive: true })
   await page.screenshot({ path: outFile })

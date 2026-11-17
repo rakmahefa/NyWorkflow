@@ -1,7 +1,7 @@
 {
   "name": "@nyworkflow/web",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "type": "module",
   "license": "MIT",
   "scripts": {
@@ -17,6 +17,7 @@
     "@nyworkflow/adapter-llm": "workspace:*",
     "@nyworkflow/core": "workspace:*",
     "@nyworkflow/session": "workspace:*",
+    "@nyworkflow/tools": "workspace:*",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },

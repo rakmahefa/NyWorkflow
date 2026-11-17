@@ -5,25 +5,32 @@
  *   GET  /workspaces                        → { workspaces: WorkspaceSummaryDto[] }
  *   GET  /workspaces/:name                  → WorkspaceDetailDto (contracts + runs)
  *   POST /workspaces/:name/runs             → create a run (body: { subject })
- *   GET  /workspaces/:name/runs/:id         → { id, title, state, tools }
+ *   GET  /workspaces/:name/runs/:id         → { id, title, state, tools, outputs }
  *   POST /workspaces/:name/runs/:id/advance → execute the next stage
  *                                             (body: { model, tools? }) → { state, outputs }
  *   POST /workspaces/:name/runs/:id/approval → resolve a paused tool call
  *                                             (body: { decision }) → { state, outputs } (M5)
+ *   GET  /workspaces/:name/file?path=…      → { path, content, bytes } (M6) —
+ *                                             read-only preview of a workspace
+ *                                             file, same scope guard as the tools
  *
  * A run is a session journal: session.created carries the workspace name,
  * the subject is the first user.message, and stage events land in the same
  * append-only file — so run state survives restarts by derivation, like
  * everything else. The browser never touches the filesystem. With tools
  * (M5), advance may return state 'approval': the UI (or curl) decides via
- * /approval, which resumes the stage server-side.
+ * /approval, which resumes the stage server-side. RunDto.outputs (M6) lists
+ * the files each stage wrote, derived from the journal — the workflow view
+ * previews their CURRENT disk content through /file (the filesystem is the
+ * orchestrator: a human may have edited them since).
  */
 import { existsSync } from 'node:fs'
-import { access, readdir } from 'node:fs/promises'
+import { access, readdir, readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import { createRun, parseWorkspace, runStateFromEvents, stageModelFromEvents } from '@nyworkflow/core'
 import type { RunState, StageLlm, Workspace } from '@nyworkflow/core'
+import { resolveInScope } from '@nyworkflow/tools'
 import {
   appendEvent,
   deriveSession,
@@ -57,6 +64,8 @@ export interface RunDto {
   state: RunState
   /** Tool calls of the run, paired with their outcome (M5). */
   tools: { tool: string; args: unknown; at: number; ok?: boolean; summary?: string }[]
+  /** Files written by each stage, derived from the journal, first-write order (M6). */
+  outputs: { stage: string; files: string[] }[]
 }
 
 export interface WorkspacesHandlerOptions {
@@ -71,6 +80,8 @@ export interface WorkspacesHandlerOptions {
 const BODY_LIMIT = 1_000_000
 const SUBJECT_MAX = 10_000
 const MODEL_MAX = 200
+/** Preview bound — same figure as the write tool cap (chars). (M6) */
+const PREVIEW_MAX = 131_072
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
 class HttpError extends Error {
@@ -208,20 +219,38 @@ export function createWorkspacesHandler(
     for (const { id, events } of await readJournals()) {
       const d = deriveSession(events)
       if (d.workspace !== name) continue
-      runs.push(toRunDto(id, d, runStateFromEvents(events, ws)))
+      runs.push(toRunDto(id, d, runStateFromEvents(events, ws), outputsFromEvents(events)))
     }
     runs.sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
     return { name, map: ws.map, stages: ws.stages, runs }
   }
 
+  /** stage.output events → files per stage, in first-write order. (M6) */
+  function outputsFromEvents(events: readonly SessionEvent[]): { stage: string; files: string[] }[] {
+    const order: string[] = []
+    const byStage = new Map<string, string[]>()
+    for (const e of events) {
+      if (e.type !== 'stage.output') continue
+      let files = byStage.get(e.stage)
+      if (files === undefined) {
+        files = []
+        byStage.set(e.stage, files)
+        order.push(e.stage)
+      }
+      for (const f of e.files) if (!files.includes(f)) files.push(f)
+    }
+    return order.map((stage) => ({ stage, files: byStage.get(stage) as string[] }))
+  }
+
   /** DerivedSession + state → the DTO the UI consumes. */
-  function toRunDto(id: string, d: DerivedSession, state: RunState): RunDto {
+  function toRunDto(id: string, d: DerivedSession, state: RunState, outputs: { stage: string; files: string[] }[]): RunDto {
     return {
       id,
       title: d.title,
       createdAt: toMs(d.createdAt),
       state,
       tools: d.tools.map((t) => ({ tool: t.tool, args: t.args, at: toMs(t.at), ok: t.ok, summary: t.summary })),
+      outputs,
     }
   }
 
@@ -237,7 +266,7 @@ export function createWorkspacesHandler(
     const at = nowIso()
     await appendEvent(journalPath(home, id), { type: 'session.created', at, title, workspace: name })
     await appendEvent(journalPath(home, id), { type: 'user.message', at: nowIso(), text: subject })
-    return { id, title, createdAt: toMs(at), state: { status: 'idle' }, tools: [] }
+    return { id, title, createdAt: toMs(at), state: { status: 'idle' }, tools: [], outputs: [] }
   }
 
   async function runState(name: string, id: string): Promise<RunDto> {
@@ -249,7 +278,31 @@ export function createWorkspacesHandler(
       throw notFound('session inconnue')
     }
     const events = await readEvents(file)
-    return toRunDto(id, deriveSession(events), runStateFromEvents(events, ws))
+    return toRunDto(id, deriveSession(events), runStateFromEvents(events, ws), outputsFromEvents(events))
+  }
+
+  /**
+   * M6: read-only preview of one workspace file, for the human eye. Same
+   * scope guard as the agent tools (lexical + realpath) — a request outside
+   * the workspace root is refused with the guard's own French reason.
+   */
+  async function filePreview(name: string, rawPath: string | null): Promise<{ path: string; content: string; bytes: number }> {
+    if (rawPath === null || rawPath.trim() === '') throw badRequest('paramètre « path » attendu (chemin relatif au workspace)')
+    const ws = await load(name)
+    const scope = await resolveInScope(ws.root, rawPath)
+    if (!scope.ok) throw badRequest(`chemin refusé — ${scope.reason}`)
+    let content: string
+    try {
+      content = await readFile(scope.target as string, 'utf8')
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'EISDIR') throw badRequest('c\'est un dossier, pas un fichier')
+      throw notFound('fichier introuvable dans le workspace')
+    }
+    if (content.length > PREVIEW_MAX) {
+      throw new HttpError(413, `fichier trop volumineux pour l'aperçu (max ${PREVIEW_MAX} caractères)`)
+    }
+    return { path: scope.rel as string, content, bytes: Buffer.byteLength(content, 'utf8') }
   }
 
   async function advance(req: IncomingMessage, name: string, id: string): Promise<{ state: RunState; outputs: string[] }> {
@@ -353,7 +406,9 @@ export function createWorkspacesHandler(
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const method = req.method ?? 'GET'
-    const url = (req.url ?? '/').split('?')[0] || '/'
+    const rawUrl = req.url ?? '/'
+    const query = rawUrl.includes('?') ? new URLSearchParams(rawUrl.slice(rawUrl.indexOf('?') + 1)) : null
+    const url = rawUrl.split('?')[0] || '/'
 
     if (url === '/' || url === '') {
       if (method === 'GET') return send(res, 200, { workspaces: await list() })
@@ -365,6 +420,10 @@ export function createWorkspacesHandler(
 
     if (parts.length === 1) {
       if (method === 'GET') return send(res, 200, await detail(name))
+      throw notFound('route inconnue')
+    }
+    if (parts.length === 2 && parts[1] === 'file') {
+      if (method === 'GET') return send(res, 200, await filePreview(name, query?.get('path') ?? null))
       throw notFound('route inconnue')
     }
     if (parts.length === 2 && parts[1] === 'runs') {
