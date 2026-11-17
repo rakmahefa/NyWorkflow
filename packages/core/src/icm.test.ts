@@ -8,10 +8,13 @@ import {
   renderTree,
   scaffoldAgenticWorkspace,
   scaffoldContext,
+  scaffoldFiles,
   walkTree,
   workspaceName,
+  SCAFFOLD_FILES,
   SCAFFOLD_FOLDERS,
   CONTEXT_MAX_CHARS,
+  CONTEXT_MAX_FILES,
 } from './index.ts'
 
 // M11 — le pivot ICM : l'arbre libre chargé vers le modèle, les CONTEXT.md
@@ -144,30 +147,55 @@ describe('buildIcmSystemPrompt', () => {
 })
 
 describe('scaffoldAgenticWorkspace', () => {
-  it('crée la charte + les 4 dossiers + .gitkeep, arbre complet au premier ls', async () => {
+  it('crée l’arbre ICM COMPLET (M13) : charte, 6 dossiers à rôle, chaque template prêt', async () => {
     const parent = tmp()
     const root = join(parent, 'mon-agent')
     await scaffoldAgenticWorkspace(root)
 
-    expect(existsSync(join(root, 'CONTEXT.md'))).toBe(true)
+    // Chaque fichier du scaffold existe, avec son contenu prêt à l’emploi.
+    for (const rel of SCAFFOLD_FILES) {
+      expect(existsSync(join(root, rel)), rel).toBe(true)
+      expect(readFileSync(join(root, rel), 'utf8').length, rel).toBeGreaterThan(20)
+    }
     for (const folder of SCAFFOLD_FOLDERS) {
-      expect(existsSync(join(root, folder, '.gitkeep'))).toBe(true)
+      expect(existsSync(join(root, folder, 'CONTEXT.md')), folder).toBe(true)
     }
     const charter = readFileSync(join(root, 'CONTEXT.md'), 'utf8')
     expect(charter).toContain('# mon-agent — workspace ICM agentique')
     expect(charter).toContain('## Mission')
     expect(charter).toContain('## Méthode ICM')
-    expect(charter).toContain('## Arborescence')
+    expect(charter).toContain('## Carte de l’arbre')
+    expect(charter).toContain('notes/plan.md')
+    expect(charter).toContain('memory/core.md')
+    expect(charter).toContain('research/sources.md')
     expect(charter).toContain('## Outils')
     expect(charter).toContain('## Règles')
 
-    // L'ICM charge ce workspace fraîchement scaffoldé sans surprise.
+    // Les templates de notes/ sont de vrais documents, pas des .gitkeep.
+    for (const template of ['plan.md', 'tasks.md', 'journal.md', 'decisions.md']) {
+      expect(readFileSync(join(root, 'notes', template), 'utf8')).toContain('#')
+    }
+    expect(readFileSync(join(root, 'memory', 'core.md'), 'utf8')).toContain('Mémoire vive')
+    expect(readFileSync(join(root, 'memory', 'lessons.md'), 'utf8')).toContain('Leçons')
+    expect(readFileSync(join(root, 'research', 'sources.md'), 'utf8')).toContain('Registre des sources')
+
+    // L’ICM charge ce workspace fraîchement scaffoldé : 7 CONTEXT.md (≤ cap).
     const icm = await loadIcm(root)
     expect(icm.tree).toContain('inbox/')
-    expect(icm.tree).toContain('research/')
-    expect(icm.contexts).toHaveLength(1)
+    expect(icm.tree).toContain('memory/')
+    expect(icm.tree).toContain('archive/')
+    expect(icm.contexts).toHaveLength(7)
+    expect(icm.contexts.length).toBeLessThanOrEqual(CONTEXT_MAX_FILES)
     const prompt = buildIcmSystemPrompt(icm)
     expect(prompt).toContain('# mon-agent — workspace ICM agentique')
+    expect(prompt).toContain('notes/plan.md')
+  })
+
+  it('scaffoldFiles : la carte est pure et exhaustive — 14 fichiers, 7 CONTEXT.md', () => {
+    const files = scaffoldFiles('demo')
+    expect(Object.keys(files).sort()).toEqual([...SCAFFOLD_FILES].sort())
+    expect(SCAFFOLD_FILES.filter((f) => f.endsWith('CONTEXT.md'))).toHaveLength(7)
+    expect(SCAFFOLD_FOLDERS).toHaveLength(6)
   })
 
   it('refuse un workspace existant — jamais d’écrasement', async () => {
@@ -200,5 +228,14 @@ describe('buildIcmSystemPrompt — méthode agentique (M12)', () => {
     expect(charter).toContain('shell_kill {"jobId"}')
     expect(charter).toContain('"background": true')
     expect(charter).toContain('ENSEMBLE')
+  })
+})
+
+describe('buildIcmSystemPrompt — niveau de sécurité (M13)', () => {
+  it('enseigne le comportement quand les outils sont désactivés', () => {
+    const prompt = buildIcmSystemPrompt({ name: 'demo', tree: '(arbre vide)', contexts: [] })
+    // La note dynamique est ajoutée par l’app ; le scaffold, lui, documente le cas.
+    expect(scaffoldContext('demo')).toContain('aucun outil')
+    expect(prompt).toContain('websearch')
   })
 })

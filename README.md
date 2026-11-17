@@ -42,8 +42,8 @@ Prérequis : Node.js 22.18+ (la passerelle), pnpm 12+.
 pnpm install
 pnpm dev          # UI sur http://127.0.0.1:3080 — AVEC la passerelle webapi intégrée
 pnpm webapi       # passerelle SEULE en autonome (optionnel — voir USERGUIDE.md)
-pnpm test         # Vitest — unitaires (413, dont 244 webapi sans réseau)
-pnpm test:e2e     # Playwright — UI réelle (26 tests)
+pnpm test         # Vitest — unitaires (428, dont 244 webapi sans réseau)
+pnpm test:e2e     # Playwright — UI réelle (30 tests)
 pnpm typecheck    # TypeScript
 ```
 
@@ -72,9 +72,9 @@ Configuration par environnement (`NYW_WEBAPI_*`) : `PORT`, `HOST`, `MODEL`, `MOD
 
 1. **Le modèle charge l'ICM** — à chaque tour, l'arborescence et tous les `CONTEXT.md` du workspace sont assemblés en prompt système : le modèle sait où il est, ce qu'il fait, ce que disent les conventions — et la **méthode agentique** (quand paralléliser, quand détacher).
 2. **Il agit avec ses neuf outils** — `read` / `ls` / `glob` pour explorer, `mkdir` pour **créer les dossiers dont il a besoin** (l'arbre est libre), `websearch` pour chercher (`{"query"}`) ou lire une page **nettoyée** (`{"url"}`), `write` et `shell` pour agir — avec `"background": true` pour détacher une commande longue (jobId immédiat, suivi `shell_output`, arrêt `shell_kill`). Les appels **sûrs d'un même tour s'exécutent en parallèle** ; les dangereux attendent leur approbation, un à la fois.
-3. **Vous décidez** — toute écriture ou commande **met le tour en pause** : la carte d'approbation s'affiche avec l'aperçu du contenu ou de la commande, un clic exécute (ou refuse), l'agent continue. Tout appel et tout refus sont journalisés (`tool.call` / `tool.result`, appariés par `callId`) : un chemin hors workspace est refusé et tracé, jamais silencieux — la garde est lexicale **et** realpath, un symlink ne s'échappe pas.
-4. **Vous suivez tout** — l'onglet **Activité** trace chaque requête modèle (modèle, niveau de réflexion, durée, statut, caractères reçus) et chaque appel d'outil (arguments + résultat exact renvoyé au modèle, dépliables). La **réflexion du modèle** s'affiche en bloc repliable « Réflexion » dans le flux du chat ; le **niveau de réflexion** (0–4/Auto, suffixe `@think=N`) et le **modèle** (liste étiquetée et groupée) se choisissent dans l'en-tête.
-5. **Tout persiste** — sessions en append-only sous `.nyworkflow/sessions/` (JSONL, un fichier par session) : messages, appels d'outils, approbations en attente, renommages. Fermez l'UI, relancez `pnpm dev`, tout revient — y compris une approbation en suspens. **Fork** copie un journal, **renommer** (crayon ou `/rename`) réécrit le titre, **Supprimer** (deux clics) efface la session. Un tour en vol s'**arrête** d'un clic (Stop) ; un message tapé pendant un tour part à la fin (file d'attente), jamais perdu.
+3. **Vous fixez le niveau de sécurité** — trois niveaux par session, modifiables en direct dans le bandeau (et à la création, avec un défaut mémorisé dans les Paramètres) : **Demander toujours** (défaut — toute écriture ou commande met le tour en pause : la carte d'approbation s'affiche, un clic exécute ou refuse), **Accepter automatiquement** (les outils s'exécutent sans approbation, tous en parallèle, shells compris), **Aucun outil** (l'ICM charge, le modèle converse, mais aucun tool_call n'est déclaré ni exécuté — le serveur refuse tout appel avec un refus tracé). Tout appel et tout refus sont journalisés (`tool.call` / `tool.result`, appariés par `callId`) : un chemin hors workspace est refusé et tracé, jamais silencieux — la garde est lexicale **et** realpath, un symlink ne s'échappe pas.
+4. **Vous suivez tout** — l'onglet **Activité** trace chaque requête modèle (modèle, niveau de réflexion, durée, statut, caractères reçus) et chaque appel d'outil (arguments + résultat exact renvoyé au modèle, dépliables) — et depuis la M13, **les tours terminés sont journalisés** (`turn.completed`) : l'onglet survit aux rechargements. La **réflexion du modèle** s'affiche en bloc repliable « Réflexion » dans le flux du chat ; le **niveau de réflexion** (0–4/Auto, suffixe `@think=N`) et le **modèle** (liste étiquetée et groupée) se choisissent dans l'en-tête.
+5. **Tout persiste, tout se profile** — sessions en append-only sous `.nyworkflow/sessions/` (JSONL, un fichier par session) : messages, appels d'outils, approbations en attente, renommages, changements de sécurité, tours terminés. Fermez l'UI, relancez `pnpm dev`, tout revient — y compris une approbation en suspens. **Fork** copie un journal, **renommer** (crayon ou `/rename`) réécrit le titre, **Supprimer** (deux clics) efface la session. Un tour en vol s'**arrête** d'un clic (Stop) ; un message tapé pendant un tour part à la fin (file d'attente), jamais perdu. Et le harness journalise son propre profilage dans **`.nyworkflow/.logs/`** (M13) : `engine.jsonl` (démarrage, passerelle, chaque requête HTTP, tours amont), `session.jsonl` (cycle de vie des sessions), `activity.jsonl` (chaque appel d'outil, décision, tour) — consultables dans les Paramètres, à copier dans le dépôt pour améliorer et peaufiner le harness.
 
 Commandes : `/new` (dialogue de création), `/rename <titre>`, `/delete`, `/clear`, `/help`.
 
@@ -82,14 +82,26 @@ Commandes : `/new` (dialogue de création), `/rename <titre>`, `/delete`, `/clea
 
 ```
 mon-workspace/
-├── CONTEXT.md        # la charte agentique : mission, méthode ICM, arbre, outils, règles
-├── inbox/            # ce que vous déposez
-├── notes/            # plans et raisonnement de l'agent
-├── research/         # lectures web nettoyées (websearch)
-└── outputs/          # livrables finaux
+├── CONTEXT.md          # la charte : mission, méthode ICM, carte de l'arbre, outils, règles
+├── inbox/CONTEXT.md    # vos entrées — la boîte qui se vide
+├── notes/              # l'atelier : le travail vivant
+│   ├── CONTEXT.md
+│   ├── plan.md         # le plan vivant (objectif, étapes, statut)
+│   ├── tasks.md        # la file de tâches (à faire / en cours / fait)
+│   ├── journal.md      # le journal de travail, chronologique
+│   └── decisions.md    # les décisions, ADR léger (contexte, choix, raison)
+├── research/           # les lectures du web, nettoyées
+│   ├── CONTEXT.md
+│   └── sources.md      # le registre des sources (requête/URL, date, fait clé)
+├── memory/             # la mémoire durable de l'agent (façon MemGPT)
+│   ├── CONTEXT.md
+│   ├── core.md         # mémoire vive : ce qui est toujours vrai ici
+│   └── lessons.md      # leçons apprises — à ne pas refaire
+├── outputs/CONTEXT.md  # les livrables finaux, prêts à être lus
+└── archive/CONTEXT.md  # le travail terminé, sorti du chemin
 ```
 
-L'arbre est **libre** : le modèle crée les dossiers qu'il lui faut (`mkdir`), un sous-dossier qui acquiert un rôle mérite son propre `CONTEXT.md`. Exemple complet : `examples/workspaces/exemple-agentique/` ; vos propres dossiers via `NYW_WORKSPACES` — ou directement dans l'UI (**Dossier du disque**, enregistré dans `examples/workspaces/workspaces.json`).
+Chaque fichier `.md` naît **prêt à l'emploi** (templates renseignés) — l'ICM complète est chargée vers le modèle dès le premier tour (7 `CONTEXT.md`, un de marge sous le plafond du chargeur). Façonnée par l'état de l'art : contrats de rôles par dossier (Model Workspace Protocol), quatuor plan/tâches/journal/décisions (scratchpad structuré), mémoire cœur/leçons (MemGPT), registre de sources pour la traçabilité. L'arbre reste **libre** : le modèle crée les dossiers qu'il lui faut (`mkdir`), un sous-dossier qui acquiert un rôle mérite son propre `CONTEXT.md`. Exemple complet : `examples/workspaces/exemple-agentique/` ; vos propres dossiers via `NYW_WORKSPACES` — ou directement dans l'UI (**Dossier du disque**, enregistré dans `examples/workspaces/workspaces.json`).
 
 ### Piloter à l'API (optionnel)
 
@@ -107,6 +119,11 @@ SID=$(curl -s -X POST http://127.0.0.1:3080/sessions \
   -H 'content-type: application/json' -d '{"title": "Démo", "workspace": "missions"}' | jq -r .id)
 curl -s -X POST http://127.0.0.1:3080/sessions/$SID/rename \
   -H 'content-type: application/json' -d '{"title": "Démo renommée"}'   # M12
+curl -s -X POST http://127.0.0.1:3080/sessions/$SID/security \
+  -H 'content-type: application/json' -d '{"level": "accept"}'          # M13 : ask | accept | no-tools
+curl -s -X POST http://127.0.0.1:3080/sessions/$SID/turn \
+  -H 'content-type: application/json' -d '{"model": "gemini-2.5-flash", "rounds": 2, "ms": 4200, "outcome": "ok", "toolCalls": 3, "thinkingChars": 0, "textChars": 900}'   # M13 : tour terminé → journal
+curl -s http://127.0.0.1:3080/logs                                     # M13 : logs de profilage (listing + queue)
 
 curl -s -X POST http://127.0.0.1:3080/workspaces/missions/tool \
   -H 'content-type: application/json' -d "{\"sessionId\": \"$SID\", \"tool\": \"read\", \"args\": {\"path\": \"CONTEXT.md\"}}"
@@ -131,6 +148,7 @@ CI à chaque push/PR : typecheck, build, Vitest, Playwright, puis artefacts (UI 
 | M10 | API élargie : routes Google-style `/v1beta` + `tools`/`tool_calls` façon OpenAI | 15 % | ✅ Terminé |
 | M11 | Ajustements pilotés : **sessions ICM agentiques** (pivot — workflows retirés), workspace + arbre libre par session, suppression de session, `v1beta` par défaut, outils `shell`/`mkdir`/`websearch` (nettoyé), tool_calls standard | 20 % | ✅ Terminé |
 | M12 | **UI/UX agentique professionnelle par workspace** : sessions groupées par workspace, dossier du disque en workspace (navigateur + manifeste), onglet Activité (tracking requêtes + outils), réflexion affichée (`reasoning_content`) + niveau 0–4, shell parallèle et en arrière-plan (`shell_output`/`shell_kill`), liste des modèles étiquetée, renommage, Stop, file d'attente | 25 % | ✅ Terminé |
+| M13 | **Sécurité, ICM complète & profilage** : niveau de sécurité par session (demander / accepter automatiquement / aucun outil — live), scaffold ICM complet à la création (14 fichiers prêts : plan, tâches, journal, décisions, sources, mémoire, leçons), tours terminés journalisés (onglet Activité durable), logs de profilage `engine/session/activity` sous `.nyworkflow/.logs/` | 25 % | ✅ Terminé |
 
 > Règle de gouvernance phase 2 : à chaque fin de milestone atteint, les milestones futurs sont réécrits en fin de [MILESTONES.md](MILESTONES.md).
 
@@ -139,12 +157,12 @@ Plan : [PLAN.md](PLAN.md) · Plan phase 1 : [PLAN-old.md](PLAN-old.md)
 ## Structure
 
 ```
-apps/web              UI web (React + Vite, port 3080) : sessions ICM agentiques — boucle agentique dans le navigateur
+apps/web              UI web (React + Vite, port 3080) : sessions ICM agentiques — boucle agentique dans le navigateur, sécurité par session, logs de profilage
 packages/core         ICM : arbre du workspace, chargement des CONTEXT.md, prompt système, scaffold agentique
 packages/session      sessions = journal append-only JSONL (chat + outils, suppression)
 packages/adapter-llm  client OpenAI-compatible sous /v1beta (tools, tool_calls, rôles tool)
 packages/webapi       passerelle webapi : interface web Gemini servie en OpenAI-compatible (port 8081, v1 + v1beta)
-packages/tools        7 outils (read, write, ls, glob, mkdir, shell, websearch) + garde de périmètre + approbation
+packages/tools        9 outils (read, write, ls, glob, mkdir, shell, websearch, shell_output, shell_kill) + garde de périmètre + approbation + niveaux de sécurité
 examples/workspaces   workspace ICM agentique d'exemple
 ```
 

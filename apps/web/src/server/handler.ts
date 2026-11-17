@@ -3,10 +3,14 @@
  *
  * Mounted by the Vite plugin (dev and preview), same origin as the UI:
  *   GET    /sessions              → { sessions: SessionDto[] }  (oldest first)
- *   POST   /sessions              → create (body: { title?, workspace? })
+ *   POST   /sessions              → create (body: { title?, workspace?, security? })
  *   DELETE /sessions/:id          → delete the journal (M11)
  *   POST   /sessions/:id/events   → append a chat event (user|assistant message)
  *   POST   /sessions/:id/fork     → fork the journal
+ *   POST   /sessions/:id/rename   → rename (M12)
+ *   POST   /sessions/:id/security → M13: change the security level live
+ *   POST   /sessions/:id/turn     → M13: journal a completed agent turn
+ *                                     (turn.completed — durable traces)
  *
  * Chat events here — tool.call / tool.result events land in the SAME
  * journal through /workspaces (M11): the agent's tools are journaled by
@@ -21,6 +25,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import {
   appendEvent,
+  asSecurityLevel,
   deleteJournal,
   deriveSession,
   forkJournal,
@@ -29,7 +34,8 @@ import {
   newSessionId,
   readEvents,
 } from '@nyworkflow/session'
-import type { DerivedSession, SessionEvent } from '@nyworkflow/session'
+import type { DerivedSession, SecurityLevel, SessionEvent } from '@nyworkflow/session'
+import type { Profiler } from './logs.ts'
 import { workspaceExists } from './workspaces.ts'
 
 /** Workspace folder names, same rule as the /workspaces API. */
@@ -43,6 +49,8 @@ export interface SessionDto {
   forkedFrom?: string
   /** ICM workspace the session is bound to (M11: every session has one). */
   workspace?: string
+  /** M13 — effective security level ('ask' by default). */
+  security: SecurityLevel
   /** Raw journal events, in order — messages, tool calls, everything. */
   events: SessionEvent[]
   messages: { role: 'user' | 'assistant'; text: string; at: number }[]
@@ -51,6 +59,8 @@ export interface SessionDto {
 export interface SessionsHandlerOptions {
   /** Workspaces folder — validates the workspace at creation time. */
   workspacesDir?: string
+  /** M13 — profiling logs (session lifecycle + completed turns). */
+  profiler?: Profiler
 }
 
 const BODY_LIMIT = 1_000_000
@@ -115,6 +125,7 @@ export function createSessionsHandler(
 ): (req: IncomingMessage, res: ServerResponse) => void {
   const sessionsDir = join(home, 'sessions')
   const workspacesDir = options.workspacesDir ?? ''
+  const profiler = options.profiler
 
   /** A free journal id (retries on the unlikely collision). */
   function freshId(): string {
@@ -141,6 +152,7 @@ export function createSessionsHandler(
       createdAt: toMs(d.createdAt),
       forkedFrom: d.forkedFrom,
       workspace: d.workspace,
+      security: d.security,
       events,
       messages: d.messages.map((m) => ({ role: m.role, text: m.text, at: toMs(m.at) })),
     }
@@ -179,12 +191,28 @@ export function createSessionsHandler(
     const body = await readJson(req)
     const given = typeof body.title === 'string' ? body.title.trim().slice(0, 60) : ''
     const workspace = await checkWorkspace(body.workspace)
+    const security = asSecurityLevel(body.security) ?? 'ask'
     const fallback = `Session ${(await journalNames()).length + 1}`
     const title = given || fallback
     const id = freshId()
     const at = nowIso()
-    await appendEvent(journalPath(home, id), { type: 'session.created', at, title, ...(workspace !== undefined ? { workspace } : {}) })
-    return { id, title, createdAt: toMs(at), events: [], messages: [] , ...(workspace !== undefined ? { workspace } : {}) }
+    await appendEvent(journalPath(home, id), {
+      type: 'session.created',
+      at,
+      title,
+      ...(workspace !== undefined ? { workspace } : {}),
+      ...(security !== 'ask' ? { security } : {}),
+    })
+    profiler?.session({ kind: 'session.created', sessionId: id, title, workspace, security })
+    return {
+      id,
+      title,
+      createdAt: toMs(at),
+      security,
+      events: [],
+      messages: [],
+      ...(workspace !== undefined ? { workspace } : {}),
+    }
   }
 
   async function appendChatEvent(req: IncomingMessage, id: string): Promise<void> {
@@ -203,8 +231,75 @@ export function createSessionsHandler(
     if (typeof text !== 'string' || text.length === 0) throw badRequest('texte non vide attendu')
     if (text.length > TEXT_MAX) throw badRequest(`texte trop long (max ${TEXT_MAX} caractères)`)
     await appendEvent(file, { type: kind, at: nowIso(), text } as SessionEvent)
+    profiler?.session({ kind, sessionId: id, chars: text.length })
   }
 
+  /** M13 — change the security level live: one session.security event, the
+   * last one wins in derivation. */
+  async function changeSecurity(req: IncomingMessage, id: string): Promise<SessionDto> {
+    const file = journalPath(home, id)
+    try {
+      await access(file)
+    } catch {
+      throw notFound('session inconnue')
+    }
+    const body = await readJson(req)
+    const level = asSecurityLevel(body.level)
+    if (level === undefined) throw badRequest('level : "ask", "accept" ou "no-tools" attendu')
+    await appendEvent(file, { type: 'session.security', at: nowIso(), level })
+    profiler?.session({ kind: 'session.security', sessionId: id, level })
+    const events = await readEvents(file)
+    return toDto(id, deriveSession(events), events)
+  }
+
+  /** M13 — journal a completed agent turn (turn.completed): the durable
+   * trace of the browser loop — model, rounds, duration, outcome. */
+  async function completeTurn(req: IncomingMessage, id: string): Promise<void> {
+    const file = journalPath(home, id)
+    try {
+      await access(file)
+    } catch {
+      throw notFound('session inconnue')
+    }
+    const body = await readJson(req)
+    const model = typeof body.model === 'string' && body.model.trim() !== '' ? body.model.trim().slice(0, 100) : ''
+    if (model === '') throw badRequest('model non vide attendu')
+    const outcome = body.outcome === 'ok' ? 'ok' : body.outcome === 'error' ? 'error' : body.outcome === 'stopped' ? 'stopped' : ''
+    if (outcome === '') throw badRequest('outcome : "ok", "error" ou "stopped" attendu')
+    const int = (v: unknown, max: number): number =>
+      typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.min(Math.floor(v), max) : 0
+    const thinkLevel =
+      body.thinkLevel === null || body.thinkLevel === undefined ? null : typeof body.thinkLevel === 'number' ? int(body.thinkLevel, 4) : null
+    await appendEvent(file, {
+      type: 'turn.completed',
+      at: nowIso(),
+      model,
+      ...(thinkLevel !== null ? { thinkLevel } : {}),
+      rounds: int(body.rounds, 99),
+      ms: int(body.ms, 3_600_000),
+      outcome,
+      toolCalls: int(body.toolCalls, 500),
+      ...(typeof body.messages === 'number' ? { messages: int(body.messages, 1000) } : {}),
+      ...(typeof body.tools === 'number' ? { tools: int(body.tools, 50) } : {}),
+      thinkingChars: int(body.thinkingChars, 10_000_000),
+      textChars: int(body.textChars, 10_000_000),
+      ...(typeof body.error === 'string' && body.error !== '' ? { error: body.error.slice(0, 300) } : {}),
+    })
+    profiler?.activity({
+      kind: 'turn.completed',
+      sessionId: id,
+      model,
+      thinkLevel,
+      rounds: int(body.rounds, 99),
+      ms: int(body.ms, 3_600_000),
+      outcome,
+      toolCalls: int(body.toolCalls, 500),
+      thinkingChars: int(body.thinkingChars, 10_000_000),
+      textChars: int(body.textChars, 10_000_000),
+    })
+  }
+
+  /** Fork d'un journal (M12). */
   async function fork(id: string): Promise<SessionDto> {
     try {
       await access(journalPath(home, id))
@@ -215,7 +310,8 @@ export function createSessionsHandler(
     await forkJournal(home, id, forkId)
     const events = await readEvents(journalPath(home, forkId))
     const d = deriveSession(events)
-    return { id: forkId, title: d.title, createdAt: toMs(d.createdAt), forkedFrom: id, workspace: d.workspace, events, messages: [] }
+    profiler?.session({ kind: 'session.forked', sessionId: forkId, from: id, workspace: d.workspace })
+    return toDto(forkId, d, events)
   }
 
   /** M11 — deletes a journal (its messages and tool history with it). */
@@ -226,6 +322,7 @@ export function createSessionsHandler(
       throw notFound('session inconnue')
     }
     await deleteJournal(home, id)
+    profiler?.session({ kind: 'session.deleted', sessionId: id })
   }
 
   /** M12 — renames a session (append-only: the session.renamed event wins in derivation). */
@@ -240,9 +337,10 @@ export function createSessionsHandler(
     const title = typeof body.title === 'string' ? body.title.trim().slice(0, 60) : ''
     if (title === '') throw badRequest('titre non vide attendu')
     await appendEvent(file, { type: 'session.renamed', at: nowIso(), title })
+    profiler?.session({ kind: 'session.renamed', sessionId: id, title })
     const events = await readEvents(file)
     const d = deriveSession(events)
-    return { id, title: d.title, createdAt: toMs(d.createdAt), forkedFrom: d.forkedFrom, workspace: d.workspace, events, messages: d.messages.map((m) => ({ role: m.role, text: m.text, at: toMs(m.at) })) }
+    return toDto(id, d, events)
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -278,6 +376,13 @@ export function createSessionsHandler(
       }
       if (parts[1] === 'rename' && method === 'POST') {
         return send(res, 200, await rename(req, id))
+      }
+      if (parts[1] === 'security' && method === 'POST') {
+        return send(res, 200, await changeSecurity(req, id))
+      }
+      if (parts[1] === 'turn' && method === 'POST') {
+        await completeTurn(req, id)
+        return send(res, 201, { ok: true })
       }
       if (parts[1] === 'delete' && method === 'POST') {
         await remove(id)

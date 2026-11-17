@@ -55,6 +55,8 @@ export interface EmbedOptions {
   embedGateway?: boolean
   /** Environnement injectable (tests). */
   env?: Record<string, string | undefined>
+  /** M13 — chaque tour amont part aussi vers le engine log de l'app. */
+  onEngineEvent?: (event: Record<string, unknown>) => void
 }
 
 /**
@@ -77,7 +79,12 @@ export async function startEmbeddedGateway(options: EmbedOptions = {}): Promise<
     return { embedded: false, reason: 'busy', close: async () => undefined }
   }
 
-  const provider = webApiProviderFromConfig(config)
+  const provider = webApiProviderFromConfig(
+    config,
+    options.onEngineEvent === undefined
+      ? undefined
+      : (record) => options.onEngineEvent?.({ kind: 'gateway.turn', ...record }),
+  )
   const server = createWebApiServer(config, provider)
 
   const listening = new Promise<void>((resolve, reject) => {
@@ -102,6 +109,13 @@ export async function startEmbeddedGateway(options: EmbedOptions = {}): Promise<
         ? `cookies : ${d.cookieFile}`
         : `cookies absents (${d.cookieFile}) — voir USERGUIDE.md`
   log(`passerelle intégrée sur http://${config.host}:${config.port} · modèle ${d.defaultModel} · ${accounts}`)
+  options.onEngineEvent?.({
+    kind: 'gateway.boot',
+    host: config.host,
+    port: config.port,
+    defaultModel: d.defaultModel,
+    accounts: d.accounts.length,
+  })
 
   return {
     embedded: true,

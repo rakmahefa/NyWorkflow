@@ -721,6 +721,44 @@ button { font: inherit; color: inherit; }
   color: var(--text);
 }
 
+/* ===== M13 : sécurité par session + logs de profilage ====================== */
+/* Sélecteur de niveau de sécurité, dans le bandeau de la session. */
+.security-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.security-picker span { white-space: nowrap; }
+.security-picker select {
+  background: var(--panel);
+  color: var(--text-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  padding: 2px 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.security-picker select:focus { outline: 1px solid var(--accent); }
+
+/* Queue d'un log de profilage, dans les Paramètres. */
+.log-tail {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3);
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* ===== M12 : onglets Conversation / Activité =============================== */
 .session-tabs { display: flex; gap: 2px; margin-left: auto; }
 .session-tab {

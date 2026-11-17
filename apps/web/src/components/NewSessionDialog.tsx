@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as api from '../lib/sessionApi'
-import type { SessionInfo } from '../lib/types'
+import { loadDefaultSecurity, SECURITY_HINT, SECURITY_LABEL, slugify } from '../lib/security'
+import type { SecurityLevel, SessionInfo } from '../lib/types'
 
 const LAST_WS_KEY = 'nyworkflow.lastWorkspace'
 
@@ -17,13 +18,15 @@ interface NewSessionDialogProps {
 }
 
 /**
- * New agentic session (M11, M12): a title and where the session — and the
- * model — will live. Three ways to bind a workspace:
- *   - an existing one (the registry);
- *   - a fresh scaffold (the modern agentic ICM tree);
+ * New agentic session (M11, M12, M13): a title, where the session — and the
+ * model — will live, and the security level of its tools. Three ways to
+ * bind a workspace:
+ *   - a fresh scaffold — the DEFAULT when the registry is empty: the
+ *     COMPLETE ICM tree (M13), auto-named from the title;
+ *   - an existing workspace (the registry);
  *   - **a folder of the user's disk** (M12): browsed, then registered
  *     as-is — the tree is the user's own, nothing is created inside.
- * The last used workspace is remembered.
+ * The last used workspace and the security level are remembered.
  */
 export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose, onCreated }: NewSessionDialogProps) {
   const [title, setTitle] = useState(initialTitle)
@@ -33,6 +36,8 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
   const [newName, setNewName] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  /** M13 — the security level of the session's tools (default remembered). */
+  const [security, setSecurity] = useState<SecurityLevel>(() => loadDefaultSecurity())
 
   // --- folder browser state (M12) ---
   const [browse, setBrowse] = useState<api.BrowseDto | null>(null)
@@ -66,6 +71,13 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
       cancelled = true
     }
   }, [mode])
+
+  // M13 — un titre tapé propose le nom du nouveau workspace (slug).
+  useEffect(() => {
+    if (mode_ !== 'new') return
+    setNewName((current) => (current === '' || current === slugify(current) ? slugify(title) : current))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [title, mode_])
 
   // Loads the folder browser (home on first open).
   useEffect(() => {
@@ -143,8 +155,8 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
           return
         }
         localStorage.setItem(LAST_WS_KEY, workspace)
-        const dto = await api.createSession(title.trim() || undefined, workspace)
-        onCreated({ id: dto.id, title: dto.title, createdAt: dto.createdAt, workspace })
+        const dto = await api.createSession(title.trim() || undefined, workspace, security)
+        onCreated({ id: dto.id, title: dto.title, createdAt: dto.createdAt, workspace, security: dto.security })
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
       } finally {
@@ -186,7 +198,7 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
           <>
             <div className="ws-tabs" role="tablist" aria-label="Workspace">
               {tab('existing', 'Existant')}
-              {tab('new', 'Créer')}
+              {tab('new', 'Créer (ICM complet)')}
               {tab('folder', 'Dossier du disque')}
             </div>
             {mode_ === 'existing' ? (
@@ -219,7 +231,9 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
                   placeholder="ex. rapport-loutres"
                 />
                 <span className="hint">
-                  Scaffold agentique : CONTEXT.md (charte) + inbox/notes/research/outputs — l’arbre reste libre ensuite.
+                  Scaffold ICM complet (M13) : charte + inbox / notes (plan, tâches, journal, décisions) / research
+                  (registre des sources) / memory (mémoire vive, leçons) / outputs / archive — chaque fichier .md
+                  prêt à l’emploi, l’arbre reste libre ensuite.
                 </span>
               </label>
             ) : null}
@@ -295,6 +309,15 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
         ) : (
           <p className="hint">API indisponible — la session sera locale (repli mémoire), sans workspace.</p>
         )}
+        <label className="field">
+          <span>Niveau de sécurité des outils</span>
+          <select data-test="security-level" value={security} onChange={(e) => setSecurity(e.target.value as SecurityLevel)}>
+            <option value="ask">{SECURITY_LABEL.ask} — {SECURITY_HINT.ask}</option>
+            <option value="accept">{SECURITY_LABEL.accept} — {SECURITY_HINT.accept}</option>
+            <option value="no-tools">{SECURITY_LABEL['no-tools']} — {SECURITY_HINT['no-tools']}</option>
+          </select>
+          <span className="hint">Modifiable à tout moment dans le bandeau de la session.</span>
+        </label>
         {error !== '' ? <p className="form-error" data-test="dialog-error">{error}</p> : null}
         <div className="modal-actions">
           <button type="button" data-test="dialog-cancel-btn" onClick={onClose}>

@@ -1,8 +1,8 @@
 {
   "name": "nyworkflow",
   "private": true,
-  "version": "0.3.0",
-  "description": "Harness web d'agent conversationnel ICM — sessions agentiques en workspaces à arbre libre, propulsées par Gemini via la passerelle webapi intégrée (@nyworkflow/webapi)",
+  "version": "0.4.0",
+  "description": "Harness web d'agent conversationnel ICM \u2014 sessions agentiques en workspaces \u00e0 arbre ICM complet (charte, plan, m\u00e9moire), niveaux de s\u00e9curit\u00e9 par session et logs de profilage, propuls\u00e9es par Gemini via la passerelle webapi int\u00e9gr\u00e9e (@nyworkflow/webapi)",
   "license": "MIT",
   "packageManager": "pnpm@12.21.0",
   "engines": {

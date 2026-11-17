@@ -25,14 +25,18 @@ export const DEFAULT_JOURNAL_CAPACITY = 50
 export class TurnJournal {
   private readonly capacity: number
   private readonly entries: TurnRecord[] = []
+  /** M13 — optional sink: every recorded turn also lands here (engine log). */
+  private readonly onRecord?: (entry: TurnRecord) => void
 
-  constructor(capacity: number = DEFAULT_JOURNAL_CAPACITY) {
+  constructor(capacity: number = DEFAULT_JOURNAL_CAPACITY, onRecord?: (entry: TurnRecord) => void) {
     this.capacity = Math.max(1, capacity)
+    this.onRecord = onRecord
   }
 
   record(entry: TurnRecord): void {
     this.entries.push(entry)
     if (this.entries.length > this.capacity) this.entries.splice(0, this.entries.length - this.capacity)
+    this.onRecord?.(entry)
   }
 
   /** Les plus récents en dernier — copie défensive. */

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { checkToolCall, executeToolCall, isDangerous, ShellJobRegistry, JOB_MAX_PER_WORKSPACE } from './index'
+import { checkToolCall, executeToolCall, isDangerous, ShellJobRegistry, JOB_MAX_PER_WORKSPACE, toolsDisabledRefusal } from './index'
 import type { ToolCall, ToolRuntime } from './index'
 
 // M12 — shell en arrière-plan (à la Claude) : spawn détaché après
@@ -162,5 +162,15 @@ describe('shell en arrière-plan (M12)', () => {
     // Un autre workspace n'est pas pénalisé.
     expect(jobs.spawn('ws-autre', root, 'sleep 1').ok).toBe(true)
     jobs.killAll()
+  })
+})
+
+describe('toolsDisabledRefusal (M13)', () => {
+  it('refus exécutable, code tools_disabled, message honnête', () => {
+    const r = toolsDisabledRefusal('write')
+    expect(r.ok).toBe(false)
+    expect(r.code).toBe('tools_disabled')
+    expect(r.summary).toContain('write')
+    expect(r.summary).toContain('aucun outil')
   })
 })

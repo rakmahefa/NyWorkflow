@@ -5,6 +5,7 @@
  * join the view as tool activity (M5), never the model history shape.
  */
 import type { SessionEvent } from './index'
+import { asSecurityLevel, DEFAULT_SECURITY, type SecurityLevel } from './security.ts'
 
 export interface DerivedMessage {
   role: 'user' | 'assistant'
@@ -34,6 +35,8 @@ export interface DerivedSession {
   forkedFrom?: string
   /** ICM workspace name, when this session runs a workflow. (M4) */
   workspace?: string
+  /** M13 — effective security level ('ask' by default, legacy journals included). */
+  security: SecurityLevel
   /** Chat messages in order. */
   messages: DerivedMessage[]
   /** Tool calls in order, paired with their result when resolved. (M5) */
@@ -45,6 +48,7 @@ const TITLE_MAX = 60
 type CreatedEvent = Extract<SessionEvent, { type: 'session.created' }>
 type ForkedEvent = Extract<SessionEvent, { type: 'session.forked' }>
 type RenamedEvent = Extract<SessionEvent, { type: 'session.renamed' }>
+type SecurityEvent = Extract<SessionEvent, { type: 'session.security' }>
 type UserEvent = Extract<SessionEvent, { type: 'user.message' }>
 type ChatEvent = Extract<SessionEvent, { type: 'user.message' | 'assistant.message' }>
 
@@ -55,6 +59,11 @@ export function deriveSession(events: readonly SessionEvent[]): DerivedSession {
   const created = events.find((e): e is CreatedEvent => e.type === 'session.created')
   const forked = events.find((e): e is ForkedEvent => e.type === 'session.forked')
   const renamed = [...events].reverse().find((e): e is RenamedEvent => e.type === 'session.renamed')
+  // M13 — the security level: the LAST session.security event wins; without
+  // any, the level given at creation; legacy journals derive 'ask' (the
+  // approval flow they always had).
+  const securityChanged = [...events].reverse().find((e): e is SecurityEvent => e.type === 'session.security')
+  const security: SecurityLevel = securityChanged?.level ?? asSecurityLevel(created?.security) ?? DEFAULT_SECURITY
   const firstUser = events.find((e): e is UserEvent => e.type === 'user.message')
 
   // Title precedence: last rename (M12) > title given at creation > the
@@ -93,6 +102,7 @@ export function deriveSession(events: readonly SessionEvent[]): DerivedSession {
     title: forked ? `${baseTitle} (fork)` : baseTitle,
     forkedFrom: forked?.from,
     workspace: created?.workspace,
+    security,
     messages,
     tools,
   }

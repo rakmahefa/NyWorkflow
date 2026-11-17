@@ -2,13 +2,13 @@ import { useState } from 'react'
 import type { ChatMsg, RequestTrace } from '../lib/types'
 
 /**
- * The activity tab (M12) — harness-style tracking of one session: every
+ * The activity tab (M12, M13) — harness-style tracking of one session: every
  * model request (model, think level, duration, outcome) and every tool
  * call (args + the payload returned to the model), in chronological order.
  *
- * Tool history derives from the session's rows (journal-backed, survives
- * reloads); model requests are traced live by the browser loop and noted
- * as such after a reload.
+ * Tool history AND completed turns derive from the session's journal
+ * (tool.call/tool.result + turn.completed, M13): the whole tab survives
+ * reloads; live requests are traced by the browser loop as they stream.
  */
 
 const fmtTime = (at: number): string =>
@@ -141,7 +141,7 @@ export function ActivityPanel({ traces, toolRows }: { traces: readonly RequestTr
       ) : (
         <>
           <p className="activity-note">
-            Les appels d’outils sont journalisés (ils survivent au rechargement) ; les requêtes modèle sont suivies en direct par le navigateur.
+            Outils ET tours terminés sont journalisés (ils survivent au rechargement) ; les requêtes en cours se suivent en direct.
           </p>
           {entries.map((e, i) =>
             e.kind === 'request' ? <RequestCard key={`r-${e.trace.id}`} trace={e.trace} /> : <ToolCard key={`t-${e.row.id}-${i}`} row={e.row} />,

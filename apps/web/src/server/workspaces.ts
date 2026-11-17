@@ -17,6 +17,14 @@
  *   POST /workspaces/:name/tool/decision    → resolve a paused call (M5 pattern):
  *                                             { sessionId, decision: approve|refuse }
  *
+ * M13 ground rules:
+ *   - the session's SECURITY LEVEL (from its journal) is the gate:
+ *     'no-tools' → every call is an executed refusal (tools_disabled),
+ *     'accept'   → dangerous calls (write, shell) run without approval,
+ *     'ask'      → the approval pause of M11/M12;
+ *   - every tool call, result and decision lands in the activity log
+ *     (<home>/.logs/activity.jsonl) — the pilot's profiling trio.
+ *
  * M12 ground rules:
  *   - a workspace is a NAME resolved to a root: a sub-folder of the registry
  *     (classic scaffold) OR an external folder registered in the manifest
@@ -39,11 +47,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isAbsolute, join, dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { buildIcmSystemPrompt, loadIcm, scaffoldAgenticWorkspace } from '@nyworkflow/core'
-import { checkToolCall, executeToolCall, isDangerous, refusedByUser, ShellJobRegistry } from '@nyworkflow/tools'
-import type { ToolCall, ToolOutcome } from '@nyworkflow/tools'
+import { checkToolCall, executeToolCall, isDangerous, refusedByUser, toolsDisabledRefusal, ShellJobRegistry } from '@nyworkflow/tools'
+import type { ToolCall, ToolOutcome, ToolRefusal } from '@nyworkflow/tools'
 import { resolveInScope } from '@nyworkflow/tools'
 import { appendEvent, deriveSession, isSessionId, journalPath, pendingToolCalls, readEvents } from '@nyworkflow/session'
 import type { SessionEvent } from '@nyworkflow/session'
+import type { Profiler } from './logs.ts'
 
 /** One workspace as listed. */
 export interface WorkspaceSummaryDto {
@@ -93,6 +102,8 @@ export interface WorkspacesHandlerOptions {
   dir: string
   /** NyWorkflow home (journals under home/sessions). */
   home: string
+  /** M13 — profiling logs (tool activity, workspace ops, engine requests). */
+  profiler?: Profiler
 }
 
 const BODY_LIMIT = 2_000_000
@@ -221,6 +232,7 @@ export function createWorkspacesHandler(
   options: WorkspacesHandlerOptions,
 ): (req: IncomingMessage, res: ServerResponse) => void {
   const { dir, home } = options
+  const profiler = options.profiler
   /** Sessions with a tool decision in flight — a second decision gets a 409. */
   const busy = new Set<string>()
   /** Background shell jobs of this server (M12). */
@@ -303,6 +315,7 @@ export function createWorkspacesHandler(
       }
       const next = { workspaces: [...(await readManifest(dir)).workspaces, { name, path }] }
       await writeManifest(dir, next)
+      profiler?.activity({ kind: 'workspace.registered', workspace: name, path })
       const icm = await loadIcm(path)
       return { name, tree: icm.tree, folder: true }
     }
@@ -312,6 +325,7 @@ export function createWorkspacesHandler(
     } catch (err) {
       throw badRequest(err instanceof Error ? err.message : String(err))
     }
+    profiler?.activity({ kind: 'workspace.scaffolded', workspace: name, tree: 'complet (M13)' })
     const icm = await loadIcm(join(dir, name))
     return { name, tree: icm.tree }
   }
@@ -371,8 +385,12 @@ export function createWorkspacesHandler(
     return { path: scope.rel as string, content, bytes: Buffer.byteLength(content, 'utf8') }
   }
 
-  /** Loads a session journal and checks it is bound to this workspace. */
-  async function sessionJournal(name: string, sessionId: string): Promise<{ file: string; events: SessionEvent[] }> {
+  /** Loads a session journal, checks the binding, and returns the journal
+   * with its DERIVED state — M13: the security level rides along. */
+  async function sessionJournal(
+    name: string,
+    sessionId: string,
+  ): Promise<{ file: string; events: SessionEvent[]; security: ReturnType<typeof deriveSession>['security'] }> {
     if (!isSessionId(sessionId)) throw badRequest('sessionId invalide')
     const file = journalPath(home, sessionId)
     try {
@@ -385,7 +403,7 @@ export function createWorkspacesHandler(
     if (d.workspace !== name) {
       throw badRequest(`session liée au workspace « ${d.workspace ?? 'aucun'} » — pas à « ${name} »`)
     }
-    return { file, events }
+    return { file, events, security: d.security }
   }
 
   /**
@@ -403,9 +421,11 @@ export function createWorkspacesHandler(
   /**
    * POST /workspaces/:name/tool — journals the call (callId M12), executes
    * it, or pauses it for a human when it is dangerous (write, shell —
-   * background included). Refusals (unknown tool, bad args, out of scope)
-   * are executed-and-journaled refusals: the model sees the error and
-   * adjusts.
+   * background included). The session's SECURITY LEVEL (M13) rules first:
+   * 'no-tools' refuses everything as an executed refusal, 'accept' skips
+   * the approval. Refusals (unknown tool, bad args, out of scope) are
+   * executed-and-journaled refusals: the model sees the error and
+   * adjusts. Every call and result lands in the activity log.
    */
   async function runTool(req: IncomingMessage, name: string): Promise<ToolRunDto> {
     const body = await readJson(req)
@@ -416,29 +436,45 @@ export function createWorkspacesHandler(
     if (args === null || typeof args !== 'object' || Array.isArray(args)) throw badRequest('arguments (args) : objet attendu')
 
     const root = await rootOf(name)
-    const { file } = await sessionJournal(name, sessionId)
+    const { file, security } = await sessionJournal(name, sessionId)
     if (busy.has(sessionId)) throw new HttpError(409, 'une décision d\'outil est déjà en cours pour cette session')
     if (pendingDangerous(await readEvents(file)) !== undefined) {
       throw new HttpError(409, 'un appel d\'outil dangereux est déjà en attente — décidez-le (POST /tool/decision) avant d\'en lancer un autre')
     }
 
+    // M13 — tools off: an executed refusal, journaled and fed back. The
+    // call is journaled FIRST (it really happened), the refusal right after.
     const call: ToolCall = { tool: tool as ToolCall['tool'], args: args as Record<string, unknown> }
-    const check = await checkToolCall(root, call)
     const callId = newCallId()
-    await appendEvent(file, { type: 'tool.call', at: nowIso(), tool: call.tool, args: call.args, ...(callId !== '' ? { callId } : {}) })
+    if (security === 'no-tools') {
+      await appendEvent(file, { type: 'tool.call', at: nowIso(), tool: call.tool, args: call.args, callId })
+      profiler?.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security })
+      const disabled = toolsDisabledRefusal(call.tool)
+      await appendEvent(file, { type: 'tool.result', at: nowIso(), ok: false, summary: disabled.summary, callId })
+      profiler?.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: disabled.code, security })
+      return { status: 'executed', callId, outcome: disabled }
+    }
 
+    // The check runs BEFORE the call is journaled: a crash here leaves no
+    // open call behind (a pending dangerous call would block the session).
+    const check = await checkToolCall(root, call)
+    await appendEvent(file, { type: 'tool.call', at: nowIso(), tool: call.tool, args: call.args, callId })
+    profiler?.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security })
     if (!check.ok) {
-      const refusal = check.refusal as ToolOutcome
+      const refusal = check.refusal as ToolRefusal
       await appendEvent(file, { type: 'tool.result', at: nowIso(), ok: false, summary: refusal.summary, callId })
+      profiler?.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: refusal.code })
       return { status: 'executed', callId, outcome: refusal }
     }
-    if (check.approval) {
+    if (check.approval && security === 'ask') {
       // Dangerous (write, shell — background or not): the human decides —
       // the journal keeps the call open (no tool.result), the UI shows the
       // approval card.
       return { status: 'pending', callId, call: { tool: call.tool, args: call.args } }
     }
-    const outcome = await executeToolCall(root, call, false, { workspace: name, jobs })
+    // 'accept' (M13): the dangerous call runs right away, approval skipped.
+    const started = Date.now()
+    const outcome = await executeToolCall(root, call, check.approval, { workspace: name, jobs })
     await appendEvent(file, {
       type: 'tool.result',
       at: nowIso(),
@@ -446,6 +482,17 @@ export function createWorkspacesHandler(
       summary: outcome.summary,
       ...(outcome.ok ? { data: outcome.data } : {}),
       callId,
+    })
+    profiler?.activity({
+      kind: 'tool.result',
+      sessionId,
+      workspace: name,
+      tool: call.tool,
+      callId,
+      ok: outcome.ok,
+      code: outcome.ok ? undefined : outcome.code,
+      security,
+      ms: Date.now() - started,
     })
     return { status: 'executed', callId, outcome }
   }
@@ -466,6 +513,7 @@ export function createWorkspacesHandler(
 
     busy.add(sessionId)
     try {
+      const started = Date.now()
       const outcome: ToolOutcome =
         decision === 'refuse' ? refusedByUser(call) : await executeToolCall(root, call, true, { workspace: name, jobs })
       await appendEvent(file, {
@@ -475,6 +523,16 @@ export function createWorkspacesHandler(
         summary: outcome.summary,
         ...(outcome.ok ? { data: outcome.data } : {}),
         ...(callId !== '' ? { callId } : {}),
+      })
+      profiler?.activity({
+        kind: 'tool.decision',
+        sessionId,
+        workspace: name,
+        decision,
+        tool: call.tool,
+        ...(callId !== '' ? { callId } : {}),
+        ok: outcome.ok,
+        ms: Date.now() - started,
       })
       return { status: 'executed', callId, outcome }
     } finally {

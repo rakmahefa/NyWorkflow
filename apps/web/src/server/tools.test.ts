@@ -101,13 +101,14 @@ it(
     const list = await api(base, '/workspaces')
     expect(list.body.workspaces).toEqual([{ name: 'loutres', summary: 'loutres — workspace ICM agentique' }])
 
-    // L'ICM : arbre + charte + prompt système assemblé.
+    // L'ICM : arbre + charte + prompt système assemblé. Le scaffold complet
+    // (M13) porte 7 CONTEXT.md (racine + 6 dossiers à rôle) — tous chargés.
     const icm = await api(base, '/workspaces/loutres/icm')
     expect(icm.status).toBe(200)
     expect(icm.body.system).toContain('agent ICM')
     expect(icm.body.system).toContain('# loutres — workspace ICM agentique')
     expect(icm.body.system).toContain('## Arborescence actuelle')
-    expect(icm.body.contexts).toHaveLength(1)
+    expect(icm.body.contexts).toHaveLength(7)
 
     // Création d'une session liée au workspace (via /sessions).
     const session = await api(base, '/sessions', { method: 'POST', body: JSON.stringify({ title: 'Agent loutres', workspace: 'loutres' }) })

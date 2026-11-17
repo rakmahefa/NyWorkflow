@@ -1,4 +1,4 @@
-import type { ChatMsg, RequestTrace, Role, SessionInfo } from './types'
+import type { ChatMsg, RequestTrace, Role, SecurityLevel, SessionInfo } from './types'
 
 /**
  * In-memory session store — the UI's single state (M3, agentic M11, M12:
@@ -83,6 +83,18 @@ export class SessionStore {
       if (s.id !== id) return s
       hit = true
       return { ...s, title }
+    })
+    if (hit) this.commit()
+    return hit
+  }
+
+  /** M13 — updates a session's security level (journal-backed, live). */
+  setSessionSecurity(id: string, security: SecurityLevel): boolean {
+    let hit = false
+    this.sessions = this.sessions.map((s) => {
+      if (s.id !== id) return s
+      hit = true
+      return { ...s, security }
     })
     if (hit) this.commit()
     return hit

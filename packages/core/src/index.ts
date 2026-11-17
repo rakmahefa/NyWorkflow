@@ -8,8 +8,10 @@
  *   - walkTree / renderTree — the free folder tree, capped and honest;
  *   - loadIcm — the tree + every CONTEXT.md (root first);
  *   - buildIcmSystemPrompt — the system prompt of an agentic session;
- *   - scaffoldAgenticWorkspace — the default modern agentic tree every
- *     new workspace is born with (charter + inbox/notes/research/outputs).
+ *   - scaffoldAgenticWorkspace — the COMPLETE agentic tree (M13) every
+ *     new workspace is born with: charter, six role folders and every
+ *     ready-to-use template (plan, tasks, journal, decisions, sources,
+ *     core memory, lessons).
  *
  * Pure Node, no dependency: no model, no network — trivially testable.
  */
@@ -32,4 +34,4 @@ export {
   TREE_SKIP_DIRS,
 } from './icm.ts'
 export type { IcmFile, IcmWorkspace, TreeEntry } from './icm.ts'
-export { SCAFFOLD_FOLDERS, scaffoldAgenticWorkspace, scaffoldContext } from './scaffold.ts'
+export { SCAFFOLD_FILES, SCAFFOLD_FOLDERS, scaffoldAgenticWorkspace, scaffoldContext, scaffoldFiles } from './scaffold.ts'

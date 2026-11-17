@@ -24,17 +24,31 @@
  * (pairs a result with ITS call even when parallel calls interleave in
  * the journal; old events fall back to positional pairing), and the
  * `session.renamed` event (inline rename, additive like session.forked).
+ *
+ * M13 notes: two additive changes — the security level: `security` on
+ * session.created (chosen at creation) plus the `session.security` event
+ * (the pilot may change it live; the LAST one wins in derivation); and
+ * `turn.completed`, the turn summary the browser loop posts when a turn
+ * ends (model, rounds, duration, outcome) — turns become durable, the
+ * activity tab survives reloads, and the .logs have something to profile.
  */
 
 /** Every fact of a session, in order. */
+import type { SecurityLevel } from './security.ts'
+
+export type { SecurityLevel } from './security.ts'
+export { asSecurityLevel, DEFAULT_SECURITY, SECURITY_LEVELS } from './security.ts'
+
 export type SessionEvent =
-  | { type: 'session.created'; at: string; title?: string; workspace?: string }
+  | { type: 'session.created'; at: string; title?: string; workspace?: string; security?: SecurityLevel }
   | { type: 'session.forked'; at: string; from: string }
   | { type: 'session.renamed'; at: string; title: string }
+  | { type: 'session.security'; at: string; level: SecurityLevel }
   | { type: 'user.message'; at: string; text: string }
   | { type: 'assistant.message'; at: string; text: string }
   | { type: 'tool.call'; at: string; tool: string; args: unknown; callId?: string }
   | { type: 'tool.result'; at: string; ok: boolean; summary: string; data?: unknown; callId?: string }
+  | { type: 'turn.completed'; at: string; model: string; thinkLevel?: number | null; rounds: number; ms: number; outcome: 'ok' | 'error' | 'stopped'; toolCalls: number; messages?: number; tools?: number; thinkingChars: number; textChars: number; error?: string }
   | { type: 'stage.started'; at: string; stage: string; model?: string }
   | { type: 'stage.output'; at: string; stage: string; files: string[] }
   | { type: 'run.completed'; at: string; stages: string[] }

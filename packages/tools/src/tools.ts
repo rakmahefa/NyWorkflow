@@ -43,6 +43,7 @@ export type ToolRefusalCode =
   | 'out_of_scope'
   | 'approval_required'
   | 'refused_by_user'
+  | 'tools_disabled'
   | 'io_error'
 
 export interface ToolOk {
@@ -103,6 +104,18 @@ export function displayPath(call: ToolCall): string {
 /** The dangerous tools (M11): writing files and running commands need a human approval. */
 export function isDangerous(tool: string): boolean {
   return tool === 'write' || tool === 'shell'
+}
+
+/**
+ * M13 — the refusal a 'no-tools' session answers to every tool call: an
+ * executed refusal (journaled, fed back to the model), not an HTTP error —
+ * the model sees tools are off and adapts.
+ */
+export function toolsDisabledRefusal(tool: string): ToolRefusal {
+  return refusal(
+    'tools_disabled',
+    `« ${tool} » refusé — outils désactivés pour cette session (niveau de sécurité « aucun outil »)`,
+  )
 }
 
 function outOfScope(tool: ToolName, raw: string, scope: ScopeResolution): ToolRefusal {

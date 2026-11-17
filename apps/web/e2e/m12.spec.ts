@@ -211,11 +211,19 @@ test('file d’attente : un message envoyé pendant un tour part à la fin — j
   const title = `File ${Date.now()}`
   await newSessionViaDialog(page, title)
   const box = page.getByLabel('Message')
-  await box.fill('AGENTLIT première lecture')
+
+  // Un write en approbation GARANTIT que le tour est en cours (la carte
+  // attend la décision humaine) : la file se teste sans course de vitesse.
+  await box.fill('AGENTECRIT écris pendant que la file se remplit')
   await box.press('Enter')
-  await page.locator('[data-test="tool-row"]', { hasText: 'read' }).first().waitFor({ state: 'visible', timeout: 10_000 })
+  const card = page.locator('[data-test="approval-card"]')
+  await expect(card).toBeVisible({ timeout: 10_000 })
+
   await box.fill('PONG message en file pendant le tour')
   await box.press('Enter')
   await expect(page.locator('.msg.system').last()).toContainText('mis en file', { timeout: 10_000 })
+
+  // Le refus termine le tour — le message en file part aussitôt, jamais perdu.
+  await card.locator('[data-test="refuse-btn"]').click()
   await expect(page.locator('.msg.assistant').last()).toContainText('PONG', { timeout: 15_000 })
 })

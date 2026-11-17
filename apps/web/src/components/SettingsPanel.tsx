@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
+import * as api from '../lib/sessionApi'
 import { fetchGatewayDiagnostic, timeOf, formatExpiry, type GatewayAccountDto, type GatewayDiagnostic } from '../lib/gatewayDiag'
+import {
+  loadDefaultSecurity,
+  saveDefaultSecurity,
+  SECURITY_HINT,
+  SECURITY_LABEL,
+  SECURITY_LEVELS,
+} from '../lib/security'
+import type { SecurityLevel } from '../lib/types'
 import { loadTheme, saveTheme, applyTheme, type ThemePreference } from '../lib/theme'
 import { APP_VERSION } from '../lib/version'
 
@@ -28,15 +37,30 @@ const THEMES: { value: ThemePreference; label: string }[] = [
 export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [theme, setTheme] = useState<ThemePreference>(() => (typeof document === 'undefined' ? 'auto' : loadTheme()))
   const [diag, setDiag] = useState<{ ok: true; data: GatewayDiagnostic } | { ok: false; error: string } | null>(null)
+  /** M13 — default security for NEW sessions (persisted). */
+  const [defaultSecurity, setDefaultSecurity] = useState<SecurityLevel>(() =>
+    typeof localStorage === 'undefined' ? 'ask' : loadDefaultSecurity(),
+  )
+  /** M13 — the profiling logs card: listing + the tail of one log. */
+  const [logs, setLogs] = useState<api.LogsDto | null>(null)
+  const [logTail, setLogTail] = useState<{ name: string; tail: string } | null>(null)
 
   const refreshDiag = useCallback(() => {
     void fetchGatewayDiagnostic().then(setDiag)
   }, [])
 
+  const refreshLogs = useCallback(() => {
+    void api
+      .listLogs()
+      .then(setLogs)
+      .catch(() => setLogs(null))
+  }, [])
+
   useEffect(() => {
     if (!open) return
     refreshDiag()
-  }, [open, refreshDiag])
+    refreshLogs()
+  }, [open, refreshDiag, refreshLogs])
 
   useEffect(() => {
     if (!open) return
@@ -53,6 +77,11 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     setTheme(value)
     applyTheme(value)
     saveTheme(value)
+  }
+
+  const chooseSecurity = (value: SecurityLevel): void => {
+    setDefaultSecurity(value)
+    saveDefaultSecurity(value)
   }
 
   const gw = diag?.ok ? diag.data.gateway : undefined
@@ -99,6 +128,31 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               </button>
             ))}
           </div>
+        </section>
+
+        <section className="settings-section" aria-label="Sécurité">
+          <h4>Sécurité (niveau par défaut des nouvelles sessions)</h4>
+          <div className="theme-picker" role="radiogroup" aria-label="Niveau de sécurité">
+            {SECURITY_LEVELS.map((level) => (
+              <button
+                key={level}
+                type="button"
+                role="radio"
+                aria-checked={defaultSecurity === level}
+                data-test={`default-security-${level}`}
+                className="theme-option"
+                data-active={defaultSecurity === level}
+                onClick={() => chooseSecurity(level)}
+                title={SECURITY_HINT[level]}
+              >
+                {SECURITY_LABEL[level]}
+              </button>
+            ))}
+          </div>
+          <p className="diag-line">
+            {SECURITY_HINT[defaultSecurity]} — le niveau de CHAQUE session se règle dans son bandeau (et à la création),
+            en direct : le journal garde la vérité.
+          </p>
         </section>
 
         <section className="settings-section" aria-label="Passerelle">
@@ -272,6 +326,62 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 ))}
               </tbody>
             </table>
+          )}
+        </section>
+
+        <section className="settings-section" aria-label="Profiling et logs">
+          <h4>
+            Profiling &amp; logs
+            <button type="button" className="diag-refresh" data-test="logs-refresh" onClick={refreshLogs}>
+              Rafraîchir
+            </button>
+          </h4>
+          {logs === null ? (
+            <p className="diag-line">Logs injoignables (serveur de sessions absent ?).</p>
+          ) : (
+            <>
+              <p className="diag-line" data-test="logs-dir">
+                Dossier : <code>{logs.dir}</code> — trois journaux JSONL, rotation à 8 Mio. Copiez-les dans le dépôt
+                pour améliorer et peaufiner le harness.
+              </p>
+              <table className="journal" data-test="logs-table">
+                <thead>
+                  <tr>
+                    <th>Journal</th>
+                    <th>Lignes</th>
+                    <th>Taille</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logs.files.map((f) => (
+                    <tr key={f.name} data-test="logs-row">
+                      <td className="journal-model">{f.name}</td>
+                      <td>{f.lines}</td>
+                      <td>{(f.bytes / 1024).toFixed(1)} Kio</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="diag-refresh"
+                          onClick={() =>
+                            void api
+                              .tailLog(f.name, 50)
+                              .then((t) => setLogTail(t.tail === '' ? { name: f.name, tail: '(vide)' } : { name: f.name, tail: t.tail }))
+                              .catch(() => setLogTail(null))
+                          }
+                        >
+                          Voir
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {logTail !== null ? (
+                <pre className="log-tail" data-test="log-tail">{logTail.name} — 50 dernières lignes
+{'\n'}{logTail.tail}</pre>
+              ) : null}
+            </>
           )}
         </section>
 

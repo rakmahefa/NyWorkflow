@@ -1,6 +1,10 @@
 /** Roles a message can take. System messages are UI/command feedback; tool rows carry the agent's calls. */
 export type Role = 'user' | 'assistant' | 'system' | 'tool'
 
+import type { SecurityLevel } from '@nyworkflow/session'
+
+export type { SecurityLevel }
+
 /** A session as shown in the sidebar. */
 export interface SessionInfo {
   id: string
@@ -8,6 +12,8 @@ export interface SessionInfo {
   createdAt: number
   /** ICM workspace the session is bound to (M11: every session has one). */
   workspace?: string
+  /** M13 — effective security level of the session's tools. */
+  security?: SecurityLevel
 }
 
 /** One chat row: a message, or an agent tool call with its outcome. */

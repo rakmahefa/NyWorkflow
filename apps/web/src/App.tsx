@@ -15,22 +15,22 @@ import { fakeReply, streamText } from './lib/fakeLLM'
 import { useGatewayStatus } from './lib/gateway'
 import { toAgentMessages } from './lib/history'
 import { baseModelOf, withThinkLevel } from './lib/modelMeta'
+import { loadDefaultSecurity, SECURITY_HINT, SECURITY_LABEL } from './lib/security'
 import { applyTheme, loadTheme } from './lib/theme'
 import * as api from './lib/sessionApi'
 import type { ToolRunDto } from './lib/sessionApi'
 import { SessionStore } from './lib/store'
-import type { ChatMsg, SessionInfo } from './lib/types'
+import type { ChatMsg, RequestTrace, SecurityLevel, SessionInfo } from './lib/types'
 import { APP_VERSION } from './lib/version'
 
 const WELCOME =
-  'Bienvenue dans NyWorkflow (v0.3.0). Sessions ICM agentiques — chaque session vit dans un workspace (arbre libre + CONTEXT.md) : le modèle charge l’ICM et agit avec ses outils (read, write, ls, glob, mkdir, shell + arrière-plan, websearch, shell_output, shell_kill). Onglet Activité pour suivre chaque requête et chaque appel.'
+  'Bienvenue dans NyWorkflow (v0.4.0). Sessions ICM agentiques — chaque session vit dans un workspace (arbre ICM complet : charte, plan, tâches, journal, décisions, recherche, mémoire) : le modèle charge l’ICM et agit avec ses outils (read, write, ls, glob, mkdir, shell + arrière-plan, websearch, shell_output, shell_kill). Niveau de sécurité par session (demander / accepter / aucun outil), onglet Activité (requêtes + outils, journalisés), logs de profilage dans .nyworkflow/.logs/.'
 const GATEWAY_DOWN =
   'Passerelle webapi absente — réponses simulées. Elle démarre normalement avec l’application ; ouvrez Paramètres → Passerelle pour le diagnostic, ou vérifiez NYW_WEBAPI_EMBED (0 = désactivée).'
 const MEMORY_FALLBACK =
   'API /sessions indisponible — repli mémoire : cette session ne survivra pas à un rechargement.'
 const MAX_ROUNDS = 12
 const THINK_KEY = 'nyworkflow.thinkLevel'
-
 type Mode = 'booting' | 'server' | 'memory'
 type Tab = 'chat' | 'activity'
 
@@ -45,12 +45,15 @@ interface DecisionWaiter {
 const dangerous = (name: string): boolean => isDangerousTool(name)
 
 /**
- * M12 — the professional agentic harness: sessions grouped by workspace
+ * M13 — the professional agentic harness: sessions grouped by workspace
  * folder, per-session tabs (chat + activity tracking), thinking level and
  * streamed thinking, parallel safe tool calls, background shells, inline
  * rename, and a Stop button that cancels a running turn honestly. The
  * journal stays the truth; the loop still lives in the browser (ICM system
  * prompt reloaded each round, standard tool_calls through the gateway).
+ * M13: a per-session security level (ask / accept / no-tools) rules the
+ * tools, completed turns are journaled (durable activity traces), and the
+ * engine logs everything into .nyworkflow/.logs/.
  */
 export default function App() {
   const [boot] = useState(() => ({ store: new SessionStore(), client: createWeb2ApiClient({ baseUrl: '/api' }) }))
@@ -102,14 +105,25 @@ export default function App() {
         if (sessions.length === 0) {
           const { first, welcome } = await createFirstSession()
           if (cancelled || !first) return
-          store.addSession({ id: first.id, title: first.title, createdAt: first.createdAt, workspace: first.workspace })
+          store.addSession({ id: first.id, title: first.title, createdAt: first.createdAt, workspace: first.workspace, security: first.security })
           setActiveId(first.id)
           store.appendMessage(first.id, 'system', welcome)
         } else {
           store.ingest(
-            sessions.map((d): SessionInfo => ({ id: d.id, title: d.title, createdAt: d.createdAt, workspace: d.workspace })),
+            sessions.map((d): SessionInfo => ({
+              id: d.id,
+              title: d.title,
+              createdAt: d.createdAt,
+              workspace: d.workspace,
+              security: d.security,
+            })),
             sessions.flatMap((d) => rowsFromEvents(d.id, d.events)),
           )
+          // M13 — les tours terminés sont journalisés (turn.completed) :
+          // l'onglet Activité survit aux rechargements, requêtes comprises.
+          for (const d of sessions) {
+            for (const trace of tracesFromEvents(d.id, d.events)) store.appendTrace(trace)
+          }
           setActiveId(sessions[sessions.length - 1]!.id)
         }
         setMode('server')
@@ -140,12 +154,59 @@ export default function App() {
     } catch {
       workspace = undefined
     }
-    const first = await api.createSession(undefined, workspace)
+    const first = await api.createSession(undefined, workspace, loadDefaultSecurity())
     const welcome =
       workspace !== undefined
         ? WELCOME
         : `${WELCOME}\n(Aucun workspace disponible — la session sera une conversation simple, sans outils.)`
     return { first, welcome }
+  }
+
+  /** M13 — change le niveau de sécurité de la session active (journal + store). */
+  const handleSecurity = useCallback(
+    (level: SecurityLevel) => {
+      if (!active) return
+      if (mode === 'server') {
+        void api
+          .setSecurity(active.id, level)
+          .then((dto) => {
+            store.setSessionSecurity(active.id, dto.security)
+            store.appendMessage(active.id, 'system', `Niveau de sécurité : ${SECURITY_LABEL[dto.security]} — ${SECURITY_HINT[dto.security]}.`)
+          })
+          .catch((err) => {
+            const why = err instanceof Error ? err.message : String(err)
+            store.appendMessage(active.id, 'system', `Changement de sécurité impossible : ${why}`)
+          })
+      } else {
+        store.setSessionSecurity(active.id, level)
+      }
+    },
+    [active, mode, store],
+  )
+
+  /** M13 — turn.completed events → activity traces (durable, reload-proof). */
+  function tracesFromEvents(sessionId: string, events: api.SessionDto['events']): RequestTrace[] {
+    return events.flatMap((e, k) =>
+      e.type === 'turn.completed'
+        ? [
+            {
+              id: `${sessionId}:t${k}`,
+              sessionId,
+              at: Date.parse(e.at) || 0,
+              model: e.model,
+              thinkLevel: e.thinkLevel ?? null,
+              round: e.rounds,
+              messages: e.messages ?? 0,
+              tools: e.tools ?? 0,
+              ms: e.ms,
+              outcome: e.outcome,
+              ...(e.error !== undefined ? { error: e.error } : {}),
+              thinkingChars: e.thinkingChars,
+              textChars: e.textChars,
+            },
+          ]
+        : [],
+    )
   }
 
   // Annonce une seule fois l'absence de passerelle, dans la session active.
@@ -322,20 +383,55 @@ export default function App() {
   )
 
   /**
-   * The agent loop (M11, M12): ICM → model → tool_calls → tools → model…
-   * until a plain answer. Safe calls of one round run IN PARALLEL;
-   * dangerous ones (write, shell — background included) pause for the
-   * human, one at a time. Thinking streams into a collapsible block; every
-   * request is traced for the activity tab; the Stop button aborts
-   * honestly (partial text journaled).
+   * The agent loop (M11, M12, M13): ICM → model → tool_calls → tools → model…
+   * until a plain answer. The session's SECURITY LEVEL rules the tools:
+   * 'no-tools' declares nothing (the server refuses any call anyway),
+   * 'accept' runs every call without approval (all parallel, shells
+   * included), 'ask' keeps the human gate one dangerous call at a time.
+   * Every request is traced AND journaled (turn.completed) — the activity
+   * tab survives reloads; the Stop button aborts honestly.
    */
   const runAgentTurn = useCallback(
     async (session: SessionInfo, userText: string) => {
       const workspace = session.workspace
       if (workspace === undefined) return
+      const security = session.security ?? 'ask'
+      const toolsOn = security !== 'no-tools'
       const controller = new AbortController()
       stopRef.current = controller
       setAgentRun({ sessionId: session.id })
+      const turnStartedAt = Date.now()
+      // M13 — the turn summary, posted to the journal (turn.completed) when
+      // the turn ends, whatever the exit path: durable activity traces.
+      const turn = {
+        model: '',
+        rounds: 0,
+        toolCalls: 0,
+        thinkingChars: 0,
+        textChars: 0,
+        outcome: 'ok' as 'ok' | 'error' | 'stopped',
+        error: undefined as string | undefined,
+        messages: 0,
+        tools: 0,
+      }
+      const finishTurn = (): void => {
+        if (mode !== 'server') return
+        void api
+          .postTurn(session.id, {
+            model: turn.model,
+            thinkLevel: thinkLevel === 'auto' ? null : Number.parseInt(thinkLevel, 10),
+            rounds: turn.rounds,
+            ms: Date.now() - turnStartedAt,
+            outcome: turn.outcome,
+            toolCalls: turn.toolCalls,
+            messages: turn.messages,
+            tools: turn.tools,
+            thinkingChars: turn.thinkingChars,
+            textChars: turn.textChars,
+            ...(turn.error !== undefined ? { error: turn.error } : {}),
+          })
+          .catch(() => undefined) // jamais bloquant : le tour est déjà rendu
+      }
       try {
         for (let round = 1; round <= MAX_ROUNDS; round++) {
           if (store.findSessionById(session.id) === undefined) return // session supprimée
@@ -349,12 +445,23 @@ export default function App() {
           } catch (err) {
             const why = err instanceof Error ? err.message : String(err)
             store.appendMessage(session.id, 'system', `ICM inaccessible (${why}) — réponse sans contexte du workspace.`)
+            turn.outcome = 'error'
+            turn.error = `ICM inaccessible : ${why}`
             return
+          }
+          // M13 — sous « aucun outil », le modèle le SAIT : pas de tool_calls,
+          // la réponse vient de l'ICM et de la conversation.
+          if (!toolsOn) {
+            system +=
+              '\n\n## Niveau de sécurité de la session\nLes outils sont DÉSACTIVÉS pour cette session (niveau « aucun outil ») : n’émet aucun tool_call, réponds à partir de l’ICM ci-dessus et de la conversation.'
           }
           if (aborted()) return
 
           const model = effectiveModel(gw.selected)
+          turn.model = model
           const messages = [{ role: 'system' as const, content: system }, ...toAgentMessages(store.listMessages(session.id))]
+          turn.messages = messages.length
+          turn.tools = toolsOn ? AGENT_TOOLS.length : 0
           const traceId = `tr-${crypto.randomUUID().slice(0, 8)}`
           const startedAt = Date.now()
           store.appendTrace({
@@ -365,7 +472,7 @@ export default function App() {
             thinkLevel: thinkLevel === 'auto' ? null : Number.parseInt(thinkLevel, 10),
             round,
             messages: messages.length,
-            tools: AGENT_TOOLS.length,
+            tools: turn.tools,
             ms: 0,
             outcome: 'ok',
             thinkingChars: 0,
@@ -374,12 +481,18 @@ export default function App() {
 
           const placeholder = store.appendMessage(session.id, 'assistant', '')
           store.setStreaming(placeholder.id, true)
+          turn.rounds = round
           let text = ''
           let thinking = ''
           let calls: ToolCallRequest[] = []
           let failed = false
           try {
-            for await (const ev of client.chatStream({ model, messages, tools: AGENT_TOOLS, signal: controller.signal })) {
+            for await (const ev of client.chatStream({
+              model,
+              messages,
+              ...(toolsOn ? { tools: AGENT_TOOLS } : {}),
+              signal: controller.signal,
+            })) {
               if (ev.type === 'thinking') {
                 if (!store.appendThinking(placeholder.id, ev.delta)) return // session effacée
                 thinking += ev.delta
@@ -392,6 +505,10 @@ export default function App() {
             }
           } catch (err) {
             failed = true
+            turn.outcome = 'error'
+            turn.error = err instanceof Error ? err.message : String(err)
+            turn.thinkingChars += thinking.length
+            turn.textChars += text.length
             const remaining = store.listMessages(session.id).find((m) => m.id === placeholder.id)
             if (!remaining) return
             if (remaining.text.trim() === '' && (remaining.thinking ?? '') === '') store.removeMessage(placeholder.id)
@@ -406,8 +523,11 @@ export default function App() {
           }
           store.setStreaming(placeholder.id, false)
           journalAssistant(session.id, placeholder.id)
+          turn.thinkingChars += thinking.length
+          turn.textChars += text.length
 
           if (aborted()) {
+            turn.outcome = 'stopped'
             store.settleTrace(traceId, { ms: Date.now() - startedAt, outcome: 'stopped', thinkingChars: thinking.length, textChars: text.length })
             store.appendMessage(session.id, 'system', 'Tour interrompu — le texte reçu est conservé.')
             return
@@ -421,6 +541,7 @@ export default function App() {
           })
 
           if (calls.length === 0) return // réponse finale — tour terminé
+          turn.toolCalls += calls.length
 
           // Toutes les lignes d'abord (l'ordre du modèle est l'ordre du flux)…
           const plan = calls.map((call) => {
@@ -452,23 +573,29 @@ export default function App() {
             if (outcome.status === 'executed') store.resolveToolCall(item.row.id, outcome.outcome)
           }
 
-          // …puis exécution : les appels sûrs TOUS EN PARALLÈLE, les
+          // …puis exécution : sous « accept » (M13), TOUT part en parallèle —
+          // shells compris ; sous « ask », les appels sûrs ensemble et les
           // dangereux l'un après l'autre (la porte d'approbation reste
           // strictement une à la fois côté serveur).
-          await Promise.all(plan.filter((p) => !p.danger).map((p) => runOne(p)))
-          for (const item of plan.filter((p) => p.danger)) {
-            if (aborted()) return
-            await runOne(item)
+          if (security === 'accept') {
+            await Promise.all(plan.map((p) => runOne(p)))
+          } else {
+            await Promise.all(plan.filter((p) => !p.danger).map((p) => runOne(p)))
+            for (const item of plan.filter((p) => p.danger)) {
+              if (aborted()) return
+              await runOne(item)
+            }
           }
           if (aborted()) return
         }
         store.appendMessage(session.id, 'system', `Boucle interrompue après ${MAX_ROUNDS} tours — précisez la demande pour continuer.`)
       } finally {
+        finishTurn()
         stopRef.current = null
         setAgentRun(null)
       }
     },
-    [client, effectiveModel, gw.selected, gw.status, journalAssistant, store, thinkLevel],
+    [client, effectiveModel, gw.selected, gw.status, journalAssistant, mode, store, thinkLevel],
   )
 
   /** M12 — Stop: abort the running turn; a pending approval is refused so the loop ends. */
@@ -528,22 +655,31 @@ export default function App() {
           return
         }
         // Session sans workspace (anciennes sessions) : conversation réelle,
-        // sans ICM ni outils — le modèle reste branché.
+        // sans ICM ni outils — le modèle reste branché. Le tour part aussi
+        // au journal (M13) : activité complète, même sans workspace.
         const controller = new AbortController()
         stopRef.current = controller
         const history = toAgentMessages(store.listMessages(active.id))
         const plain = store.appendMessage(active.id, 'assistant', '')
         store.setStreaming(plain.id, true)
         const model = effectiveModel(gw.selected)
+        const plainStartedAt = Date.now()
+        let plainChars = 0
         void (async () => {
+          let outcome: 'ok' | 'error' = 'ok'
+          let failedWhy: string | undefined
           try {
             for await (const ev of client.chatStream({ model, messages: history, signal: controller.signal })) {
               if (ev.type === 'thinking') store.appendThinking(plain.id, ev.delta)
-              else if (ev.type === 'text' && !store.appendText(plain.id, ev.delta)) return
+              else if (ev.type === 'text') {
+                plainChars += ev.delta.length
+                if (!store.appendText(plain.id, ev.delta)) return
+              }
             }
             store.setStreaming(plain.id, false)
             journalAssistant(active.id, plain.id)
           } catch (err) {
+            outcome = 'error'
             const remaining = store.listMessages(active.id).find((m) => m.id === plain.id)
             if (!remaining) return
             if (remaining.text.trim() === '') store.removeMessage(plain.id)
@@ -551,10 +687,25 @@ export default function App() {
               store.setStreaming(plain.id, false)
               journalAssistant(active.id, plain.id)
             }
-            const why = err instanceof Error ? err.message : String(err)
-            store.appendMessage(active.id, 'system', `Erreur passerelle : ${why}`)
+            failedWhy = err instanceof Error ? err.message : String(err)
+            store.appendMessage(active.id, 'system', `Erreur passerelle : ${failedWhy}`)
           } finally {
             stopRef.current = null
+            void api
+              .postTurn(active.id, {
+                model,
+                thinkLevel: thinkLevel === 'auto' ? null : Number.parseInt(thinkLevel, 10),
+                rounds: 1,
+                ms: Date.now() - plainStartedAt,
+                outcome,
+                toolCalls: 0,
+                messages: history.length,
+                tools: 0,
+                thinkingChars: 0,
+                textChars: plainChars,
+                ...(failedWhy !== undefined ? { error: failedWhy } : {}),
+              })
+              .catch(() => undefined)
           }
         })()
         return
@@ -568,7 +719,7 @@ export default function App() {
         journalAssistant(active.id, placeholder.id)
       })
     },
-    [active, agentRun, client, doDelete, doRename, effectiveModel, gw.selected, gw.status, journalAssistant, mode, runAgentTurn, store],
+    [active, agentRun, client, doDelete, doRename, effectiveModel, gw.selected, gw.status, journalAssistant, mode, runAgentTurn, store, thinkLevel],
   )
 
   // M12 — the queued message leaves when the running turn ends.
@@ -629,6 +780,18 @@ export default function App() {
               ICM · {active.workspace}
             </span>
             <span className="ws-api">API {client.apiVersion}</span>
+            <label className="security-picker" data-test="security-picker" title={SECURITY_HINT[active.security ?? 'ask']}>
+              <span aria-hidden="true">Sécurité</span>
+              <select
+                data-test="security-select"
+                value={active.security ?? 'ask'}
+                onChange={(e) => handleSecurity(e.target.value as SecurityLevel)}
+              >
+                <option value="ask">{SECURITY_LABEL.ask}</option>
+                <option value="accept">{SECURITY_LABEL.accept}</option>
+                <option value="no-tools">{SECURITY_LABEL['no-tools']}</option>
+              </select>
+            </label>
             <nav className="session-tabs" aria-label="Vues de la session">
               <button
                 type="button"
@@ -672,7 +835,12 @@ export default function App() {
           onClose={() => setNewSessionOpen(false)}
           onCreated={(s) => {
             store.addSession(s)
-            store.appendMessage(s.id, 'system', `Session « ${s.title} » créée — workspace « ${s.workspace} » chargé vers le modèle.`)
+            const sec = s.security ?? 'ask'
+            store.appendMessage(
+              s.id,
+              'system',
+              `Session « ${s.title} » créée — workspace « ${s.workspace} » chargé vers le modèle. Sécurité : ${SECURITY_LABEL[sec]} (${SECURITY_HINT[sec]}).`,
+            )
             setActiveId(s.id)
             setTab('chat')
             setNewSessionOpen(false)

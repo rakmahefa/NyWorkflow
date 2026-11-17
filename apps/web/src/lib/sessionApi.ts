@@ -4,7 +4,7 @@
  * decides whether to fall back to in-memory sessions (never a silent
  * loss).
  */
-import type { SessionEvent } from '@nyworkflow/session'
+import type { SecurityLevel, SessionEvent } from '@nyworkflow/session'
 import type { ToolOutcome } from '@nyworkflow/tools'
 
 const jsonHeaders = { 'content-type': 'application/json', accept: 'application/json' }
@@ -32,6 +32,8 @@ export interface SessionDto {
   createdAt: number
   forkedFrom?: string
   workspace?: string
+  /** M13 — effective security level ('ask' by default). */
+  security: SecurityLevel
   events: SessionEvent[]
   messages: { role: 'user' | 'assistant'; text: string; at: number }[]
 }
@@ -41,12 +43,13 @@ export function listSessions(): Promise<SessionDto[]> {
   return jsonFetch<{ sessions: SessionDto[] }>('/sessions').then((b) => b.sessions)
 }
 
-/** Creates a session journal (title optional, workspace required for agents). */
-export function createSession(title?: string, workspace?: string): Promise<SessionDto> {
+/** Creates a session journal (title optional, workspace required for agents,
+ * security level chosen at creation — M13). */
+export function createSession(title?: string, workspace?: string, security?: SecurityLevel): Promise<SessionDto> {
   return jsonFetch<SessionDto>('/sessions', {
     method: 'POST',
     headers: jsonHeaders,
-    body: JSON.stringify({ title, workspace }),
+    body: JSON.stringify({ title, workspace, security }),
   })
 }
 
@@ -79,6 +82,56 @@ export function renameSession(id: string, title: string): Promise<SessionDto> {
     headers: jsonHeaders,
     body: JSON.stringify({ title }),
   })
+}
+
+/** M13 — changes the session's security level live (session.security event). */
+export function setSecurity(id: string, level: SecurityLevel): Promise<SessionDto> {
+  return jsonFetch<SessionDto>(`/sessions/${encodeURIComponent(id)}/security`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify({ level }),
+  })
+}
+
+/** The summary of a completed agent turn — journaled as turn.completed (M13). */
+export interface TurnSummary {
+  model: string
+  thinkLevel?: number | null
+  rounds: number
+  ms: number
+  outcome: 'ok' | 'error' | 'stopped'
+  toolCalls: number
+  messages?: number
+  tools?: number
+  thinkingChars: number
+  textChars: number
+  error?: string
+}
+
+/** M13 — journals a completed turn: the durable trace of the browser loop. */
+export function postTurn(id: string, turn: TurnSummary): Promise<void> {
+  return jsonFetch<unknown>(`/sessions/${encodeURIComponent(id)}/turn`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify(turn),
+  }).then(() => undefined)
+}
+
+// --- M13 : logs de profilage (lecture seule) ----------------------------------
+
+/** GET /logs — the profiling trio, as listed. */
+export interface LogsDto {
+  dir: string
+  files: { name: string; bytes: number; lines: number }[]
+}
+
+/** GET /logs/:name?tail=N — the last lines of one log. */
+export function listLogs(): Promise<LogsDto> {
+  return jsonFetch<LogsDto>('/logs')
+}
+
+export function tailLog(name: string, tail = 200): Promise<{ name: string; tail: string; stats: { bytes: number; lines: number } }> {
+  return jsonFetch(`/logs/${encodeURIComponent(name)}?tail=${tail}`)
 }
 
 // --- /workspaces : surface ICM agentique (M11) ---------------------------------

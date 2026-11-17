@@ -26,7 +26,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { createGeminiProvider, type Provider, type ProviderChatEvent } from './provider.ts'
 import { GeminiError } from './gemini.ts'
-import { TurnJournal, DEFAULT_JOURNAL_CAPACITY } from './journal.ts'
+import { TurnJournal, DEFAULT_JOURNAL_CAPACITY, type TurnRecord } from './journal.ts'
 import { messagesToPrompt, usage, type ChatMessage } from './convert.ts'
 import { ToolStreamSplitter, normalizeTools, parseToolChoice, toolsPreamble, openAiArguments, ToolValidationError, type ParsedToolCall, type ToolStreamEvent } from './tools.ts'
 import {
@@ -54,9 +54,11 @@ const OPENAI_CHAT_PATHS = new Set(['/v1/chat/completions', '/v1beta/chat/complet
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
-/** Construit le provider Gemini depuis la config de la passerelle (avec journal amont). */
-export function webApiProviderFromConfig(config: WebApiConfig): Provider {
-  const journal = new TurnJournal(DEFAULT_JOURNAL_CAPACITY)
+/** Construit le provider Gemini depuis la config de la passerelle (avec journal amont).
+ * M13 — onTurn : chaque tour amont (réussi ou non) part aussi vers le engine
+ * log de l'app, quand l'app en fournit un. */
+export function webApiProviderFromConfig(config: WebApiConfig, onTurn?: (record: TurnRecord) => void): Provider {
+  const journal = new TurnJournal(DEFAULT_JOURNAL_CAPACITY, onTurn)
   return createGeminiProvider(
     {
       baseUrl: config.baseUrl,

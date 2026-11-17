@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import {
   appendEvent,
+  asSecurityLevel,
   deriveSession,
   forkJournal,
   deleteJournal,
@@ -303,5 +304,64 @@ describe('deriveSession — callId & renommage (M12)', () => {
       { type: 'session.renamed', at: T2, title: 'Rennomé' },
     ])
     expect(forked.title).toBe('Rennomé (fork)')
+  })
+})
+
+describe('deriveSession — sécurité & tours (M13)', () => {
+  it('security : celle de la création, puis le DERNIER session.security gagne', () => {
+    const d0 = deriveSession([{ type: 'session.created', at: T1, title: 'S', workspace: 'ws' }])
+    expect(d0.security).toBe('ask') // défaut : journaux anciens compris
+
+    const d1 = deriveSession([
+      { type: 'session.created', at: T1, title: 'S', workspace: 'ws', security: 'accept' },
+      { type: 'user.message', at: T2, text: 'go' },
+    ])
+    expect(d1.security).toBe('accept')
+
+    const d2 = deriveSession([
+      { type: 'session.created', at: T1, title: 'S', workspace: 'ws', security: 'accept' },
+      { type: 'session.security', at: T2, level: 'no-tools' },
+      { type: 'session.security', at: '2026-11-17T10:02:00.000Z', level: 'ask' },
+    ])
+    expect(d2.security).toBe('ask') // le dernier change gagne
+  })
+
+  it('asSecurityLevel : ne laisse passer que les trois niveaux', () => {
+    expect(asSecurityLevel('ask')).toBe('ask')
+    expect(asSecurityLevel('accept')).toBe('accept')
+    expect(asSecurityLevel('no-tools')).toBe('no-tools')
+    expect(asSecurityLevel('yolo')).toBeUndefined()
+    expect(asSecurityLevel(42)).toBeUndefined()
+    expect(asSecurityLevel(undefined)).toBeUndefined()
+  })
+
+  it('turn.completed : toléré par le journal, jamais chat ni outil', async () => {
+    const events: SessionEvent[] = [
+      { type: 'session.created', at: T1, title: 'S', workspace: 'ws' },
+      { type: 'user.message', at: T2, text: 'go' },
+      {
+        type: 'turn.completed',
+        at: '2026-11-17T10:02:00.000Z',
+        model: 'gemini-2.5-flash@think=2',
+        thinkLevel: 2,
+        rounds: 3,
+        ms: 8_500,
+        outcome: 'ok',
+        toolCalls: 4,
+        messages: 12,
+        tools: 9,
+        thinkingChars: 900,
+        textChars: 2_000,
+      },
+    ]
+    const d = deriveSession(events)
+    expect(d.messages).toHaveLength(1) // le tour n’est pas un message
+    expect(d.tools).toHaveLength(0) // ni un appel d’outil
+    // Le journal relit l’événement tel quel (append-only).
+    const home = tmpHome()
+    const id = '2026-11-17-ab12'
+    await appendEvent(journalPath(home, id), events[1]!)
+    await appendEvent(journalPath(home, id), events[2]!)
+    expect(readFileSync(journalPath(home, id), 'utf8')).toContain('"turn.completed"')
   })
 })

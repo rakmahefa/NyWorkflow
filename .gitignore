@@ -11,18 +11,35 @@ test-results/
 *.local
 cookie.json
 
-# État runtime du harness (journaux de sessions) — local par défaut ;
-# les utilisateurs peuvent choisir de le versionner, le repo de dev non.
+# État runtime du harness (journaux de sessions, logs de profilage) — local
+# par défaut ; les utilisateurs peuvent choisir de le versionner, le repo de
+# dev non. Les logs de profilage (.logs/) vivent dedans : copiés dans le
+# dépôt explicitement quand le pilote veut les partager.
 .nyworkflow/
 
 # Sorties d'exécution des workspaces (e2e, démos locales) — le contenu
-# écrit par l'agent est régénéré, seuls les .gitkeep sont versionnés.
-examples/workspaces/**/outputs/*
-!examples/workspaces/**/outputs/.gitkeep
+# écrit par l'agent est régénéré ; seuls les GABARITS du scaffold ICM
+# complet (M13) sont versionnés : CONTEXT.md, plan, tâches, journal,
+# décisions, registre des sources, mémoire.
+examples/workspaces/**/inbox/*
+!examples/workspaces/**/inbox/CONTEXT.md
 examples/workspaces/**/notes/*
-!examples/workspaces/**/notes/.gitkeep
+!examples/workspaces/**/notes/CONTEXT.md
+!examples/workspaces/**/notes/plan.md
+!examples/workspaces/**/notes/tasks.md
+!examples/workspaces/**/notes/journal.md
+!examples/workspaces/**/notes/decisions.md
 examples/workspaces/**/research/*
-!examples/workspaces/**/research/.gitkeep
+!examples/workspaces/**/research/CONTEXT.md
+!examples/workspaces/**/research/sources.md
+examples/workspaces/**/memory/*
+!examples/workspaces/**/memory/CONTEXT.md
+!examples/workspaces/**/memory/core.md
+!examples/workspaces/**/memory/lessons.md
+examples/workspaces/**/outputs/*
+!examples/workspaces/**/outputs/CONTEXT.md
+examples/workspaces/**/archive/*
+!examples/workspaces/**/archive/CONTEXT.md
 
 # OS
 .DS_Store

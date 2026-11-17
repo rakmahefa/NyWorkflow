@@ -29,6 +29,7 @@ export {
   executeToolCall,
   isDangerous,
   refusedByUser,
+  toolsDisabledRefusal,
 } from './tools.ts'
 export type {
   ToolCall,
