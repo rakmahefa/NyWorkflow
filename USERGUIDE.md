@@ -230,15 +230,45 @@ Toute la config vit dans des variables `NYW_WEBAPI_*` (12 facteurs, rien de cach
 | `NYW_WEBAPI_RETRY_ATTEMPTS` / `NYW_WEBAPI_RETRY_DELAY_MS` | `3` / `2000` | Retries avec backoff + jitter |
 | `NYW_WEBAPI_GEMINI_BASE_URL` | `https://gemini.google.com` | Pour les tests (maquette locale) |
 
-### L'API servie (OpenAI-compatible)
+### L'API servie (deux dialectes — M10)
 
 ```
+# OpenAI-compatible
 GET  /                     # diagnostic : version, modèles, cookies, comptes, proxy, journal
 GET  /v1/models            # liste des modèles
-POST /v1/chat/completions  # chat — stream SSE ("stream": true) ou complet
+POST /v1/chat/completions  # chat — stream SSE ("stream": true) ou complet, avec tools
+
+# Google-style (v1beta)
+GET  /v1beta/models                     # liste (forme Google)
+GET  /v1beta/models/{nom}               # un modèle
+POST /v1beta/models/{modèle}:generateContent          # chat (candidates/parts/usageMetadata)
+POST /v1beta/models/{modèle}:streamGenerateContent    # stream : ?alt=sse → SSE, sinon tableau JSON
 ```
 
-En direct : `curl -s http://127.0.0.1:8081/` (ou `http://127.0.0.1:3080/api/` à travers l'UI). Tout serveur OpenAI-compatible peut remplacer la passerelle : `W2A_URL=http://… pnpm dev`.
+En direct : `curl -s http://127.0.0.1:8081/` (ou `http://127.0.0.1:3080/api/` à travers l'UI). Tout serveur OpenAI-compatible peut remplacer la passerelle : `W2A_URL=http://… pnpm dev`. Le suffixe `@think=N` marche partout (`/v1/chat/completions` comme le chemin `:generateContent`).
+
+**Les tools façon OpenAI** — déclarez vos fonctions, la passerelle enseigne la convention au modèle et décode ses appels :
+
+```sh
+curl -s http://127.0.0.1:8081/v1/chat/completions -H 'content-type: application/json' -d '{
+  "model": "gemini-3.6-flash",
+  "messages": [{"role": "user", "content": "Météo à Paris ?"}],
+  "tools": [{"type": "function", "function": {
+    "name": "get_weather",
+    "description": "Météo d'une ville",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+  }}]
+}'
+# → choices[0].message.tool_calls = [{id: "call-…", type: "function",
+#     function: {name: "get_weather", arguments: "{\"city\":\"Paris\"}"}}]
+#   choices[0].finish_reason = "tool_calls"   (en streaming : delta.tool_calls, même final)
+```
+
+La boucle complète : renvoyez le résultat en `{"role": "tool", "tool_call_id": "…", "content": "…"}` dans l'historique — la passerelle le transmet au modèle avec la même convention, il se reconnaît. `tool_choice` accepte `"auto"` (défaut), `"none"` (pas de préambule), `"required"`, ou `{"type": "function", "function": {"name": "…"}}` (forcé).
+
+Côté Google (`:generateContent`), c'est symétrique : `tools: [{"functionDeclarations": […]}]` en entrée, `{functionCall: {name, args}}` dans les parts de la réponse, `toolConfig.functionCallingConfig` pour le mode (`AUTO`/`ANY`/`NONE` + `allowedFunctionNames`), et l'historique d'outils se renvoie en parts `functionCall` / `functionResponse`.
+
+Comment ça marche (et pourquoi c'est robuste) : l'interface web Gemini ne connaît pas les outils du client — la passerelle les décrit dans le prompt avec une convention de blocs `{{tool {…} }}`, puis décode la réponse **en flux**. Tout ce qui ne respecte pas la convention (prose, JSON invalide, bloc non refermé) ressort en texte tel quel — jamais perdu, jamais transformé. En SSE `/v1beta`, un échec amont est un événement `error` Google en fin de flux — jamais un `STOP` déguisé.
 
 ### Anti-casseurs (héritage ny-gemini-acp, corrigé)
 
@@ -260,6 +290,8 @@ En direct : `curl -s http://127.0.0.1:8081/` (ou `http://127.0.0.1:3080/api/` à
 | `le flux Gemini a divergé` | Snapshots incompatibles (interface en évolution) | Réessayez ; si ça persiste, forcez `NYW_WEBAPI_GEMINI_BL` récent ou vérifiez la table de modèles |
 | `requête Gemini impossible` | Réseau / proxy | Vérifiez `NYW_WEBAPI_PROXY`, `NO_PROXY`, `NYW_WEBAPI_TLS_CA` (proxy d'entreprise) — le badge Proxy dans Paramètres montre la config active (identifiants masqués) |
 | L'étape d'un run échoue | Erreur passerelle typée (voir badge dans le journal amont) | Corrigez la cause (souvent les cookies), puis re-cliquez **Exécuter l'étape suivante** — le run reprend du checkpoint |
+| `{{tool …}}` apparaît en clair dans une réponse au lieu d'un `tool_call` | La passerelle n'a pas reconnu le bloc du modèle (JSON invalide ou fermeture absente) — par conception, le texte n'est JAMAIS perdu ni altéré | Reformulez ou resserrez la description de l'outil ; en `"tool_choice": "none"` c'est le comportement attendu (pas de décodage) |
+| Un client Google échoue sur `/v1beta/…` | Modèle inconnu dans le chemin, ou méthode non servie (`countTokens`…) | Vérifiez le nom dans `GET /v1beta/models` ; la passerelle sert `generateContent` et `streamGenerateContent` — c'est affiché par modèle dans `supportedGenerationMethods` |
 | « Aucun modèle dans la réponse » | Passerelle absente ou `W2A_URL` mort | Paramètres → Passerelle ; vérifiez `W2A_URL` si vous l'avez défini |
 | Sessions disparues ? | Elles ne le sont pas : `.nyworkflow/sessions/` | `NYW_HOME` pointe ailleurs ? Le repli mémoire (API absente) affiche un message clair |
 

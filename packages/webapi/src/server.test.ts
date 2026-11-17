@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createWebApiServer } from './server.ts'
 import type { WebApiConfig } from './config.ts'
-import { startMockGemini, type MockGemini, type MockGeminiOptions } from './mock-gemini.ts'
+import { startMockGemini, parseStreamBody, type MockGemini, type MockGeminiOptions } from './mock-gemini.ts'
 
 const COOKIES = 'SAPISID=test-sapisid; HSID=h1'
 
@@ -343,6 +343,324 @@ describe('validation et erreurs HTTP', () => {
       expect(res.status).toBe(405)
       const res2 = await fetch(base + '/v1/models', { method: 'POST' })
       expect(res2.status).toBe(405)
+    })
+  })
+})
+
+// ------------------------------------------------------------------ M10 : tools
+
+const TOOL_BLOCK = '{{tool {"name": "get_weather", "arguments": {"city": "Paris"}} }}'
+/** Snapshots cumulatifs : le bloc est COUPÉ entre les deux frames — comme en vrai. */
+const TOOL_SNAPSHOTS = ['Voici.\n{{tool {"na', `Voici.\n${TOOL_BLOCK}`]
+
+const TOOLS_BODY = {
+  model: 'gemini-3.6-flash',
+  messages: [{ role: 'user', content: 'Météo à Paris ?' }],
+  tools: [
+    {
+      type: 'function',
+      function: {
+        name: 'get_weather',
+        description: 'Météo d’une ville',
+        parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+      },
+    },
+  ],
+}
+
+describe('POST /v1/chat/completions — tools (M10)', () => {
+  it('complétion : bloc décodé en tool_calls OpenAI, finish_reason "tool_calls"', async () => {
+    await withServer({ streamPlan: [{ kind: 'ok', snapshots: TOOL_SNAPSHOTS }] }, async ({ base }) => {
+      const { status, body } = await postJson(base, '/v1/chat/completions', { ...TOOLS_BODY, stream: false })
+      expect(status).toBe(200)
+      expect(body.object).toBe('chat.completion')
+      const msg = body.choices[0].message
+      expect(msg.role).toBe('assistant')
+      expect(msg.content).toBe('Voici.\n') // le texte AVANT le bloc reste du contenu
+      expect(msg.tool_calls).toHaveLength(1)
+      expect(msg.tool_calls[0].id).toMatch(/^call-/)
+      expect(msg.tool_calls[0].type).toBe('function')
+      expect(msg.tool_calls[0].function).toEqual({ name: 'get_weather', arguments: '{"city":"Paris"}' })
+      expect(body.choices[0].finish_reason).toBe('tool_calls')
+      expect(body.usage.total_tokens).toBe(body.usage.prompt_tokens + body.usage.completion_tokens)
+    })
+  })
+
+  it('streaming : bloc coupé entre deux snapshots → delta.tool_calls + finish "tool_calls" + [DONE]', async () => {
+    await withServer({ streamPlan: [{ kind: 'ok', snapshots: TOOL_SNAPSHOTS, delayMs: 5 }] }, async ({ base }) => {
+      const res = await fetch(base + '/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+        body: JSON.stringify({ ...TOOLS_BODY, stream: true }),
+      })
+      expect(res.status).toBe(200)
+      const data = (await readSse(res)).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim())
+      const chunks = data.slice(0, -1).map((d) => JSON.parse(d))
+      expect(data.at(-1)).toBe('[DONE]')
+      expect(chunks[0]).toMatchObject({ object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: null }] })
+      const text = chunks.map((c: any) => c.choices[0]?.delta?.content ?? '').join('')
+      expect(text).toBe('Voici.\n')
+      const callChunks = chunks.filter((c: any) => Array.isArray(c.choices[0]?.delta?.tool_calls))
+      expect(callChunks).toHaveLength(1)
+      const tc = callChunks[0].choices[0].delta.tool_calls[0]
+      expect(tc.index).toBe(0)
+      expect(tc.id).toMatch(/^call-/)
+      expect(tc.type).toBe('function')
+      expect(tc.function).toEqual({ name: 'get_weather', arguments: '{"city":"Paris"}' })
+      expect(chunks.at(-1)).toMatchObject({ choices: [{ finish_reason: 'tool_calls' }] })
+    })
+  })
+
+  it('le préambule d’outils part bien amont, APRÈS l’historique (f.req)', async () => {
+    await withServer(undefined, async ({ base, mock }) => {
+      await postJson(base, '/v1/chat/completions', { ...TOOLS_BODY, stream: false })
+      const { inner } = parseStreamBody(mock.streamPosts()[0]!.body)
+      const prompt = String((inner[0] as unknown[])[0])
+      expect(prompt).toContain('Météo à Paris ?')
+      expect(prompt.indexOf('Météo à Paris ?')).toBeLessThan(prompt.indexOf('[Tool calling]'))
+      expect(prompt).toContain('- get_weather: Météo d’une ville')
+      expect(prompt).toContain('Never invent tool results')
+    })
+  })
+
+  it('tool_choice "none" : pas de préambule, la réponse reste du texte brut', async () => {
+    await withServer(undefined, async ({ base, mock }) => {
+      const { status, body } = await postJson(base, '/v1/chat/completions', { ...TOOLS_BODY, tool_choice: 'none', stream: false })
+      expect(status).toBe(200)
+      expect(body.choices[0].message.content).toBe('Bonjour, le monde')
+      expect(body.choices[0].message.tool_calls).toBeUndefined()
+      expect(body.choices[0].finish_reason).toBe('stop')
+      const { inner } = parseStreamBody(mock.streamPosts()[0]!.body)
+      expect(String((inner[0] as unknown[])[0])).not.toContain('[Tool calling]')
+    })
+  })
+
+  it('tool_choice forcé : l’injonction part amont', async () => {
+    await withServer(undefined, async ({ base, mock }) => {
+      await postJson(base, '/v1/chat/completions', { ...TOOLS_BODY, tool_choice: { type: 'function', function: { name: 'get_weather' } }, stream: false })
+      const { inner } = parseStreamBody(mock.streamPosts()[0]!.body)
+      expect(String((inner[0] as unknown[])[0])).toContain('MUST call the tool "get_weather"')
+    })
+  })
+
+  it('round-trip : tool_calls assistant + message tool partent dans le prompt amont', async () => {
+    await withServer(undefined, async ({ base, mock }) => {
+      await postJson(base, '/v1/chat/completions', {
+        ...TOOLS_BODY,
+        stream: false,
+        messages: [
+          { role: 'user', content: 'Météo ?' },
+          { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Paris"}' } }] },
+          { role: 'tool', tool_call_id: 'c1', content: '{"temp":12}' },
+          { role: 'user', content: 'Merci, résume' },
+        ],
+      })
+      const { inner } = parseStreamBody(mock.streamPosts()[0]!.body)
+      const prompt = String((inner[0] as unknown[])[0])
+      expect(prompt).toContain('{{tool {"name":"get_weather","arguments":{"city":"Paris"}} }}')
+      expect(prompt).toContain('[Tool result]: {"temp":12}')
+      expect(prompt).toContain('Merci, résume')
+    })
+  })
+
+  it('sans bloc dans la réponse : texte simple, finish "stop" (pas de tool_call fantôme)', async () => {
+    await withServer(undefined, async ({ base }) => {
+      const { status, body } = await postJson(base, '/v1/chat/completions', { ...TOOLS_BODY, stream: false })
+      expect(status).toBe(200)
+      expect(body.choices[0].message.content).toBe('Bonjour, le monde')
+      expect(body.choices[0].message.tool_calls).toBeUndefined()
+      expect(body.choices[0].finish_reason).toBe('stop')
+    })
+  })
+
+  it('tools ou tool_choice malformés → 400 au message clair', async () => {
+    await withServer(undefined, async ({ base }) => {
+      const a = await postJson(base, '/v1/chat/completions', { ...TOOLS_BODY, tools: 'banane', stream: false })
+      expect(a.status).toBe(400)
+      expect(a.body.error.message).toMatch(/tools/)
+      const b = await postJson(base, '/v1/chat/completions', { ...TOOLS_BODY, tools: [{ type: 'function', function: {} }], stream: false })
+      expect(b.status).toBe(400)
+      expect(b.body.error.message).toMatch(/function\.name/)
+      const c = await postJson(base, '/v1/chat/completions', { ...TOOLS_BODY, tool_choice: 'banana', stream: false })
+      expect(c.status).toBe(400)
+      expect(c.body.error.message).toMatch(/tool_choice/)
+      const d = await postJson(base, '/v1/chat/completions', { ...TOOLS_BODY, tools: [{ function: { name: 'f' } }, { function: { name: 'f' } }], stream: false })
+      expect(d.status).toBe(400)
+      expect(d.body.error.message).toMatch(/dupliqué/)
+    })
+  })
+
+  it('la surface v1 ne bouge pas : sans tools, la réponse est exactement celle d’avant', async () => {
+    await withServer(undefined, async ({ base }) => {
+      const { status, body } = await postJson(base, '/v1/chat/completions', { model: 'gemini-3.6-flash', messages: [{ role: 'user', content: 'Bonjour' }], stream: false })
+      expect(status).toBe(200)
+      expect(body.choices[0].message).toEqual({ role: 'assistant', content: 'Bonjour, le monde' })
+      expect(body.choices[0].finish_reason).toBe('stop')
+    })
+  })
+})
+
+// ------------------------------------------------------------------ M10 : v1beta
+
+describe('GET /v1beta/models (M10)', () => {
+  it('liste au format Google', async () => {
+    await withServer(undefined, async ({ base }) => {
+      const { status, body } = await getJson(base, '/v1beta/models')
+      expect(status).toBe(200)
+      expect(body.models).toHaveLength(8)
+      expect(body.models[0]).toEqual({
+        name: 'models/gemini-3.6-flash',
+        displayName: 'gemini-3.6-flash',
+        description: 'Gemini served through the NyWorkflow webapi gateway',
+        supportedGenerationMethods: ['generateContent', 'streamGenerateContent'],
+      })
+    })
+  })
+
+  it('un modèle : 200 ; inconnu : 404 enveloppe Google', async () => {
+    await withServer(undefined, async ({ base }) => {
+      const ok = await getJson(base, '/v1beta/models/gemini-3.6-flash')
+      expect(ok.status).toBe(200)
+      expect(ok.body.name).toBe('models/gemini-3.6-flash')
+      const ko = await getJson(base, '/v1beta/models/gpt-9')
+      expect(ko.status).toBe(404)
+      expect(ko.body.error).toEqual({ code: 404, message: 'models/gpt-9 is not found for API version v1beta', status: 'NOT_FOUND' })
+    })
+  })
+
+  it('405 sur POST /v1beta/models', async () => {
+    await withServer(undefined, async ({ base }) => {
+      const { status } = await postJson(base, '/v1beta/models', {})
+      expect(status).toBe(405)
+    })
+  })
+})
+
+describe('POST /v1beta/models/{model}:generateContent (M10)', () => {
+  it('réponse Google : candidates, parts, finishReason STOP, usageMetadata, modelVersion', async () => {
+    await withServer(undefined, async ({ base }) => {
+      const { status, body } = await postJson(base, '/v1beta/models/gemini-3.6-flash:generateContent', {
+        contents: [{ role: 'user', parts: [{ text: 'Bonjour' }] }],
+      })
+      expect(status).toBe(200)
+      expect(body.candidates).toHaveLength(1)
+      expect(body.candidates[0].content.role).toBe('model')
+      expect(body.candidates[0].content.parts[0].text).toBe('Bonjour, le monde')
+      expect(body.candidates[0].finishReason).toBe('STOP')
+      expect(body.candidates[0].index).toBe(0)
+      expect(body.modelVersion).toBe('gemini-3.6-flash')
+      expect(body.usageMetadata.totalTokenCount).toBe(body.usageMetadata.promptTokenCount + body.usageMetadata.candidatesTokenCount)
+    })
+  })
+
+  it('systemInstruction + rôles : le prompt amont porte les marqueurs de /v1', async () => {
+    await withServer(undefined, async ({ base, mock }) => {
+      await postJson(base, '/v1beta/models/gemini-3.6-flash:generateContent', {
+        systemInstruction: { parts: [{ text: 'Sois bref.' }] },
+        contents: [
+          { role: 'user', parts: [{ text: 'Bonjour' }] },
+          { role: 'model', parts: [{ text: 'Salut' }] },
+          { role: 'user', parts: [{ text: 'Résume' }] },
+        ],
+      })
+      const { inner } = parseStreamBody(mock.streamPosts()[0]!.body)
+      const prompt = String((inner[0] as unknown[])[0])
+      expect(prompt).toContain('[System instruction]: Sois bref.')
+      expect(prompt).toContain('[Assistant]: Salut')
+      expect(prompt).toContain('Résume')
+    })
+  })
+
+  it('tools (functionDeclarations) : functionCall dans les parts de la réponse', async () => {
+    await withServer({ streamPlan: [{ kind: 'ok', snapshots: TOOL_SNAPSHOTS }] }, async ({ base }) => {
+      const { status, body } = await postJson(base, '/v1beta/models/gemini-3.6-flash:generateContent', {
+        contents: [{ role: 'user', parts: [{ text: 'Météo à Paris ?' }] }],
+        tools: [{ functionDeclarations: [{ name: 'get_weather', description: 'Météo', parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] } }] }],
+      })
+      expect(status).toBe(200)
+      expect(body.candidates[0].content.parts).toEqual([
+        { text: 'Voici.\n' },
+        { functionCall: { name: 'get_weather', args: { city: 'Paris' } } },
+      ])
+      expect(body.candidates[0].finishReason).toBe('STOP')
+    })
+  })
+
+  it('streamGenerateContent ?alt=sse : chunks SSE, chunk final avec finishReason + usage, PAS de [DONE]', async () => {
+    await withServer({ streamPlan: [{ kind: 'ok', snapshots: TOOL_SNAPSHOTS }] }, async ({ base }) => {
+      const res = await fetch(base + '/v1beta/models/gemini-3.6-flash:streamGenerateContent?alt=sse', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Météo ?' }] }] }),
+      })
+      expect(res.status).toBe(200)
+      expect(String(res.headers.get('content-type'))).toContain('text/event-stream')
+      const lines = await readSse(res) // pas de [DONE] : lit jusqu'à la fin du flux
+      const data = lines.filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim())
+      expect(data.length).toBeGreaterThanOrEqual(3)
+      const chunks = data.map((d) => JSON.parse(d))
+      expect(chunks[0].candidates[0].content.parts).toEqual([{ text: 'Voici.\n' }])
+      expect(chunks[1].candidates[0].content.parts[0].functionCall).toEqual({ name: 'get_weather', args: { city: 'Paris' } })
+      const final = chunks.at(-1)
+      expect(final.candidates[0].finishReason).toBe('STOP')
+      expect(final.usageMetadata.totalTokenCount).toBeGreaterThan(0)
+      expect(final.modelVersion).toBe('gemini-3.6-flash')
+      expect(data.at(-1)).not.toBe('[DONE]')
+    })
+  })
+
+  it('streamGenerateContent sans alt : tableau JSON de chunks (comportement REST)', async () => {
+    await withServer(undefined, async ({ base }) => {
+      const { status, body } = await postJson(base, '/v1beta/models/gemini-3.6-flash:streamGenerateContent', {
+        contents: [{ role: 'user', parts: [{ text: 'Bonjour' }] }],
+      })
+      expect(status).toBe(200)
+      expect(Array.isArray(body)).toBe(true)
+      expect(body.length).toBeGreaterThanOrEqual(2)
+      expect(body[0].candidates[0].content.parts[0].text).toBe('Bonjour, ')
+      expect(body.at(-1).candidates[0].finishReason).toBe('STOP')
+      expect(body.at(-1).usageMetadata.totalTokenCount).toBeGreaterThan(0)
+    })
+  })
+
+  it('échec amont → 502 enveloppe Google UNAVAILABLE', async () => {
+    await withServer({ streamPlan: [{ kind: 'status', status: 500 }] }, async ({ base }) => {
+      const { status, body } = await postJson(base, '/v1beta/models/gemini-3.6-flash:generateContent', {
+        contents: [{ role: 'user', parts: [{ text: 'Bonjour' }] }],
+      })
+      expect(status).toBe(502)
+      expect(body.error.status).toBe('UNAVAILABLE')
+      expect(body.error.message).toMatch(/500/)
+    })
+  })
+
+  it('erreurs claires : modèle inconnu 404, méthode inconnue 404, contents absent 400, JSON invalide 400', async () => {
+    await withServer(undefined, async ({ base }) => {
+      const ko = await postJson(base, '/v1beta/models/gpt-9:generateContent', { contents: [{ role: 'user', parts: [{ text: 'x' }] }] })
+      expect(ko.status).toBe(404)
+      expect(ko.body.error.status).toBe('NOT_FOUND')
+      const method = await postJson(base, '/v1beta/models/gemini-3.6-flash:countTokens', { contents: [] })
+      expect(method.status).toBe(404)
+      expect(method.body.error.message).toMatch(/:countTokens/)
+      const noContents = await postJson(base, '/v1beta/models/gemini-3.6-flash:generateContent', {})
+      expect(noContents.status).toBe(400)
+      expect(noContents.body.error.status).toBe('INVALID_ARGUMENT')
+      const badJson = await fetch(base + '/v1beta/models/gemini-3.6-flash:generateContent', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{oops' })
+      expect(badJson.status).toBe(400)
+    })
+  })
+
+  it('405 : GET sur :generateContent', async () => {
+    await withServer(undefined, async ({ base }) => {
+      const res = await fetch(base + '/v1beta/models/gemini-3.6-flash:generateContent')
+      expect(res.status).toBe(405)
+    })
+  })
+
+  it('suffixe @think= accepté dans le chemin du modèle', async () => {
+    await withServer(undefined, async ({ base }) => {
+      const { status } = await postJson(base, '/v1beta/models/gemini-3.1-pro@think=2:generateContent', { contents: [{ role: 'user', parts: [{ text: 'ok' }] }] })
+      expect(status).toBe(200)
     })
   })
 })

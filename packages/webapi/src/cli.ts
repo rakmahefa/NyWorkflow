@@ -59,6 +59,7 @@ server.listen(config.port, config.host, () => {
     console.log(`expiration : ${a.label ?? path.basename(a.file)} — cookies expirés dans ~${days} j`)
   }
   console.log(`proxy : ${d.proxy ?? 'aucun'}`)
+  console.log('API : OpenAI (/v1 — chat/completions + tools) et Google (/v1beta — generateContent) · GET / pour l’état')
   console.log('Ctrl+C pour arrêter.')
 })
 

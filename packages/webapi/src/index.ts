@@ -40,6 +40,12 @@ export type { ProxyEnv, UpstreamResponse, UpstreamInit, UpstreamOptions } from '
 export { loadModelTable, resolveModel, resolveModelStrict, listModelIds, DEFAULT_MODEL, DEFAULT_MODEL_TABLE, UnknownModelError } from './models.ts'
 export type { ModelSpec, ModelTable, ResolvedModel } from './models.ts'
 
+// Outils client & API élargie (M10) — tools OpenAI, routes Google-style v1beta
+export { normalizeTools, parseToolChoice, toolsPreamble, ToolStreamSplitter, ToolValidationError, scanJsonValue, solveToolBlock, openAiArguments, TOOLS_OPEN, TOOLS_CLOSE, MAX_TOOL_BLOCK_BYTES } from './tools.ts'
+export type { ToolSpec, ToolChoice, ParsedToolCall, ToolStreamEvent } from './tools.ts'
+export { v1betaModelInfo, parseGenerateRequest, buildGenerateResponse, generateTextChunk, generateCallChunk, generateFinalChunk, usageMetadata, callToText } from './v1beta.ts'
+export type { V1BetaModelInfo, NormalizedGenerateRequest } from './v1beta.ts'
+
 // Briques réutilisables
 export { CookieJar, loadCookieSource } from './cookies.ts'
 export type { CookieEntry, CookieSource } from './cookies.ts'

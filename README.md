@@ -38,7 +38,7 @@ Prérequis : Node.js 22.18+ (la passerelle), pnpm 12+.
 pnpm install
 pnpm dev          # UI sur http://127.0.0.1:3080 — AVEC la passerelle webapi intégrée
 pnpm webapi       # passerelle SEULE en autonome (optionnel — voir USERGUIDE.md)
-pnpm test         # Vitest — unitaires (322, dont 166 webapi sans réseau)
+pnpm test         # Vitest — unitaires (386, dont 230 webapi sans réseau)
 pnpm test:e2e     # Playwright — UI réelle (télécharge Chromium au besoin)
 pnpm typecheck    # TypeScript
 ```
@@ -57,6 +57,8 @@ La passerelle parle à l'interface web Gemini avec vos cookies de session — au
 4. C'est parti — le fichier est relu à chaud : changer de cookie ne redémarre rien.
 
 Configuration par environnement (`NYW_WEBAPI_*`) : `PORT`, `HOST`, `MODEL`, `MODELS_FILE` (table de modèles de remplacement — le réflexe anti-« Google a encore renommé ses modèles »), `GEMINI_BL` (force la version d'interface), `COOKIES` (chaîne directe), `AUTH_USER` (index de session de repli — le manifeste `accounts.json` gagne par compte), `ACCOUNTS_FILE` (manifeste des comptes : `/u/N` + libellés, sinon auto-découvert à côté des cookies), `TIMEOUT_MS`, `RETRY_ATTEMPTS`, `RETRY_DELAY_MS`, `PROXY` + `TLS_CA` (M8 : proxy sortant avec tunnel CONNECT maison et CA d'entreprise), `EMBED`. Le diagnostic vit sur `GET /` : cookies, **expiration par compte** (M9 — on voit venir l'expiration avant le 401), sessions `/u/N`, `bl`, proxy, **journal amont** (les derniers tours, échecs typés compris) et **stats par compte**.
+
+**Deux dialectes d'API (M10)** : OpenAI (`/v1/models`, `/v1/chat/completions` — avec `tools` et `tool_calls` façon OpenAI) et Google (`/v1beta/models`, `:generateContent`, `:streamGenerateContent?alt=sse` — avec `functionDeclarations`/`functionCall`). Les outils du client passent par une convention de blocs dans le prompt, décodée en flux sans jamais perdre de texte ; la surface existante (`GET /`, `/v1/*`) n'a pas bougé d'un octet. Exemples complets dans le [USERGUIDE](USERGUIDE.md#6-la-passerelle-webapi).
 
 ### Le menu Paramètres (M8 + M9)
 
@@ -121,8 +123,8 @@ CI à chaque push/PR : typecheck, build, Vitest, Playwright, puis artefacts (UI 
 | M7 | Passerelle webapi (refonte de ny-gemini-acp dans le repo) | 20 % | ✅ Terminé |
 | M8 | Durcissement & diagnostics : passerelle intégrée au démarrage, menu Paramètres (thème + diagnostic + journal amont), multi-comptes, proxy, USERGUIDE | 20 % | ✅ Terminé |
 | M9 | Stabilité & auth multi-sessions Google (vérification cookie proactive, /u/N par compte, statistiques d'utilisation) | 20 % | ✅ Terminé |
-| M10 | API élargie (`/v1beta`, tools) — seulement si un besoin réel apparaît | 20 % | ⏳ Futur |
-| M11 | v0.2.0 (dégel du format de contrat, shell optionnel, multi-workspaces à la volée) — sur le socle stable de comptes/sessions M9 | 20 % | ⏳ Futur |
+| M10 | API élargie : routes Google-style `/v1beta` (`generateContent`, SSE) + `tools`/`tool_calls` façon OpenAI dans `/v1/chat/completions` | 20 % | ✅ Terminé |
+| M11 | v0.2.0 (dégel du format de contrat, shell optionnel, multi-workspaces à la volée) — sur le socle stable M9 + M10 | 20 % | ⏳ Futur |
 
 > Règle de gouvernance phase 2 : à chaque fin de milestone atteint, les milestones futurs sont réécrits en fin de [MILESTONES.md](MILESTONES.md).
 

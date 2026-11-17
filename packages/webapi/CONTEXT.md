@@ -1,11 +1,11 @@
 # packages/webapi — la passerelle du monorepo
 
-Rôle : servir l'interface web Gemini (et demain d'autres providers) en OpenAI-compatible, **dans le repo** — la refonte moderne et maintenue de `ny-gemini-acp` (Rust, non maintenu). C'est le seul endroit du monorepo qui connaît Gemini : cookies, SAPISIDHASH, payload `f.req`, frames `wrb.fr`, version `bl`.
+Rôle : servir l'interface web Gemini (et demain d'autres providers) en **deux dialectes** — OpenAI-compatible (`/v1`) et Google-style (`/v1beta`, M10) — **dans le repo**. C'est la refonte moderne et maintenue de `ny-gemini-acp` (Rust, non maintenu). C'est le seul endroit du monorepo qui connaît Gemini : cookies, SAPISIDHASH, payload `f.req`, frames `wrb.fr`, version `bl`.
 
-Entrées : requêtes OpenAI-compatible (`/v1/models`, `/v1/chat/completions`), cookies Gemini dans `.nyworkflow/cookies/gemini.json` (3 formats : EditThisCookie, objet `{"cookie","sapisid"}`, chaîne brute), un **répertoire de fichiers cookies = multi-comptes** (`NYW_WEBAPI_COOKIE_FILE`), un **manifeste `accounts.json` = un `/u/N` et un libellé par compte** (M9, auto à côté des cookies ou `NYW_WEBAPI_ACCOUNTS_FILE`), ou `NYW_WEBAPI_COOKIES`.
-Sorties : JSON et SSE au format OpenAI — exactement ce qu'`adapter-llm` consomme déjà (port 8081 par défaut = remplacement direct de l'ancienne passerelle) ; diagnostic `GET /` (cookies, **expiration par compte**, sessions `/u/N`, `bl`, proxy masqué, journal amont, **stats par compte** — M9, tous les champs M9 sont additifs, les consommateurs antérieurs ne bougent pas).
+Entrées : requêtes OpenAI-compatible (`/v1/models`, `/v1/chat/completions` — avec `tools`/`tool_choice` depuis M10) et Google-style (`/v1beta/models`, `:generateContent`, `:streamGenerateContent` — `functionDeclarations`/`toolConfig`), cookies Gemini dans `.nyworkflow/cookies/gemini.json` (3 formats : EditThisCookie, objet `{"cookie","sapisid"}`, chaîne brute), un **répertoire de fichiers cookies = multi-comptes** (`NYW_WEBAPI_COOKIE_FILE`), un **manifeste `accounts.json` = un `/u/N` et un libellé par compte** (M9, auto à côté des cookies ou `NYW_WEBAPI_ACCOUNTS_FILE`), ou `NYW_WEBAPI_COOKIES`.
+Sorties : JSON et SSE au format OpenAI — exactement ce qu'`adapter-llm` consomme déjà (port 8081 par défaut = remplacement direct de l'ancienne passerelle) — et au format Google (candidates/parts/functionCall, M10) ; diagnostic `GET /` (cookies, **expiration par compte**, sessions `/u/N`, `bl`, proxy masqué, journal amont, **stats par compte** — M9, tous les champs M9 sont additifs, les consommateurs antérieurs ne bougent pas). Les outils du client passent par une **convention de blocs dans le prompt** (`tools.ts` : préambule + décodage en flux jamais perdant) — l'interface web Gemini ne connaît pas les function declarations.
 
-Ne fait pas : orchestration, sessions, outils — jamais. Ne touche pas au reste du monorepo : Gemini évolue → le patch reste ici.
+Ne fait pas : orchestration, sessions, ni les outils du workspace (ça vit dans `packages/tools`, M5) — jamais. Les « tools » servis ici (M10) sont ceux **du client API**, passés par le prompt et décodés dans la réponse. Ne touche pas au reste du monorepo : Gemini évolue → le patch reste ici.
 
 ## Pourquoi ça cassait avant, et ce qui y répond
 
@@ -30,7 +30,7 @@ Ne fait pas : orchestration, sessions, outils — jamais. Ne touche pas au reste
 
 ## Bornes de sécurité
 
-Corps de requête 4 Mio · frame 8 Mio · accumulateur brut 64 Kio · 256 tool-events max par flux · jetons de page TTL 10 min · timeout amont 180 s (configurable). Le cookie est un secret : fichier gitignoré, jamais dans les logs.
+Corps de requête 4 Mio · frame 8 Mio · accumulateur brut 64 Kio · bloc d'appel d'outil 64 Kio (au-delà : redevient du texte, jamais perdu) · 256 tool-events max par flux · jetons de page TTL 10 min · timeout amont 180 s (configurable). Le cookie est un secret : fichier gitignoré, jamais dans les logs.
 
 ## Démarrer
 
@@ -41,4 +41,4 @@ pnpm dev             # intégré : le serveur web démarre la passerelle (apps/w
 
 Leçons Node (consignées) : avec `agent: false`, `https.request` IGNORE `createConnection` et contourne le tunnel — laisser `agent` indéfini ; un tunnel CONNECT se détruit à la main sur `end`/`close` de la réponse, la propagation de `close_notify` à travers les pipes n'est pas garantie.
 
-Tâches : M7 ✅, M8 ✅ (multi-comptes, proxy, journal amont, diagnostic étendu), M9 ✅ (auth multi-sessions `/u/N`, expiration vue d'avance, stats par compte — 2026-11-17) — voir MILESTONES.md.
+Tâches : M7 ✅, M8 ✅ (multi-comptes, proxy, journal amont, diagnostic étendu), M9 ✅ (auth multi-sessions `/u/N`, expiration vue d'avance, stats par compte — 2026-11-17), M10 ✅ (API élargie : `/v1beta` Google-style + `tools` OpenAI, splitter jamais perdant — 2026-11-17) — voir MILESTONES.md.

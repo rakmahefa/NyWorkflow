@@ -66,11 +66,31 @@ Détail de la livraison :
 - Pièges rencontrés et corrigés : (1) `accounts.json` était compté comme un compte — le manifeste est exclu du listing (par chemin exact, un cookie homonyme ailleurs n'est pas touché) ; (2) `earliestExpiry` sur un compte tout-expiré ne doit regarder que les cookies qui SERAIENT servis sans l'expiration (un domaine hors Google n'a jamais été candidat) ; (3) le parseur EditThisCookie lit `expirationDate`, pas `expiresAt` — le helper de test doit traduire ; (4) `toLocaleDateString` suit la locale du runner (CI en-US) — les assertions de test comparent via le même formatage, jamais une chaîne figée.
 - Docs : README (avancement 60 %, table de config, Paramètres M9), USERGUIDE (§2 accounts.json + où lire son `/u/N`, §4 Paramètres, §6 env, §7 dépannage), ARCHITECTURE (D2 révisée M9), PLAN (point de décision fin M9), ce fichier, CONTEXT.md × 2.
 
+## M10 — API élargie · 20 % · ✅ Terminé (2026-11-17)
+
+Objectif (réécrit fin M9 — le besoin a été exprimé par le pilote) : la passerelle parle les **deux dialectes** des clients LLM — routes Google-style et `tools` à la OpenAI — sans bouger d'un octet la surface existante.
+
+- [x] **Routes Google-style** (`v1beta.ts`) : `GET /v1beta/models` + `GET /v1beta/models/{name}` (forme Google, `supportedGenerationMethods` honnête), `POST :generateContent` (candidates/parts/finishReason/usageMetadata), `POST :streamGenerateContent` — `?alt=sse` en SSE (comme le SDK Google, sans `[DONE]`) ou tableau JSON par défaut (REST). Erreurs à l'enveloppe Google (`{error:{code,message,status}}`), 404 « models/x is not found for API version v1beta » compris
+- [x] **`tools` dans `/v1/chat/completions`** (`tools.ts`) : déclarations à la OpenAI (tolérance : entrée plate Google acceptée), `tool_choice` auto/none/required/forcé, réponse `message.tool_calls` + `finish_reason: "tool_calls"` — en complétion comme en streaming (`delta.tool_calls`) ; `role: "tool"` accepté dans l'historique, round-trip complet
+- [x] **Outils v1beta symétriques** : `tools: [{functionDeclarations}]` + `toolConfig` (AUTO/ANY/NONE, `allowedFunctionNames`) → `functionCall` dans les parts de réponse — le même moteur que /v1
+- [x] **La mécanique anti-casseur** (le cœur) : l'interface web Gemini ne connaît pas les outils du client — la passerelle les passe par le prompt (préambule + convention de blocs), puis décode le texte **en flux** : marqueurs coupés entre deltas, arguments imbriqués (`}}` structurels), fences ```json, prose qui imite le marqueur → texte intact, bloc jamais refermé → texte, garde-fou 64 Kio. Zéro perte : ce qui n'est pas un appel ressort en texte
+- [x] **Chemins sans outils inchangés** octet pour octet (complétion = `chatComplete` historique, streaming = boucle historique) ; `GET /` et `/v1/*` non touchés — la contrainte additive M9 est tenue et testée
+
+**Livré quand :** `pnpm test` vert sur tout le monorepo, et la chaîne vérifiée sur la passerelle réelle démarrée comme un utilisateur (CLI). ✔ (script de vérification : maquette Gemini + CLI réel — **18/18 checks verts** : v1beta complet, tool_calls en complétion ET streaming, round-trip des résultats d'outils dans le `f.req` amont, SSE Google sans `[DONE]`, régressions v1/M8/M9 ; transcript `download/m10-verif/transcript.txt` côté repo de travail)
+
+Détail de la livraison :
+
+- **Convention de blocs** (`tools.ts`) : `{{tool {"name": "get_weather", "arguments": {"city": "Paris"}} }}` — marqueur rare en prose, JSON strict à l'intérieur. Le décodage s'appuie sur un scanner aware des chaînes (`scanJsonValue`) : les `}}` structurels ou à l'intérieur d'une chaîne ne ferment pas le bloc ; la fermeture peut être collée au JSON, entourée d'une fence, ou coupée entre deux deltas. Le préambule (anglais, face au modèle) impose « only the tool call blocks, never invent tool results » ; `tool_choice` required/forced ajoute son injonction, none supprime le préambule.
+- **Splitter jamais perdant** : tout ce qui ne respecte pas la convention (prose avec `{{tool calls}}`, JSON invalide, bloc jamais refermé, dépassement 64 Kio) redevient du texte — testé caractère par caractère ET à chaque point de césure possible du flux.
+- **Honnêteté des erreurs** : `/v1` garde son `finish_reason: "error"` ; `/v1beta` en SSE termine par un événement `error` Google (UNAVAILABLE) — jamais un STOP déguisé. `generationConfig` est accepté et ignoré (rien de simulé, jamais d'erreur sur ce qu'on ne sert pas).
+- **Leçons** : (1) la fermeture `}}` coupée entre deux deltas doit être ATTENDUE (préfixe propre du marqueur = incomplete), pas rejetée en prose — le premier scanner rejetait un bloc pourtant valide en route ; (2) le test « à chaque point de césure du flux » a attrapé ce bug là où le cas « un seul push » passait — ce réflexe devient la règle pour tout décodage incrémental ; (3) les extensions natives de Gemini (YouTube, Maps…) restent volontairement non exposées : ce sont les outils de Google, pas ceux du client.
+- **Tests** : +64 webapi (**230** : tools 26, v1beta 14, convert +3, server +21 dont l'intégration full-chain des deux surfaces contre la maquette) → **386 unitaires** au total ; **17 e2e** inchangés et verts. Typecheck/build verts.
+- Docs : README (API élargie, avancement 80 %), USERGUIDE (§6 les deux surfaces + guide tools, §7 dépannage), ARCHITECTURE (D2 révisée M10), PLAN (point de décision fin M10), ce fichier, CONTEXT.md webapi.
+
 ## Milestones futurs
 
 > Réécrits à chaque fin de milestone atteint (règle de gouvernance ci-dessus).
 
-- **M10 — API élargie** (20 %) : routes Google-style `/v1beta/models` + `generateContent`, et `tools` dans `/v1/chat/completions` (blocs `tool_call` façon OpenAI) — **seulement si un besoin réel apparaît** (la décision fin M8 tient : aucun besoin exprimé à ce jour). Contrainte apprise en M9 : tout ajout doit rester **additif** sur `GET /` et `/v1/*` comme les champs M8/M9 — jamais de renommage.
-- **M11 — v0.2.0** (20 %) : dégel du format de contrat ICM si les usages le réclament, `shell` optionnel sous approbation, multi-workspaces à la volée, tag et release. Le socle de comptes/sessions M9 est désormais la base stable sur laquelle v0.2.0 se construit.
+- **M11 — v0.2.0** (20 %) : dégel du format de contrat ICM si les usages le réclament, `shell` optionnel sous approbation, multi-workspaces à la volée, tag et release. Le socle comptes/sessions M9 et l'API élargie M10 (additive par construction) sont les bases stables — les tools de la passerelle sont prêts si le moteur ICM veut un jour s'y brancher.
 
 > Ces jalons sont une intention, pas un engagement : chacun sera réévalué — et réécrit — au milestone précédent.
