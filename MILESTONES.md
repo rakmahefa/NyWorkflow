@@ -159,11 +159,36 @@ Détail de la livraison :
 - **Tests** : 428 unitaires (16 core — scaffold v2 byte pour byte, 30 session — dérivation sécurité + turn.completed, 45 tools — tools_disabled, 244 webapi, 73 web — m13 intégration ×3 + logs ×6 + handler ajusté, 20 adapter) ; **30 e2e** (4 M13). Typecheck/build verts.
 - Docs : README (niveaux de sécurité, arbre complet, API /security /turn /logs, avancement), USERGUIDE (§3 sécurité + §4 Paramètres + §5 arbre v2), ARCHITECTURE (D-règles sécurité/logs), PLAN (point de décision), ce fichier, CONTEXT.md × 5.
 
+## M14 — Dossier de session obligatoire, ICM dans .workspace/ & logs par session (v0.5.0) ✅
+
+> Piloté par les PREMIERS LOGS réels uploadés (`docs/logs.zip` — session « session test », gemini-3.5-flash-thinking@think=4, 4 tours, 14 tool_calls tous ok). Constats : le modèle relisait les CONTEXT.md déjà chargés (10 tool_calls pour un « hi », 116 s), `thinkingChars: 0` malgré think=4, et le pilote demande un ancrage dossier strict.
+
+Objectif : **la session VIT dans son dossier** — sélection obligatoire, ICM complet dans le `.workspace/` caché dedans, logs par session dans `.logs/` au même endroit, et un prompt système qui dit au modèle CE qu'il est (un agent du harness NyWorkflow) et COMMENT agir (ses tool_calls sont réels).
+
+- [x] **Dossier de session OBLIGATOIRE** : `POST /sessions` sans workspace → 400 « workspace obligatoire » ; l'UI ne propose plus aucun chemin sans dossier (mode mémoire bloqué, hydratation sans dossier → le dialogue s'ouvre plutôt qu'une session orpheline) ; les journaux anciens sans workspace conversent toujours (compatibilité)
+- [x] **ICM complet dans le `.workspace/` caché** (M14 layout, pattern `.git`/`.claude`) : `scaffoldAgenticWorkspace` écrit les 14 fichiers DANS `<dossier>/.workspace/` ; `ensureIcmTree` idempotent à la création de session (présent → conservé : la mémoire vivante continue d'une session à l'autre) ; l'enregistrement d'un dossier du disque crée aussi le `.workspace/` dedans — les fichiers du pilote restent intacts
+- [x] **ICM conscient du layout** : `loadIcm` charge les CONTEXT.md depuis `.workspace/` (racine d'abord) et rend l'arbre `.workspace/` (la maison de l'agent) PUIS l'arbre visible du projet (le terrain) ; repli legacy (contexts à la racine) pour les workspaces d'avant M14 ; `.logs/` exclu de l'arbre (comme `.git`)
+- [x] **Prompt système refondu — fin du « modèle confus »** : identité explicite (« Tu es un agent exécuté DANS le harness NyWorkflow — pas un chatbot »), « **Agir = appeler un outil** » (les tool_calls sont réels, improviser au lieu de lire est un échec), l'environnement (racine = projet du pilote, `.workspace/` = ton ICM, `.logs/` = interdit), et la réponse au gaspillage des logs : « les CONTEXT.md sont DÉJÀ chargés — **ne les relis pas** »
+- [x] **Logs PAR SESSION dans le dossier de la session** : `<dossier>/.logs/<sessionId>/{engine,session,activity}.jsonl` — cycle de vie + chat + tours + tool_calls/résultats/décisions, chacun sa part (session.open, turn.completed, tool.exec côté engine) ; le trio GLOBAL `.nyworkflow/.logs/` reste (vue engine) ; la suppression de session garde son `.logs/` (l'histoire durable, à zipper et uploader) ; cache par (dossier, session), fire-and-forget jamais fatal
+- [x] **Example workspace migré** (`exemple-agentique` : arbre M13 racine → `.workspace/` M14) ; `.gitignore` réécrit en liste blanche (seuls les GABARITS `.workspace/` versionnés — écritures de l'agent à la racine comprises, logs par session et workspaces e2e jamais commis)
+- [x] **Maquette e2e alignée** : AGENTLIT/AGENTPARALLELE lisent `.workspace/CONTEXT.md` (le vrai chemin M14 de l'agent)
+
+**Livré quand :** `pnpm test` vert sur tout le monorepo (434 unitaires · 30 e2e), preuves M14 intégrées. ✔
+
+Détail de la livraison :
+
+- **La garantie côté serveur, pas côté UI** : l'UI rend l'obligation visible (libellé « obligatoire », hints `.workspace/`+`.logs/`, memory mode bloqué avec message « Serveur requis ») mais c'est `create()` qui refuse (400) — comme pour la sécurité M13, la garde vit là où la vérité vit (le serveur).
+- **`ensureIcmTree` ne touche JAMAIS l'existant** : `.workspace/` présent → `'present'`, absent → `'created'` + arbre complet ; une seconde session sur le même dossier CONTINUE la mémoire (testé : le plan réécrit par l'agent survit à la création d'une autre session).
+- **Le résumé du listing suit le layout** : `summaryOf` lit la charte `.workspace/CONTEXT.md` d'abord, racine en repli — un dossier enregistré affiche « mon-projet — ICM du workspace ».
+- **Anti-casseurs rencontrés et corrigés** : (1) `renderTree` rend le NOM du segment, pas le chemin — l'entrée `.workspace` elle-même doit exister dans les entries pour que le dossier apparaisse (le test assertait `.workspace/notes/` littéral, corrigé en assertant la structure rendue) ; (2) les logs fire-and-forget courent contre les lectures des tests → `untilIn()` sondage borné dans m14.test.ts ; (3) apostrophe typographique vs droite dans la charte (`l'arbre` ≠ `l’arbre`) — la charte tranchée en faveur du typographique, partout.
+- **Tests** : 434 unitaires (19 core — scaffold M14 byte pour byte + `ensureIcmTree` idempotent + loadIcm .workspace/legacy + prompt harness, 76 web — m14.test.ts ×3 : dossier obligatoire/.workspace/mémoire conservée, dossier disque, trio .logs par session + handler/persistence/m12/m13/tools ajustés) ; **30 e2e** (m13 scaffold → `.workspace/` + `.logs/<id>/` + prompt harness ; m12 dossier du disque → `.workspace/` créé dedans, fichiers du pilote intacts ; maquette alignée).
+- Docs : README (§ sessions ancrées dossier, layout .workspace/.logs, v0.5.0), USERGUIDE (§ dossier obligatoire + § arbre .workspace + § logs par session), ARCHITECTURE (D-layout M14), PLAN, ce fichier ; `exemple-agentique` migré par `scripts/migrate-example.mjs`.
+
 ## Milestones futurs
 
 > Réécrits à chaque fin de milestone atteint (règle de gouvernance ci-dessus).
 
-- **M14 — v0.4.x : usages réels & export** : cookies réels sur la boucle agentique complète (multi-tours avec tools sur l'interface Gemini réelle, découverte dynamique des modèles), plafonds de contexte ajustés aux retours des logs de profilage (c'est fait pour), export/livraison d'un workspace (archive), tag & release.
-- **M15 — selon les logs** : le pilote uploade ses `.logs/` — on affine : prompts, plafonds, refus fréquents (outils rejetés, chemins hors périmètre), durées amont. M14 et M15 pourront fusionner si les retours arrivent vite.
+- **M15 — v0.5.x : usages réels & export** : cookies réels sur la boucle agentique complète M14 (multi-tours avec tools sur l'interface Gemini réelle — le layout .workspace/ en conditions réelles), découverte dynamique des modèles, export/livraison d'un workspace (archive zip : projet + .workspace/ + .logs/), tag & release. Les seconds logs du pilote (désormais PAR SESSION dans chaque dossier) guideront les plafonds de contexte.
+- **M16 — selon les logs par session** : le pilote uploadera les `.logs/<sessionId>/` — on affine : le prompt harness au regard des tool_calls réellement émis (relis-t-il toujours ? parallélise-t-il ?), les refus fréquents (outils rejetés, chemins hors périmètre), les durées amont par tour, `thinkingChars` encore à 0 malgré think=4 (remontée du reasoning à élucider côté webapi).
 
 > Ces jalons sont une intention, pas un engagement : chacun sera réévalué — et réécrit — au milestone précédent.

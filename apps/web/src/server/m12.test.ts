@@ -87,33 +87,44 @@ it(
     mkdirSync(join(myDocs, 'projets'))
     writeFileSync(join(myDocs, 'projets', 'notes.txt'), 'mes notes\n', 'utf8')
 
-    // Enregistrement — aucun scaffold, l'arbre reste celui de l'utilisateur.
+    // Enregistrement — M14 : l'ICM complet naît dans le dossier caché
+    // .workspace/ DEDANS ; les fichiers de l'utilisateur restent intacts.
     const reg = await api(base, '/workspaces', { method: 'POST', body: JSON.stringify({ name: 'mes-documents', path: myDocs }) })
     expect(reg.status).toBe(201)
     expect(reg.body.folder).toBe(true)
+    expect(reg.body.tree).toContain('.workspace/')
     expect(reg.body.tree).toContain('projets/')
-    expect(existsSync(join(myDocs, 'inbox'))).toBe(false) // RIEN n'a été créé dedans
+    expect(existsSync(join(myDocs, '.workspace', 'CONTEXT.md'))).toBe(true) // l'ICM est né dedans
+    expect(existsSync(join(myDocs, '.workspace', 'notes', 'plan.md'))).toBe(true)
+    expect(readFileSync(join(myDocs, 'CONTEXT.md'), 'utf8')).toBe('# Mes documents personnels\n') // intact
+    expect(readFileSync(join(myDocs, 'projets', 'notes.txt'), 'utf8')).toBe('mes notes\n') // intact
 
     // Le manifeste vit à côté du registre, en donnée.
     const manifest = JSON.parse(readFileSync(join(spacesDir, 'workspaces.json'), 'utf8'))
     expect(manifest.workspaces).toEqual([{ name: 'mes-documents', path: myDocs }])
 
-    // Listé avec le badge dossier + le résumé de son CONTEXT.md.
+    // Listé avec le badge dossier + le résumé de la charte .workspace/CONTEXT.md.
     const list = await api(base, '/workspaces')
     const mine = list.body.workspaces.find((w: { name: string }) => w.name === 'mes-documents')
-    expect(mine).toMatchObject({ name: 'mes-documents', folder: true, summary: 'Mes documents personnels' })
+    expect(mine).toMatchObject({ name: 'mes-documents', folder: true, summary: 'mes-documents — ICM du workspace' })
 
-    // Une session liée s'y crée (checkWorkspace passe par le manifeste).
+    // Une session liée s'y crée (checkWorkspace passe par le manifeste) —
+    // le .workspace/ déjà présent est conservé (ensureIcmTree idempotent).
     const session = await api(base, '/sessions', { method: 'POST', body: JSON.stringify({ title: 'Mes docs', workspace: 'mes-documents' }) })
     expect(session.status).toBe(201)
     expect(session.body.workspace).toBe('mes-documents')
+    expect(readFileSync(join(myDocs, '.workspace', 'CONTEXT.md'), 'utf8')).toContain('ICM du workspace')
 
-    // L'ICM charge l'arbre de l'utilisateur, read y lit SES fichiers.
+    // L'ICM charge la charte .workspace/ ET montre l'arbre de l'utilisateur ;
+    // read lit SES fichiers, y compris son CONTEXT.md racine.
     const icm = await api(base, '/workspaces/mes-documents/icm')
-    expect(icm.body.system).toContain('Mes documents personnels')
+    expect(icm.body.system).toContain('mes-documents — ICM du workspace')
+    expect(icm.body.tree).toContain('projets/')
     const read = await toolCall(base, 'mes-documents', session.body.id, 'read', { path: 'projets/notes.txt' })
     expect(read.status).toBe(200)
     expect(read.body.outcome.data.content).toContain('mes notes')
+    const own = await toolCall(base, 'mes-documents', session.body.id, 'read', { path: 'CONTEXT.md' })
+    expect(own.body.outcome.data.content).toContain('Mes documents personnels')
 
     // Le double enregistrement est refusé, le chemin relatif aussi.
     const dup = await api(base, '/workspaces', { method: 'POST', body: JSON.stringify({ name: 'mes-documents', path: myDocs }) })
@@ -158,7 +169,9 @@ it(
   { timeout: 120_000 },
   async () => {
     const base = await boot()
-    const created = await api(base, '/sessions', { method: 'POST', body: JSON.stringify({ title: 'Ancien nom' }) })
+    // M14 — le dossier de session est obligatoire : on en scaffold un.
+    await api(base, '/workspaces', { method: 'POST', body: JSON.stringify({ name: 'renommage' }) })
+    const created = await api(base, '/sessions', { method: 'POST', body: JSON.stringify({ title: 'Ancien nom', workspace: 'renommage' }) })
     const id = created.body.id
 
     const renamed = await api(base, `/sessions/${id}/rename`, { method: 'POST', body: JSON.stringify({ title: '  Nouveau nom  ' }) })
@@ -186,7 +199,7 @@ it(
 
     // Deux appels sûrs en vol EN MÊME TEMPS — aucun 409.
     const [a, b] = await Promise.all([
-      toolCall(base, 'parallele', id, 'read', { path: 'CONTEXT.md' }),
+      toolCall(base, 'parallele', id, 'read', { path: '.workspace/CONTEXT.md' }),
       toolCall(base, 'parallele', id, 'ls', { path: '.' }),
     ])
     expect(a.status).toBe(200)
@@ -205,7 +218,7 @@ it(
     const write = await toolCall(base, 'parallele', id, 'write', { path: 'outputs/x.md', content: 'x' })
     expect(write.status).toBe(200)
     expect(write.body.status).toBe('pending')
-    const blocked = await toolCall(base, 'parallele', id, 'read', { path: 'CONTEXT.md' })
+    const blocked = await toolCall(base, 'parallele', id, 'read', { path: '.workspace/CONTEXT.md' })
     expect(blocked.status).toBe(409)
     expect(blocked.body.error).toContain('dangereux')
 

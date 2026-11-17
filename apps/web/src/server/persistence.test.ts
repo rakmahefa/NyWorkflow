@@ -101,8 +101,13 @@ it(
     const badWs = await api(a, '/sessions', { method: 'POST', body: JSON.stringify({ title: 'X', workspace: 'ailleurs' }) })
     expect(badWs.status).toBe(400)
 
-    // Sans titre : repli numéroté côté serveur.
-    const second = await api(a, '/sessions', { method: 'POST', body: '{}' })
+    // Sans workspace (M14) : refus net — le dossier de session est obligatoire.
+    const orphan = await api(a, '/sessions', { method: 'POST', body: '{}' })
+    expect(orphan.status).toBe(400)
+    expect(orphan.body.error).toContain('obligatoire')
+
+    // Sans titre (mais AVEC workspace) : repli numéroté côté serveur.
+    const second = await api(a, '/sessions', { method: 'POST', body: JSON.stringify({ workspace: 'missions' }) })
     expect(second.status).toBe(201)
     expect(second.body.title).toBe('Session 2')
 

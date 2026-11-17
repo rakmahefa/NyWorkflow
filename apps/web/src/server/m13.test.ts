@@ -120,7 +120,7 @@ it(
     // même un read inoffensif, même après re-dérivation du journal.
     const off = await setSecurity(base, sid, 'no-tools')
     expect(off.body.security).toBe('no-tools')
-    const r1 = await toolCall(base, 'secu', sid, 'read', { path: 'CONTEXT.md' })
+    const r1 = await toolCall(base, 'secu', sid, 'read', { path: '.workspace/CONTEXT.md' })
     expect(r1.body.status).toBe('executed')
     expect(r1.body.outcome.ok).toBe(false)
     expect(r1.body.outcome.code).toBe('tools_disabled')

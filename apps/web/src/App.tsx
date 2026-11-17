@@ -24,11 +24,13 @@ import type { ChatMsg, RequestTrace, SecurityLevel, SessionInfo } from './lib/ty
 import { APP_VERSION } from './lib/version'
 
 const WELCOME =
-  'Bienvenue dans NyWorkflow (v0.4.0). Sessions ICM agentiques — chaque session vit dans un workspace (arbre ICM complet : charte, plan, tâches, journal, décisions, recherche, mémoire) : le modèle charge l’ICM et agit avec ses outils (read, write, ls, glob, mkdir, shell + arrière-plan, websearch, shell_output, shell_kill). Niveau de sécurité par session (demander / accepter / aucun outil), onglet Activité (requêtes + outils, journalisés), logs de profilage dans .nyworkflow/.logs/.'
+  'Bienvenue dans NyWorkflow (v0.5.0). Sessions ICM agentiques — chaque session vit dans SON dossier (obligatoire) : l’ICM complet naît dans le dossier caché .workspace/ (charte, plan, tâches, journal, décisions, recherche, mémoire, livrables) et ses logs de profilage dans .logs/<session>/ au même endroit. Le modèle sait qu’il tourne dans ce harness et agit avec ses outils (read, write, ls, glob, mkdir, shell + arrière-plan, websearch, shell_output, shell_kill). Niveau de sécurité par session (demander / accepter / aucun outil), onglet Activité (requêtes + outils, journalisés), trio de logs global dans .nyworkflow/.logs/.'
 const GATEWAY_DOWN =
   'Passerelle webapi absente — réponses simulées. Elle démarre normalement avec l’application ; ouvrez Paramètres → Passerelle pour le diagnostic, ou vérifiez NYW_WEBAPI_EMBED (0 = désactivée).'
 const MEMORY_FALLBACK =
   'API /sessions indisponible — repli mémoire : cette session ne survivra pas à un rechargement.'
+const SERVER_REQUIRED =
+  'Aucun dossier de session disponible — le dossier étant obligatoire, aucune session n’a été créée : ouvrez « Nouvelle session » pour en lier un (le serveur doit tourner : pnpm dev).'
 const MAX_ROUNDS = 12
 const THINK_KEY = 'nyworkflow.thinkLevel'
 type Mode = 'booting' | 'server' | 'memory'
@@ -104,7 +106,13 @@ export default function App() {
         if (cancelled) return
         if (sessions.length === 0) {
           const { first, welcome } = await createFirstSession()
-          if (cancelled || !first) return
+          if (cancelled) return
+          if (!first) {
+            // M14 — aucun dossier disponible : pas de session orpheline, le
+            // dialogue s'ouvre pour que le pilote en lie une lui-même.
+            setNewSessionOpen(true)
+            return
+          }
           store.addSession({ id: first.id, title: first.title, createdAt: first.createdAt, workspace: first.workspace, security: first.security })
           setActiveId(first.id)
           store.appendMessage(first.id, 'system', welcome)
@@ -142,7 +150,9 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store])
 
-  /** Première session : workspace existant ou scaffold d'un workspace par défaut. */
+  /** Première session (M14) : TOUJOURS liée à un dossier — workspace
+   * existant, sinon scaffold d'un workspace par défaut ; sans dossier
+   * possible, aucune session n'est créée (l'utilisateur en lie une). */
   async function createFirstSession(): Promise<{ first: api.SessionDto | null; welcome: string }> {
     let workspace: string | undefined
     try {
@@ -154,12 +164,9 @@ export default function App() {
     } catch {
       workspace = undefined
     }
+    if (workspace === undefined) return { first: null, welcome: SERVER_REQUIRED }
     const first = await api.createSession(undefined, workspace, loadDefaultSecurity())
-    const welcome =
-      workspace !== undefined
-        ? WELCOME
-        : `${WELCOME}\n(Aucun workspace disponible — la session sera une conversation simple, sans outils.)`
-    return { first, welcome }
+    return { first, welcome: WELCOME }
   }
 
   /** M13 — change le niveau de sécurité de la session active (journal + store). */

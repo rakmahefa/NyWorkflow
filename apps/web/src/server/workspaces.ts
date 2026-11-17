@@ -1,12 +1,16 @@
 /**
  * /workspaces HTTP API — the agentic ICM surface (M11 rewrite, M12
- * workspace-folders + parallel tools + background shells).
+ * workspace-folders + parallel tools + background shells, M14 layout).
  *
  * Mounted by the Vite plugin (dev and preview), same origin as the UI:
  *   GET  /workspaces                        → { workspaces: [{ name, summary?, folder? }] }
- *   POST /workspaces {name}                 → scaffold a fresh agentic workspace → 201
- *   POST /workspaces {name, path}           → M12: register an EXISTING disk folder
- *                                             (no scaffold — the user's tree as-is)
+ *   POST /workspaces {name}                 → scaffold a fresh workspace → 201
+ *                                             (the complete ICM tree inside
+ *                                             its hidden .workspace/)
+ *   POST /workspaces {name, path}           → register an EXISTING disk folder
+ *                                             (M12) — M14: the hidden .workspace/
+ *                                             ICM tree is created INSIDE it
+ *                                             (idempotent, never overwrites)
  *   GET  /workspaces/browse?path=…          → M12: folder browser (dirs only, read-only)
  *   GET  /workspaces/:name/icm              → { name, tree, contexts, system } —
  *                                             the ICM loaded toward the model
@@ -17,13 +21,19 @@
  *   POST /workspaces/:name/tool/decision    → resolve a paused call (M5 pattern):
  *                                             { sessionId, decision: approve|refuse }
  *
+ * M14 ground rules (pilot-driven, after the first uploaded logs):
+ *   - the session folder (the workspace root) is the pilot's project; the
+ *     agent's ICM lives in the HIDDEN .workspace/ inside it, and its
+ *     profiling logs in .logs/<sessionId>/ — both skip the ICM tree walk;
+ *   - every tool call, result and decision lands BOTH in the global
+ *     activity log (<home>/.logs/activity.jsonl) AND in the session's own
+ *     trio inside its folder (the pilot zips and uploads that).
+ *
  * M13 ground rules:
  *   - the session's SECURITY LEVEL (from its journal) is the gate:
  *     'no-tools' → every call is an executed refusal (tools_disabled),
  *     'accept'   → dangerous calls (write, shell) run without approval,
  *     'ask'      → the approval pause of M11/M12;
- *   - every tool call, result and decision lands in the activity log
- *     (<home>/.logs/activity.jsonl) — the pilot's profiling trio.
  *
  * M12 ground rules:
  *   - a workspace is a NAME resolved to a root: a sub-folder of the registry
@@ -46,13 +56,13 @@ import { homedir } from 'node:os'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isAbsolute, join, dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { buildIcmSystemPrompt, loadIcm, scaffoldAgenticWorkspace } from '@nyworkflow/core'
+import { buildIcmSystemPrompt, ensureIcmTree, ICM_DIR, loadIcm, scaffoldAgenticWorkspace } from '@nyworkflow/core'
 import { checkToolCall, executeToolCall, isDangerous, refusedByUser, toolsDisabledRefusal, ShellJobRegistry } from '@nyworkflow/tools'
 import type { ToolCall, ToolOutcome, ToolRefusal } from '@nyworkflow/tools'
 import { resolveInScope } from '@nyworkflow/tools'
 import { appendEvent, deriveSession, isSessionId, journalPath, pendingToolCalls, readEvents } from '@nyworkflow/session'
 import type { SessionEvent } from '@nyworkflow/session'
-import type { Profiler } from './logs.ts'
+import { sessionProfiler, type Profiler } from './logs.ts'
 
 /** One workspace as listed. */
 export interface WorkspaceSummaryDto {
@@ -228,6 +238,19 @@ export async function workspaceExists(dir: string, name: string): Promise<boolea
   return (await readManifest(dir)).workspaces.some((w) => w.name === name)
 }
 
+/** Resolves a workspace name to its root folder — registry sub-folder first,
+ * then the manifest entry (M12); undefined when it resolves to nothing.
+ * Exported for the sessions handler (M14): per-session logs live in the
+ * session folder, which only the workspaces registry knows how to reach. */
+export async function resolveWorkspaceRoot(dir: string, name: string): Promise<string | undefined> {
+  if (!isWorkspaceName(name)) return undefined
+  const registryRoot = join(dir, name)
+  if (existsSync(registryRoot) && statSync(registryRoot).isDirectory()) return registryRoot
+  const entry = (await readManifest(dir)).workspaces.find((w) => w.name === name)
+  if (entry !== undefined && existsSync(entry.path) && statSync(entry.path).isDirectory()) return entry.path
+  return undefined
+}
+
 export function createWorkspacesHandler(
   options: WorkspacesHandlerOptions,
 ): (req: IncomingMessage, res: ServerResponse) => void {
@@ -238,29 +261,31 @@ export function createWorkspacesHandler(
   /** Background shell jobs of this server (M12). */
   const jobs = new ShellJobRegistry()
 
-  /** The workspace root, or 404 — registry sub-folder first, then manifest. */
+  /** The workspace root, or 404 — resolveWorkspaceRoot under the hood. */
   async function rootOf(name: string): Promise<string> {
-    if (!isWorkspaceName(name)) throw notFound('workspace inconnu')
-    const registryRoot = join(dir, name)
-    if (existsSync(registryRoot) && statSync(registryRoot).isDirectory()) return registryRoot
-    const entry = (await readManifest(dir)).workspaces.find((w) => w.name === name)
-    if (entry !== undefined && existsSync(entry.path) && statSync(entry.path).isDirectory()) return entry.path
-    throw notFound('workspace inconnu')
+    const root = await resolveWorkspaceRoot(dir, name)
+    if (root === undefined) throw notFound('workspace inconnu')
+    return root
   }
 
-  /** First heading of the root CONTEXT.md (≤ 100 chars), if any. */
+  /** First heading of the charter CONTEXT.md (≤ 100 chars), if any — the
+   * M14 `.workspace/CONTEXT.md` first, the legacy root one otherwise. */
   async function summaryOf(root: string): Promise<string | undefined> {
-    try {
-      const raw = await readFile(join(root, 'CONTEXT.md'), 'utf8')
-      const heading = raw
-        .split('\n')
-        .map((l) => l.trim())
-        .find((l) => l.startsWith('# '))
-      if (heading === undefined) return undefined
-      return heading.slice(2).trim().slice(0, 100)
-    } catch {
-      return undefined
+    const candidates = [join(root, ICM_DIR, 'CONTEXT.md'), join(root, 'CONTEXT.md')]
+    for (const file of candidates) {
+      try {
+        const raw = await readFile(file, 'utf8')
+        const heading = raw
+          .split('\n')
+          .map((l) => l.trim())
+          .find((l) => l.startsWith('# '))
+        if (heading === undefined) continue
+        return heading.slice(2).trim().slice(0, 100)
+      } catch {
+        continue // absent/unreadable charter — try the next candidate
+      }
     }
+    return undefined
   }
 
   async function list(): Promise<WorkspaceSummaryDto[]> {
@@ -296,7 +321,9 @@ export function createWorkspacesHandler(
     if (name === '' || !isWorkspaceName(name)) throw badRequest('nom de workspace attendu (lettres, chiffres, . _ -, sans espace)')
 
     if (path !== '') {
-      // M12 — register the user's own folder: no scaffold, no copy, as-is.
+      // M12 — register the user's own folder; M14 — the hidden .workspace/
+      // ICM tree is created INSIDE it (idempotent: an existing .workspace is
+      // the agent's living memory and is never overwritten).
       if (!isAbsolute(path)) throw badRequest('chemin absolu attendu pour enregistrer un dossier existant')
       let stats
       try {
@@ -313,9 +340,16 @@ export function createWorkspacesHandler(
       if (existsSync(join(dir, name)) || (await readManifest(dir)).workspaces.some((w) => w.name === name)) {
         throw badRequest(`le workspace « ${name} » existe déjà`)
       }
+      let icmStatus: 'created' | 'present'
+      try {
+        icmStatus = await ensureIcmTree(path)
+      } catch (err) {
+        throw badRequest(err instanceof Error ? err.message : String(err))
+      }
       const next = { workspaces: [...(await readManifest(dir)).workspaces, { name, path }] }
       await writeManifest(dir, next)
       profiler?.activity({ kind: 'workspace.registered', workspace: name, path })
+      profiler?.activity({ kind: 'icm.tree', workspace: name, path, status: icmStatus, dir: '.workspace' })
       const icm = await loadIcm(path)
       return { name, tree: icm.tree, folder: true }
     }
@@ -325,7 +359,7 @@ export function createWorkspacesHandler(
     } catch (err) {
       throw badRequest(err instanceof Error ? err.message : String(err))
     }
-    profiler?.activity({ kind: 'workspace.scaffolded', workspace: name, tree: 'complet (M13)' })
+    profiler?.activity({ kind: 'workspace.scaffolded', workspace: name, tree: 'complet (M14) — .workspace/' })
     const icm = await loadIcm(join(dir, name))
     return { name, tree: icm.tree }
   }
@@ -437,6 +471,9 @@ export function createWorkspacesHandler(
 
     const root = await rootOf(name)
     const { file, security } = await sessionJournal(name, sessionId)
+    // M14 — the session's own trio, inside its folder: every call and
+    // result lands there too (the pilot zips and uploads that folder).
+    const sp = sessionProfiler(root, sessionId)
     if (busy.has(sessionId)) throw new HttpError(409, 'une décision d\'outil est déjà en cours pour cette session')
     if (pendingDangerous(await readEvents(file)) !== undefined) {
       throw new HttpError(409, 'un appel d\'outil dangereux est déjà en attente — décidez-le (POST /tool/decision) avant d\'en lancer un autre')
@@ -449,9 +486,11 @@ export function createWorkspacesHandler(
     if (security === 'no-tools') {
       await appendEvent(file, { type: 'tool.call', at: nowIso(), tool: call.tool, args: call.args, callId })
       profiler?.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security })
+      sp.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security })
       const disabled = toolsDisabledRefusal(call.tool)
       await appendEvent(file, { type: 'tool.result', at: nowIso(), ok: false, summary: disabled.summary, callId })
       profiler?.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: disabled.code, security })
+      sp.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: disabled.code, security })
       return { status: 'executed', callId, outcome: disabled }
     }
 
@@ -460,10 +499,12 @@ export function createWorkspacesHandler(
     const check = await checkToolCall(root, call)
     await appendEvent(file, { type: 'tool.call', at: nowIso(), tool: call.tool, args: call.args, callId })
     profiler?.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security })
+    sp.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security })
     if (!check.ok) {
       const refusal = check.refusal as ToolRefusal
       await appendEvent(file, { type: 'tool.result', at: nowIso(), ok: false, summary: refusal.summary, callId })
       profiler?.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: refusal.code })
+      sp.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: refusal.code })
       return { status: 'executed', callId, outcome: refusal }
     }
     if (check.approval && security === 'ask') {
@@ -483,6 +524,7 @@ export function createWorkspacesHandler(
       ...(outcome.ok ? { data: outcome.data } : {}),
       callId,
     })
+    const ms = Date.now() - started
     profiler?.activity({
       kind: 'tool.result',
       sessionId,
@@ -492,8 +534,20 @@ export function createWorkspacesHandler(
       ok: outcome.ok,
       code: outcome.ok ? undefined : outcome.code,
       security,
-      ms: Date.now() - started,
+      ms,
     })
+    sp.activity({
+      kind: 'tool.result',
+      sessionId,
+      workspace: name,
+      tool: call.tool,
+      callId,
+      ok: outcome.ok,
+      code: outcome.ok ? undefined : outcome.code,
+      security,
+      ms,
+    })
+    sp.engine({ kind: 'tool.exec', sessionId, tool: call.tool, callId, ok: outcome.ok, ms })
     return { status: 'executed', callId, outcome }
   }
 
@@ -506,6 +560,7 @@ export function createWorkspacesHandler(
 
     const root = await rootOf(name)
     const { file, events } = await sessionJournal(name, sessionId)
+    const sp = sessionProfiler(root, sessionId)
     if (busy.has(sessionId)) throw new HttpError(409, 'une décision d\'outil est déjà en cours pour cette session')
     const call = pendingDangerous(events)
     if (call === undefined) throw new HttpError(409, 'aucun appel d\'outil en attente pour cette session')
@@ -525,6 +580,16 @@ export function createWorkspacesHandler(
         ...(callId !== '' ? { callId } : {}),
       })
       profiler?.activity({
+        kind: 'tool.decision',
+        sessionId,
+        workspace: name,
+        decision,
+        tool: call.tool,
+        ...(callId !== '' ? { callId } : {}),
+        ok: outcome.ok,
+        ms: Date.now() - started,
+      })
+      sp.activity({
         kind: 'tool.decision',
         sessionId,
         workspace: name,

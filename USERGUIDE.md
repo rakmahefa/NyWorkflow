@@ -124,23 +124,25 @@ Une chaîne brute n'a pas de date : rien ne s'affiche pour elle (on ne peut pas 
 
 ## 3. Tour de l'interface
 
-Une seule surface : **les sessions** — et chaque session est un agent ICM qui vit dans son workspace. La barre latérale **groupe les sessions par dossier workspace** (groupes repliables — l'état est retenu, compteur de sessions, bouton « + » par groupe pour démarrer directement dedans).
+Une seule surface : **les sessions** — et chaque session est un agent ICM qui vit dans **son dossier** (obligatoire). La barre latérale **groupe les sessions par dossier workspace** (groupes repliables — l'état est retenu, compteur de sessions, bouton « + » par groupe pour démarrer directement dedans).
 
-### Nouvelle session — le dialogue
+### Nouvelle session — le dialogue (dossier OBLIGATOIRE, M14)
 
-Le bouton **Nouvelle session** (ou `/new`) ouvre un dialogue avec **trois onglets** pour lier le contexte :
+Le bouton **Nouvelle session** (ou `/new`) ouvre un dialogue avec **trois onglets** pour lier **le dossier de la session** — obligatoire : plus de session sans dossier, l'ICM et les logs de la session vivent dedans.
 
 - **Existant** — un workspace déjà connu (ceux d'`examples/workspaces/`, ou votre dossier via `NYW_WORKSPACES`, ou un dossier déjà enregistré — badge « dossier ») ;
-- **Créer** — un workspace neuf : la charte agentique est posée d'office (voir §5) ;
-- **Dossier du disque** (M12) — **l'un de vos propres dossiers**, navigué (chemin collable, dossiers seuls, départ au home) puis enregistré **tel quel** : l'arbre et les `CONTEXT.md` existants deviennent l'ICM, **rien n'est créé dedans**. L'inscription vit dans `examples/workspaces/workspaces.json` (une donnée — éditable à la main, relue à chaud).
+- **Créer** — un workspace neuf : l'ICM complète naît dans son `.workspace/` caché (voir §5) ;
+- **Dossier du disque** (M12) — **l'un de vos propres dossiers**, navigué (chemin collable, dossiers seuls, départ au home) puis enregistré : le dossier caché **`.workspace/`** (l'ICM de l'agent) y est créé — **vos fichiers restent intacts**. L'inscription vit dans `examples/workspaces/workspaces.json` (une donnée — éditable à la main, relue à chaud).
 
 Le dernier workspace utilisé est retenu pour la prochaine fois. Le dialogue choisit aussi le **niveau de sécurité** de la session (voir ci-dessous — le défaut se règle dans les Paramètres, et le nom du workspace créé se propose automatiquement à partir du titre). Le bandeau sous l'en-tête rappelle le workspace de la session active (`ICM · nom — API v1beta`) porte le **sélecteur de sécurité** et les **onglets Conversation / Activité**.
+
+> Sans serveur (API indisponible), aucune session ne peut être créée : le dossier étant obligatoire, le dialogue affiche « Serveur requis » — lancez `pnpm dev` puis réessayez.
 
 ### La boucle agentique
 
 À chaque message :
 
-1. **L'ICM part vers le modèle** — l'arborescence du workspace et tous ses `CONTEXT.md` sont assemblés en prompt système, **rechargé à chaque tour** (l'arbre grandit pendant que la session vit) — avec la **méthode agentique** : quand paralléliser, quand détacher une commande, quand explorer sans demander.
+1. **L'ICM part vers le modèle — et il sait OÙ il tourne** — le prompt système (M14) commence par l'identité : « Tu es un agent exécuté DANS le harness NyWorkflow — pas un chatbot », **agir = appeler un outil** (ses `tool_calls` sont réels, exécutés dans le dossier de la session), la racine est le projet du pilote, `.workspace/` est son ICM, `.logs/` est interdit. Puis l'arbre (`.workspace/` + le projet visible) et les `CONTEXT.md` de l'ICM, **rechargés à chaque tour** — avec la consigne de **ne pas relire** ce qui est déjà chargé (leçon des premiers logs réels : le modèle gaspillait 10 tool_calls à relire la charte) et la **méthode agentique** : quand paralléliser, quand détacher une commande, quand explorer sans demander.
 2. **Le modèle réfléchit visiblement** — sa réflexion (thinking) arrive **en flux** dans un bloc repliable « Réflexion » au-dessus de la réponse : ouvert pendant qu’il coule, replié d’un rang une fois la réponse partie, rouvrable d’un clic (le nombre de caractères s’affiche). Le **niveau de réflexion** se règle dans l’en-tête (Auto = défaut du modèle, ou 0–4 — envoyé comme suffixe `@think=N` à la passerelle) ; il est mémorisé et visible dans l’onglet Activité.
 3. **Le modèle agit avec ses outils** — `tool_calls` standard (façon OpenAI) : il lit, liste, cherche, crée des dossiers, propose des écritures. Les appels **indépendants d’un même tour partent en parallèle** ; l’activité apparaît **dans le flux du chat** (lignes dépliables : `read « CONTEXT.md » — 1726 caractères`, vert quand ça réussit, rouge au refus — cliquez pour voir les arguments et le résultat exact renvoyé au modèle).
 4. **Vous décidez — selon le niveau de sécurité (M13)** — trois niveaux par session, dans le bandeau, modifiables **en direct** (le journal garde chaque changement) :
@@ -149,7 +151,7 @@ Le dernier workspace utilisé est retenu pour la prochaine fois. Le dialogue cho
    - **Aucun outil** — l'ICM charge toujours (le modèle connaît le contexte), mais **aucun outil n'est déclaré ni exécuté** : conversation pure sur le workspace. Un appel malgré tout est refusé côté serveur par un refus **tracé** (`tools_disabled`) — le modèle le voit et s'adapte.
 5. **Vous gardez la main** — le bouton **Stop** (à la place de l’envoi pendant un tour) interrompt proprement : le texte déjà reçu est conservé et journalisé, une approbation en attente est refusée. Le composer reste **actif** pendant un tour : un message tapé à ce moment part **dès la fin du tour** (message « mis en file ») — jamais perdu.
 
-Les **neuf outils** (tous fonctionnels, périmètre = la racine du workspace, garde lexicale **et** realpath — un symlink ne s’échappe pas) :
+Les **neuf outils** (tous fonctionnels, périmètre = la racine du dossier de session, garde lexicale **et** realpath — un symlink ne s’échappe pas) :
 
 | Outil | Arguments | Exécution |
 |---|---|---|
@@ -208,47 +210,40 @@ Le bouton **Paramètres** (engrenage, bas de la barre latérale) ouvre une modal
 - **Passerelle webapi** — le diagnostic vivant de la passerelle : état, version, modèle par défaut, **cookies présents/absents** (avec le chemin du fichier), session effective `/u/N` du compte actif, `bl` découvert, proxy configuré, et le **journal amont** — les derniers tours avec leur résultat : `ok`, ou l'erreur **typée** (`authentication`, `http 500`, `divergence`…) avec la durée et le nombre d'essais. Survolez un badge d'erreur pour le message complet. Depuis M9, deux tableaux de plus :
   - **Comptes & sessions** — un compte par ligne : libellé (du manifeste `accounts.json`) ou nom de fichier, session `/u/N`, validité des cookies, et **expiration vue d'avance** (« dans 6 j » en orange, « expiré depuis 3 j » en rouge) ;
   - **Statistiques par compte** — tours, réussites, échecs et dernier tour par compte (fenêtre du journal amont, 50 tours).
-- **Profiling & logs** (M13) — le trio de journaux JSONL qui pousse dans `.nyworkflow/.logs/` : `engine.jsonl` (démarrages, passerelle, **chaque requête HTTP** de l'app, tours amont avec modèle/durée/essais/erreur), `session.jsonl` (cycle de vie : création, messages, renommages, forks, suppressions, changements de sécurité) et `activity.jsonl` (chaque appel d'outil, chaque résultat, chaque décision humaine, chaque tour terminé). Lignes et tailles d'un coup d'œil, queue de 50 lignes d'un clic, rotation automatique à 8 Mio (trois rotations gardées). **Copiez le dossier dans le dépôt** pour partager un profil avec le développement — c'est fait pour améliorer et peaufiner le harness.
+- **Profiling & logs** (M13) — le trio de journaux JSONL qui pousse dans `.nyworkflow/.logs/` (vue engine globale) : `engine.jsonl` (démarrages, passerelle, **chaque requête HTTP** de l'app, tours amont avec modèle/durée/essais/erreur), `session.jsonl` (cycle de vie : création, messages, renommages, forks, suppressions, changements de sécurité) et `activity.jsonl` (chaque appel d'outil, chaque résultat, chaque décision humaine, chaque tour terminé). Lignes et tailles d'un coup d'œil, queue de 50 lignes d'un clic, rotation automatique à 8 Mio (trois rotations gardées). **Et depuis la M14, chaque session a SON trio dans son dossier** : `<dossier de la session>/.logs/<sessionId>/` (mêmes trois journaux, l'histoire complète de CETTE session — cycle de vie, chat, tours, tool_calls) ; supprimer la session garde son `.logs/`, c'est l'histoire durable. **Zippez et copiez ces dossiers dans le dépôt** pour partager un profil avec le développement — c'est fait pour améliorer et peaufiner le harness.
 - **À propos** — versions et lien vers ce guide.
 
 `Échap` ou le bouton ✕ ferment la modale.
 
 ## 5. Créer son propre workspace
 
-Un workspace = **un dossier libre**. Trois portes :
+Un workspace = **un dossier** — le terrain de la session. Trois portes :
 
 - **scaffold** — l'onglet **Créer** du dialogue, ou `curl -s -X POST http://127.0.0.1:3080/workspaces -H 'content-type: application/json' -d '{"name": "missions"}'` ;
-- **dossier du disque** (M12) — l'onglet **Dossier du disque** du dialogue (navigateur intégré), ou `curl -s -X POST http://127.0.0.1:3080/workspaces -H 'content-type: application/json' -d '{"name": "mes-docs", "path": "/home/moi/mes-documents"}'` — le dossier est enregistré **tel quel** (aucun fichier créé) dans `examples/workspaces/workspaces.json` ;
+- **dossier du disque** (M12) — l'onglet **Dossier du disque** du dialogue (navigateur intégré), ou `curl -s -X POST http://127.0.0.1:3080/workspaces -H 'content-type: application/json' -d '{"name": "mes-docs", "path": "/home/moi/mes-documents"}'` — le dossier caché `.workspace/` (l'ICM de l'agent) y est créé, idempotent, vos fichiers intacts ; inscription dans `examples/workspaces/workspaces.json` ;
 - **dossier de workspaces entier** — `NYW_WORKSPACES=/chemin/vers/mes/workspaces pnpm dev` (le registre devient votre dossier).
 
-Avec le scaffold (M13), l'**ICM complète** est posée d'office — 14 fichiers prêts à l'emploi, façonnés par l'état de l'art (contrats de rôles par dossier façon Model Workspace Protocol, quatuor plan/tâches/journal/décisions des scratchpads structurés, mémoire cœur/leçons à la MemGPT, registre de sources pour la traçabilité) :
+Avec le scaffold (M14), l'**ICM complète** naît dans le dossier caché **`.workspace/`** — 14 fichiers prêts à l'emploi, façonnés par l'état de l'art (contrats de rôles par dossier façon Model Workspace Protocol, quatuor plan/tâches/journal/décisions des scratchpads structurés, mémoire cœur/leçons à la MemGPT, registre de sources pour la traçabilité) — pendant que **votre projet reste propre à la racine** (le pattern des dossiers cachés, comme `.git` ou `.claude`) :
 
 ```
-missions/
-├── CONTEXT.md          # la charte : Mission, Méthode ICM, Carte de l'arbre, Outils, Règles
-├── inbox/CONTEXT.md    # vos entrées — la boîte qui se vide
-├── notes/              # l'atelier : le travail vivant
-│   ├── CONTEXT.md      #   le rôle du dossier
-│   ├── plan.md         #   le plan vivant (objectif, étapes, statut)
-│   ├── tasks.md        #   la file de tâches (à faire / en cours / fait)
-│   ├── journal.md      #   le journal de travail, chronologique
-│   └── decisions.md    #   les décisions, ADR léger (contexte, choix, raison)
-├── research/           # les lectures du web, nettoyées
-│   ├── CONTEXT.md
-│   └── sources.md      #   le registre des sources (requête/URL, date, fait clé)
-├── memory/             # la mémoire durable de l'agent
-│   ├── CONTEXT.md
-│   ├── core.md         #   mémoire vive : ce qui est toujours vrai ici
-│   └── lessons.md      #   leçons apprises — à ne pas refaire
-├── outputs/CONTEXT.md  # les livrables finaux, prêts à être lus
-└── archive/CONTEXT.md  # le travail terminé, sorti du chemin
+mon-projet/                    # le dossier de session — votre terrain
+├── .workspace/                # L'ICM complet de l'agent (caché)
+│   ├── CONTEXT.md             #   la charte : Mission, Méthode ICM, Carte, Outils, Règles
+│   ├── inbox/CONTEXT.md       #   vos entrées — la boîte qui se vide
+│   ├── notes/                 #   l'atelier : plan, tâches, journal, décisions
+│   ├── research/              #   les lectures du web + registre des sources
+│   ├── memory/                #   mémoire durable (core/lessons, façon MemGPT)
+│   ├── outputs/CONTEXT.md     #   les livrables finaux
+│   └── archive/CONTEXT.md     #   le travail terminé
+├── .logs/<sessionId>/         # le trio de profilage DE chaque session (M14)
+└── …vos fichiers à vous        # le projet du pilote — l'agent y travaille
 ```
 
-**Éditez le `CONTEXT.md`** : c'est la première chose que le modèle lit à chaque tour. Remplacez la section Mission par l'objectif réel du workspace, ajustez les conventions — tout le reste (arbre, outils, approbations, méthode agentique) est déjà enseigné au modèle par la charte et le prompt système. Un dossier enregistré sans `CONTEXT.md` reste un workspace valide : l'ICM porte son arbre, et le modèle peut y écrire la charte lui-même (avec votre approbation — c'est un `write`).
+**Éditez le `.workspace/CONTEXT.md`** : c'est la première chose que le modèle lit à chaque tour. Remplacez la section Mission par l'objectif réel du workspace, ajustez les conventions — tout le reste (arbre, outils, approbations, méthode agentique) est déjà enseigné au modèle par la charte et le prompt système. Une seconde session sur le même dossier **continue la mémoire vivante** : le `.workspace/` existant n'est jamais réécrit.
 
-Le chargeur lit **7 `CONTEXT.md`** avec ce scaffold (racine + six dossiers — un de marge sous le plafond de 8, 32 Kio chacun) : le modèle voit toute la carte dès le premier tour. L'arbre est **libre** : le modèle crée les dossiers dont il a besoin (`mkdir`), et un sous-dossier qui acquiert un rôle mérite son propre `CONTEXT.md` (relu comme les autres, jusqu'à 8 fichiers de 32 Kio). Vos propres dossiers hors du repo : `NYW_WORKSPACES=/chemin/vers/mes/workspaces pnpm dev`.
+Le chargeur lit **7 `CONTEXT.md`** avec ce scaffold (racine + six dossiers — un de marge sous le plafond de 8, 32 Kio chacun) : le modèle voit toute la carte dès le premier tour. L'arbre est **libre** : le modèle crée les dossiers dont il a besoin (`mkdir` — dans `.workspace/` pour son organisation, à la racine pour vos livrables), et un sous-dossier qui acquiert un rôle mérite son propre `CONTEXT.md` (relu comme les autres, jusqu'à 8 fichiers de 32 Kio). Les workspaces d'avant M14 (charte à la racine) se chargent comme avant — repli legacy automatique.
 
-Exemple complet et commenté : `examples/workspaces/exemple-agentique/`.
+Exemple complet et commenté : `examples/workspaces/exemple-agentique/.workspace/`.
 
 ## 6. La passerelle webapi
 

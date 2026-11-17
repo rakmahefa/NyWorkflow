@@ -127,7 +127,7 @@ test('Paramètres : défaut de sécurité des nouvelles sessions + carte Profili
   await page.locator('[data-test="settings-close"]').click()
 })
 
-test('le scaffold complet naît avec le workspace, tout .md prêt', async ({ page }) => {
+test('le scaffold complet naît avec le workspace, tout .md prêt DANS .workspace/', async ({ page }) => {
   await page.goto('/')
   const name = `e2e-scaffold-${Date.now().toString(36)}`
   const title = `Scaffold complet ${name}`
@@ -143,7 +143,8 @@ test('le scaffold complet naît avec le workspace, tout .md prêt', async ({ pag
   await expect(page.locator('[data-test="ws-banner"]')).toContainText(name)
   SCAFFOLDED.push(name)
 
-  // L'arbre complet existe sur le disque : 14 fichiers, chaque template prêt.
+  // L'arbre complet existe sur le disque, DANS le dossier caché .workspace/ :
+  // 14 fichiers, chaque template prêt — la racine du projet reste propre.
   const root = join(import.meta.dirname, '../../../examples/workspaces', name)
   for (const rel of [
     'CONTEXT.md',
@@ -161,14 +162,24 @@ test('le scaffold complet naît avec le workspace, tout .md prêt', async ({ pag
     'outputs/CONTEXT.md',
     'archive/CONTEXT.md',
   ]) {
-    expect(existsSync(join(root, rel)), rel).toBe(true)
+    expect(existsSync(join(root, '.workspace', rel)), rel).toBe(true)
   }
-  expect(readFileSync(join(root, 'memory', 'core.md'), 'utf8')).toContain('Mémoire vive')
+  expect(existsSync(join(root, 'CONTEXT.md'))).toBe(false) // rien à la racine du projet
+  expect(readFileSync(join(root, '.workspace', 'memory', 'core.md'), 'utf8')).toContain('Mémoire vive')
 
-  // L'ICM charge les 7 CONTEXT.md : le modèle voit toute la carte.
+  // La session liée a son trio de logs dans le dossier : .logs/<sessionId>/.
+  const sessionsList = await (await page.request.get('/sessions')).json()
+  const mine = sessionsList.sessions.find((s: { workspace?: string }) => s.workspace === name)
+  expect(mine).toBeDefined()
+  expect(existsSync(join(root, '.logs', mine.id, 'session.jsonl'))).toBe(true)
+
+  // L'ICM charge les 7 CONTEXT.md : le modèle voit toute la carte, et sait
+  // qu'il tourne dans le harness (M14).
   const icm = await page.request.get(`/workspaces/${name}/icm`)
   expect(icm.ok()).toBe(true)
   const icmBody = await icm.json()
   expect(icmBody.contexts).toHaveLength(7)
-  expect(icmBody.system).toContain('notes/plan.md')
+  expect(icmBody.system).toContain('harness NyWorkflow')
+  expect(icmBody.system).toContain('.workspace/')
+  expect(icmBody.system).toContain('.workspace/notes/plan.md')
 })

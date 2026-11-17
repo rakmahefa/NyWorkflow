@@ -1,18 +1,21 @@
 /**
- * Profiling logs (M13) — three JSONL files under `<home>/.logs/`, the
- * pilot's observability trio, meant to be uploaded to the repo to improve
- * and refine the harness:
+ * Profiling logs (M13, per-session M14) — three JSONL files, the pilot's
+ * observability trio, meant to be uploaded to the repo to improve and
+ * refine the harness. TWO homes:
  *
- *   engine.jsonl   — the engine itself: server boot, gateway status,
- *                    every /sessions + /workspaces HTTP request (method,
- *                    path, status, ms), internal errors, and the gateway's
- *                    upstream turns (model, attempts, ms, account, error).
- *   session.jsonl  — session lifecycle: created (workspace, security),
- *                    renamed, forked, deleted, security changed, chat
- *                    events (sizes), completed turns.
- *   activity.jsonl — the agent's activity: every tool call and result
- *                    (callId, ok, summary, ms), human decisions, workspace
- *                    operations (scaffold, register).
+ *   global  <home>/.logs/                  — the engine-wide trio (M13):
+ *     engine.jsonl   — server boot, gateway status, every /sessions +
+ *                     /workspaces HTTP request (method, path, status, ms),
+ *                     internal errors, the gateway's upstream turns;
+ *     session.jsonl  — session lifecycle: created, renamed, forked,
+ *                     deleted, security changed, chat events (sizes);
+ *     activity.jsonl — every tool call and result (callId, ok, ms),
+ *                     human decisions, workspace operations.
+ *
+ *   session <folder>/.logs/<sessionId>/    — the SAME trio, per session,
+ *     INSIDE the session's folder (M14, pilot-driven): each session's
+ *     full story (its turns, its chat, its tool activity) is
+ *     self-contained in its own folder, ready to be zipped and uploaded.
  *
  * One JSON object per line: `{ "at": ISO, "kind": "…", …payload }` —
  * append-only like the journals, never a source of truth, never fatal:
@@ -163,6 +166,27 @@ export function createProfiler(dir: string): Profiler {
       }
     },
   }
+}
+
+/** Per-session profilers (M14) — `<sessionFolder>/.logs/<sessionId>/`,
+ * cached per (folder, session) so a turn's many writes reuse the logs. */
+const sessionProfilers = new Map<string, Profiler>()
+
+/** The per-session trio inside the session's own folder. */
+export function sessionProfiler(sessionFolder: string, sessionId: string): Profiler {
+  const key = `${sessionFolder}::${sessionId}`
+  let p = sessionProfilers.get(key)
+  if (p === undefined) {
+    p = createProfiler(join(sessionFolder, '.logs', sessionId))
+    sessionProfilers.set(key, p)
+  }
+  return p
+}
+
+/** Drops the cached profiler of a deleted session (the files stay — they
+ * are the session's durable story, zipped and uploaded by the pilot). */
+export function dropSessionProfiler(sessionFolder: string, sessionId: string): void {
+  sessionProfilers.delete(`${sessionFolder}::${sessionId}`)
 }
 
 /** GET /logs → listing; GET /logs/:name?tail=N → the last lines. Read-only. */

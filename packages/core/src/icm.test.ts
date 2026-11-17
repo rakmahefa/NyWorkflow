@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import {
   buildIcmSystemPrompt,
+  ensureIcmTree,
   loadIcm,
   renderTree,
   scaffoldAgenticWorkspace,
@@ -11,6 +12,7 @@ import {
   scaffoldFiles,
   walkTree,
   workspaceName,
+  ICM_DIR,
   SCAFFOLD_FILES,
   SCAFFOLD_FOLDERS,
   CONTEXT_MAX_CHARS,
@@ -19,6 +21,8 @@ import {
 
 // M11 — le pivot ICM : l'arbre libre chargé vers le modèle, les CONTEXT.md
 // lus racine d'abord, le prompt système assemblé, et le scaffold agentique.
+// M14 — l'ICM vit dans le dossier caché .workspace/ du dossier de session :
+// scaffold, ensure idempotent, chargement .workspace d'abord + projet après.
 
 const dirs: string[] = []
 
@@ -71,11 +75,14 @@ describe('walkTree + renderTree', () => {
     mkdirSync(join(root, '.git'))
     mkdirSync(join(root, 'node_modules'))
     mkdirSync(join(root, 'outputs'))
+    mkdirSync(join(root, '.logs', 'une-session'), { recursive: true })
     writeFileSync(join(root, '.git', 'HEAD'), 'x')
     writeFileSync(join(root, 'node_modules', 'pkg.js'), 'x')
     writeFileSync(join(root, 'outputs', '.gitkeep'), '')
+    writeFileSync(join(root, '.logs', 'une-session', 'activity.jsonl'), '{}\n')
     writeFileSync(join(root, '.env.local'), 'SECRET=1')
 
+    // M14 — .logs (les logs par session) est exclu de l'arbre, comme .git.
     const { entries } = await walkTree(root)
     expect(entries.map((e) => e.path)).toEqual(['outputs', 'outputs/.gitkeep', '.env.local'])
   })
@@ -87,8 +94,28 @@ describe('walkTree + renderTree', () => {
   })
 })
 
-describe('loadIcm', () => {
-  it('arbre + CONTEXT.md racine d’abord, puis imbriqués en ordre de chemin', async () => {
+describe('loadIcm — layout M14 (.workspace/)', () => {
+  it('ICM dans .workspace/, projet visible à côté : contexts de l’ICM, arbre des deux', async () => {
+    const root = tmp()
+    mkdirSync(join(root, ICM_DIR, 'notes'), { recursive: true })
+    writeFileSync(join(root, ICM_DIR, 'CONTEXT.md'), '# Charte ICM')
+    writeFileSync(join(root, ICM_DIR, 'notes', 'CONTEXT.md'), '# Notes ICM')
+    writeFileSync(join(root, 'projet.md'), '# Le projet du pilote')
+    writeFileSync(join(root, 'CONTEXT.md'), '# CONTEXT racine du projet (PAS chargé comme charte)')
+
+    const icm = await loadIcm(root)
+    expect(icm.icmDir).toBe(true)
+    // Les contexts viennent de .workspace/ — la charte de l'agent, pas celle du projet.
+    expect(icm.contexts.map((c) => c.path)).toEqual(['', 'notes/CONTEXT.md'])
+    expect(icm.contexts[0]?.content).toBe('# Charte ICM')
+    // L'arbre montre l'ICM caché (racine .workspace/ + sous-arbre) ET le projet.
+    expect(icm.tree).toContain(`${ICM_DIR}/\n├── notes/`)
+    expect(icm.tree).toContain('├── CONTEXT.md')
+    expect(icm.tree).toContain('projet.md')
+    expect(icm.tree).toContain('CONTEXT.md')
+  })
+
+  it('legacy (avant M14) : sans .workspace/, contexts à la racine', async () => {
     const root = tmp()
     mkdirSync(join(root, 'notes'))
     mkdirSync(join(root, 'research', 'ddg'), { recursive: true })
@@ -98,8 +125,7 @@ describe('loadIcm', () => {
     writeFileSync(join(root, 'research', 'ddg', 'CONTEXT.md'), '# DDG')
 
     const icm = await loadIcm(root)
-    expect(icm.name).toBe(root.split('/').pop() as string)
-    expect(icm.tree).toContain('CONTEXT.md')
+    expect(icm.icmDir).toBe(false)
     expect(icm.contexts.map((c) => c.path)).toEqual(['', 'notes/CONTEXT.md', 'research/CONTEXT.md', 'research/ddg/CONTEXT.md'])
     expect(icm.contexts[0]?.content).toBe('# Racine')
   })
@@ -121,74 +147,99 @@ describe('loadIcm', () => {
   })
 })
 
-describe('buildIcmSystemPrompt', () => {
-  it('porte la méthode, l’arbre, les CONTEXT.md et les conventions', async () => {
+describe('buildIcmSystemPrompt — identité harness (M14)', () => {
+  it('dit AU MODEL ce qu’il est, où il tourne, et comment agir', async () => {
     const root = tmp()
     mkdirSync(join(root, 'outputs'))
     writeFileSync(join(root, 'CONTEXT.md'), '# Mission loutres')
     writeFileSync(join(root, 'outputs', '.gitkeep'), '')
 
     const prompt = buildIcmSystemPrompt(await loadIcm(root))
-    expect(prompt).toContain('agent ICM')
+    // Identité : harness nommé, pas un chatbot.
+    expect(prompt).toContain('harness NyWorkflow')
+    expect(prompt).toContain('pas un chatbot')
+    expect(prompt).toContain('Agir = appeler un outil')
     expect(prompt).toContain('Interpretable Context Methodology')
-    expect(prompt).toContain('## Arborescence actuelle')
+    // L'arbre et la charte.
+    expect(prompt).toContain('ICM chargé — arbre du workspace')
     expect(prompt).toContain('outputs/')
-    expect(prompt).toContain('## CONTEXT.md racine')
+    expect(prompt).toContain('ICM chargé — charte (CONTEXT.md racine)')
     expect(prompt).toContain('# Mission loutres')
     expect(prompt).toContain('mkdir')
     expect(prompt).toContain('websearch')
   })
 
+  it('layout M14 : le prompt montre .workspace/ et interdit de relire les contexts chargés', async () => {
+    const root = tmp()
+    await ensureIcmTree(root)
+    const prompt = buildIcmSystemPrompt(await loadIcm(root))
+    expect(prompt).toContain(`${ICM_DIR}/`)
+    expect(prompt).toContain('ne les relis pas')
+    expect(prompt).toContain('.logs/')
+    expect(prompt).toContain('Parallélise')
+    expect(prompt).toContain('"background": true')
+    expect(prompt).toContain('shell_output {"jobId"}')
+    expect(prompt).toContain('shell_kill {"jobId"}')
+    expect(prompt).toContain('Explore sans demander')
+  })
+
   it('workspace vierge : invite à écrire le CONTEXT.md', () => {
-    const prompt = buildIcmSystemPrompt({ name: 'vierge', tree: '(arbre vide)', contexts: [] })
+    const prompt = buildIcmSystemPrompt({ name: 'vierge', tree: '(arbre vide)', contexts: [], icmDir: false })
     expect(prompt).toContain('aucun — ce workspace est vierge')
     expect(prompt).toContain('CONTEXT.md')
   })
 })
 
-describe('scaffoldAgenticWorkspace', () => {
-  it('crée l’arbre ICM COMPLET (M13) : charte, 6 dossiers à rôle, chaque template prêt', async () => {
+describe('scaffoldAgenticWorkspace (M14 — arbre dans .workspace/)', () => {
+  it('crée l’arbre ICM COMPLET dans le dossier caché .workspace/', async () => {
     const parent = tmp()
     const root = join(parent, 'mon-agent')
     await scaffoldAgenticWorkspace(root)
 
-    // Chaque fichier du scaffold existe, avec son contenu prêt à l’emploi.
+    // Chaque fichier du scaffold existe DANS .workspace/, prêt à l'emploi.
     for (const rel of SCAFFOLD_FILES) {
-      expect(existsSync(join(root, rel)), rel).toBe(true)
-      expect(readFileSync(join(root, rel), 'utf8').length, rel).toBeGreaterThan(20)
+      expect(existsSync(join(root, ICM_DIR, rel)), rel).toBe(true)
+      expect(readFileSync(join(root, ICM_DIR, rel), 'utf8').length, rel).toBeGreaterThan(20)
     }
     for (const folder of SCAFFOLD_FOLDERS) {
-      expect(existsSync(join(root, folder, 'CONTEXT.md')), folder).toBe(true)
+      expect(existsSync(join(root, ICM_DIR, folder, 'CONTEXT.md')), folder).toBe(true)
     }
-    const charter = readFileSync(join(root, 'CONTEXT.md'), 'utf8')
-    expect(charter).toContain('# mon-agent — workspace ICM agentique')
+    // La racine du workspace reste propre : rien en dehors de .workspace/.
+    const rootEntries = await walkTree(root)
+    expect(rootEntries.entries).toEqual([]) // walkTree saute les dossiers cachés
+
+    const charter = readFileSync(join(root, ICM_DIR, 'CONTEXT.md'), 'utf8')
+    expect(charter).toContain('# mon-agent — ICM du workspace')
     expect(charter).toContain('## Mission')
     expect(charter).toContain('## Méthode ICM')
     expect(charter).toContain('## Carte de l’arbre')
-    expect(charter).toContain('notes/plan.md')
-    expect(charter).toContain('memory/core.md')
-    expect(charter).toContain('research/sources.md')
+    expect(charter).toContain('.workspace/notes/plan.md')
+    expect(charter).toContain('.workspace/memory/core.md')
+    expect(charter).toContain('.workspace/research/sources.md')
     expect(charter).toContain('## Outils')
     expect(charter).toContain('## Règles')
 
     // Les templates de notes/ sont de vrais documents, pas des .gitkeep.
     for (const template of ['plan.md', 'tasks.md', 'journal.md', 'decisions.md']) {
-      expect(readFileSync(join(root, 'notes', template), 'utf8')).toContain('#')
+      expect(readFileSync(join(root, ICM_DIR, 'notes', template), 'utf8')).toContain('#')
     }
-    expect(readFileSync(join(root, 'memory', 'core.md'), 'utf8')).toContain('Mémoire vive')
-    expect(readFileSync(join(root, 'memory', 'lessons.md'), 'utf8')).toContain('Leçons')
-    expect(readFileSync(join(root, 'research', 'sources.md'), 'utf8')).toContain('Registre des sources')
+    expect(readFileSync(join(root, ICM_DIR, 'memory', 'core.md'), 'utf8')).toContain('Mémoire vive')
+    expect(readFileSync(join(root, ICM_DIR, 'memory', 'lessons.md'), 'utf8')).toContain('Leçons')
+    expect(readFileSync(join(root, ICM_DIR, 'research', 'sources.md'), 'utf8')).toContain('Registre des sources')
 
-    // L’ICM charge ce workspace fraîchement scaffoldé : 7 CONTEXT.md (≤ cap).
+    // L'ICM charge ce workspace fraîchement scaffoldé : 7 CONTEXT.md (≤ cap),
+    // l'arbre .workspace/ complet, et le prompt porte la charte.
     const icm = await loadIcm(root)
-    expect(icm.tree).toContain('inbox/')
-    expect(icm.tree).toContain('memory/')
-    expect(icm.tree).toContain('archive/')
+    expect(icm.icmDir).toBe(true)
+    expect(icm.tree).toContain(`${ICM_DIR}/\n├── archive/`)
+    expect(icm.tree).toContain('├── inbox/')
+    expect(icm.tree).toContain('├── memory/')
+    expect(icm.tree).toContain('├── notes/')
     expect(icm.contexts).toHaveLength(7)
     expect(icm.contexts.length).toBeLessThanOrEqual(CONTEXT_MAX_FILES)
     const prompt = buildIcmSystemPrompt(icm)
-    expect(prompt).toContain('# mon-agent — workspace ICM agentique')
-    expect(prompt).toContain('notes/plan.md')
+    expect(prompt).toContain('# mon-agent — ICM du workspace')
+    expect(prompt).toContain('.workspace/notes/plan.md')
   })
 
   it('scaffoldFiles : la carte est pure et exhaustive — 14 fichiers, 7 CONTEXT.md', () => {
@@ -201,39 +252,49 @@ describe('scaffoldAgenticWorkspace', () => {
   it('refuse un workspace existant — jamais d’écrasement', async () => {
     const root = tmp()
     await expect(scaffoldAgenticWorkspace(root)).rejects.toThrow(/existe déjà/)
-    expect(existsSync(join(root, 'CONTEXT.md'))).toBe(false)
+    expect(existsSync(join(root, ICM_DIR))).toBe(false)
   })
 
   it('scaffoldContext : nom du workspace dans le titre', () => {
-    expect(scaffoldContext('demo')).toContain('# demo — workspace ICM agentique')
+    expect(scaffoldContext('demo')).toContain('# demo — ICM du workspace')
   })
 })
 
-describe('buildIcmSystemPrompt — méthode agentique (M12)', () => {
-  it('enseigne parallélisme, arrière-plan et boucle honnête', async () => {
+describe('ensureIcmTree (M14 — création de session)', () => {
+  it('crée l’arbre complet quand .workspace/ manque', async () => {
     const root = tmp()
-    writeFileSync(join(root, 'CONTEXT.md'), '# Mission')
-    const prompt = buildIcmSystemPrompt(await loadIcm(root))
-    expect(prompt).toContain('## Méthode agentique (M12)')
-    expect(prompt).toContain('Parallélise')
-    expect(prompt).toContain('"background": true')
-    expect(prompt).toContain('shell_output {"jobId"}')
-    expect(prompt).toContain('shell_kill {"jobId"}')
-    expect(prompt).toContain('Explore sans demander')
+    writeFileSync(join(root, 'projet.md'), 'le projet du pilote')
+    expect(await ensureIcmTree(root)).toBe('created')
+    for (const rel of SCAFFOLD_FILES) {
+      expect(existsSync(join(root, ICM_DIR, rel)), rel).toBe(true)
+    }
+    // Le projet du pilote est intact.
+    expect(readFileSync(join(root, 'projet.md'), 'utf8')).toBe('le projet du pilote')
   })
 
+  it('NE TOUCHE JAMAIS un .workspace/ existant — la mémoire vivante continue', async () => {
+    const root = tmp()
+    expect(await ensureIcmTree(root)).toBe('created')
+    // L'agent travaille : son plan devient le sien.
+    writeFileSync(join(root, ICM_DIR, 'notes', 'plan.md'), '# MON plan, pas le template')
+    // Une seconde session sur le même dossier continue la mémoire.
+    expect(await ensureIcmTree(root)).toBe('present')
+    expect(readFileSync(join(root, ICM_DIR, 'notes', 'plan.md'), 'utf8')).toBe('# MON plan, pas le template')
+  })
+})
+
+describe('buildIcmSystemPrompt — charte scaffold (M12/M13 conservés)', () => {
   it('la charte scaffold liste les 9 outils et le parallélisme', () => {
     const charter = scaffoldContext('exemple-agentique')
     expect(charter).toContain('shell_output {"jobId"}')
     expect(charter).toContain('shell_kill {"jobId"}')
     expect(charter).toContain('"background": true')
     expect(charter).toContain('ENSEMBLE')
+    expect(charter).toContain('aucun outil')
   })
-})
 
-describe('buildIcmSystemPrompt — niveau de sécurité (M13)', () => {
-  it('enseigne le comportement quand les outils sont désactivés', () => {
-    const prompt = buildIcmSystemPrompt({ name: 'demo', tree: '(arbre vide)', contexts: [] })
+  it('le prompt enseigne le comportement quand les outils sont désactivés', () => {
+    const prompt = buildIcmSystemPrompt({ name: 'demo', tree: '(arbre vide)', contexts: [], icmDir: false })
     // La note dynamique est ajoutée par l’app ; le scaffold, lui, documente le cas.
     expect(scaffoldContext('demo')).toContain('aucun outil')
     expect(prompt).toContain('websearch')

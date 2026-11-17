@@ -32,7 +32,7 @@ test.afterAll(() => {
   }
 })
 
-test('workspace folder : dossier du disque enregistré tel quel, session liée, ICM chargée', async ({ page }) => {
+test('workspace folder : dossier du disque enregistré, .workspace/ créé DEDANS, session liée', async ({ page }) => {
   await page.goto('/')
   const myFolder = join(DISK, 'mes-loutres')
   mkdirSync(myFolder, { recursive: true })
@@ -61,10 +61,14 @@ test('workspace folder : dossier du disque enregistré tel quel, session liée, 
 
   // La session vit dans son groupe, le bandeau porte le workspace.
   await expect(page.locator('[data-test="ws-banner"]')).toContainText('mes-loutres')
-  // L'arbre du pilote est chargé tel quel — rien n'a été créé dedans.
-  expect(existsSync(join(myFolder, 'inbox'))).toBe(false)
+  // M14 : l'ICM complet est né dans le dossier caché .workspace/ DEDANS —
+  // les fichiers du pilote restent intacts.
+  expect(existsSync(join(myFolder, '.workspace', 'CONTEXT.md'))).toBe(true)
+  expect(existsSync(join(myFolder, '.workspace', 'notes', 'plan.md'))).toBe(true)
+  expect(readFileSync(join(myFolder, 'CONTEXT.md'), 'utf8')).toBe('# Dossier loutres du pilote\n')
+  expect(readFileSync(join(myFolder, 'donnees', 'comptages.txt'), 'utf8')).toBe('12 loutres\n')
 
-  // La lecture y fonctionne sur SES fichiers.
+  // La lecture y fonctionne — la maquette lit la charte .workspace/ (M14).
   const box = page.getByLabel('Message')
   await box.fill('AGENTLIT montre-moi la carte du workspace')
   await box.press('Enter')

@@ -19,7 +19,7 @@ const FIXED_REPLY =
 const TOOL_SCENARIOS = {
   AGENTLIT: {
     name: 'read',
-    arguments: { path: 'CONTEXT.md' },
+    arguments: { path: '.workspace/CONTEXT.md' },
     final: 'LIVRABLE FINAL AGENT — la carte est lue.',
   },
   AGENTECRIT: {
@@ -34,7 +34,7 @@ const TOOL_SCENARIOS = {
   },
   AGENTPARALLELE: {
     twoCalls: [
-      { name: 'read', arguments: { path: 'CONTEXT.md' } },
+      { name: 'read', arguments: { path: '.workspace/CONTEXT.md' } },
       { name: 'ls', arguments: { path: '.' } },
     ],
     final: 'PARALLÈLE FAIT — deux lectures en un tour.',

@@ -18,15 +18,19 @@ interface NewSessionDialogProps {
 }
 
 /**
- * New agentic session (M11, M12, M13): a title, where the session — and the
- * model — will live, and the security level of its tools. Three ways to
- * bind a workspace:
+ * New agentic session (M11–M14): a title, where the session — and the
+ * model — will live, and the security level of its tools. The session
+ * folder is MANDATORY (M14): three ways to bind one —
  *   - a fresh scaffold — the DEFAULT when the registry is empty: the
- *     COMPLETE ICM tree (M13), auto-named from the title;
+ *     COMPLETE ICM tree (M14) inside its hidden `.workspace/`, auto-named
+ *     from the title;
  *   - an existing workspace (the registry);
- *   - **a folder of the user's disk** (M12): browsed, then registered
- *     as-is — the tree is the user's own, nothing is created inside.
- * The last used workspace and the security level are remembered.
+ *   - **a folder of the user's disk** (M12): browsed, then registered —
+ *     M14: the hidden `.workspace/` ICM tree is created INSIDE it, the
+ *     pilot's own files are never touched elsewhere.
+ * Every session folder carries its `.logs/<sessionId>/` profiling trio
+ * (M14). The last used workspace and the security level are remembered.
+ * Without the server API there is NO session: the folder is mandatory.
  */
 export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose, onCreated }: NewSessionDialogProps) {
   const [title, setTitle] = useState(initialTitle)
@@ -121,8 +125,10 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
     void (async () => {
       setBusy(true)
       try {
+        // M14 — the session folder is MANDATORY: without the server there is
+        // no folder to bind, hence no session — the harness IS the server.
         if (mode !== 'server') {
-          onCreated({ id: `local-${Date.now().toString(36)}`, title: title.trim() || 'Session', createdAt: Date.now() })
+          setError('Serveur requis — une session ICM vit dans un dossier workspace (lancez « pnpm dev » puis réessayez).')
           return
         }
         let workspace = selected
@@ -151,7 +157,7 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
             return
           }
         } else if (workspace === '') {
-          setError('Choisissez un workspace (ou créez-en un).')
+          setError('Le dossier de la session est obligatoire — choisissez-en un (ou créez-en un).')
           return
         }
         localStorage.setItem(LAST_WS_KEY, workspace)
@@ -203,7 +209,7 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
             </div>
             {mode_ === 'existing' ? (
               <label className="field">
-                <span>Workspace ICM</span>
+                <span>Dossier de la session (workspace) — obligatoire</span>
                 <select
                   data-test="ws-select"
                   value={selected}
@@ -219,6 +225,10 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
                     </option>
                   ))}
                 </select>
+                <span className="hint">
+                  La session vit dans ce dossier : son ICM dans <code>.workspace/</code> (caché) et ses logs dans{' '}
+                  <code>.logs/</code> — jamais ailleurs.
+                </span>
               </label>
             ) : null}
             {mode_ === 'new' ? (
@@ -231,9 +241,9 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
                   placeholder="ex. rapport-loutres"
                 />
                 <span className="hint">
-                  Scaffold ICM complet (M13) : charte + inbox / notes (plan, tâches, journal, décisions) / research
-                  (registre des sources) / memory (mémoire vive, leçons) / outputs / archive — chaque fichier .md
-                  prêt à l’emploi, l’arbre reste libre ensuite.
+                  Scaffold ICM complet (M14) : charte + inbox / notes (plan, tâches, journal, décisions) / research
+                  (registre des sources) / memory (mémoire vive, leçons) / outputs / archive — tout l’arbre naît dans
+                  le dossier caché <code>.workspace/</code>, chaque fichier .md prêt à l’emploi.
                 </span>
               </label>
             ) : null}
@@ -300,14 +310,18 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
                   <span>Nom du workspace pour ce dossier</span>
                   <input data-test="folder-ws-name" value={folderName} onChange={(e) => setFolderName(e.target.value)} placeholder="ex. mes-documents" />
                   <span className="hint">
-                    Le dossier est enregistré TEL QUEL (aucun fichier créé) — son arbre et ses CONTEXT.md deviennent l’ICM.
+                    Le dossier devient le terrain de la session : un <code>.workspace/</code> caché (l’ICM complet) et un{' '}
+                    <code>.logs/</code> par session y seront créés — vos propres fichiers ne sont jamais modifiés ailleurs.
                   </span>
                 </label>
               </div>
             ) : null}
           </>
         ) : (
-          <p className="hint">API indisponible — la session sera locale (repli mémoire), sans workspace.</p>
+          <p className="hint">
+            API indisponible — le dossier de session étant obligatoire, aucune session ne peut être créée :
+            démarrez le serveur (<code>pnpm dev</code>) puis réessayez.
+          </p>
         )}
         <label className="field">
           <span>Niveau de sécurité des outils</span>

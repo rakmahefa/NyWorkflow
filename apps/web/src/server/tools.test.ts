@@ -83,31 +83,33 @@ it(
     expect(empty.status).toBe(200)
     expect(empty.body.workspaces).toEqual([])
 
-    // Scaffold d'un workspace agentique.
+    // Scaffold d'un workspace agentique — l'ICM complet naît DANS .workspace/ (M14).
     const created = await api(base, '/workspaces', { method: 'POST', body: JSON.stringify({ name: 'loutres' }) })
     expect(created.status).toBe(201)
     expect(created.body.name).toBe('loutres')
+    expect(created.body.tree).toContain('.workspace/')
     expect(created.body.tree).toContain('CONTEXT.md')
     expect(created.body.tree).toContain('inbox/')
     expect(created.body.tree).toContain('outputs/')
-    expect(existsSync(join(spacesDir, 'loutres', 'CONTEXT.md'))).toBe(true)
+    expect(existsSync(join(spacesDir, 'loutres', '.workspace', 'CONTEXT.md'))).toBe(true)
 
     // Un scaffold refusé sur un nom existant — jamais d'écrasement.
     const dupe = await api(base, '/workspaces', { method: 'POST', body: JSON.stringify({ name: 'loutres' }) })
     expect(dupe.status).toBe(400)
     expect(dupe.body.error).toContain('existe déjà')
 
-    // Le listing porte le résumé (premier titre du CONTEXT.md).
+    // Le listing porte le résumé (premier titre de la charte .workspace/CONTEXT.md).
     const list = await api(base, '/workspaces')
-    expect(list.body.workspaces).toEqual([{ name: 'loutres', summary: 'loutres — workspace ICM agentique' }])
+    expect(list.body.workspaces).toEqual([{ name: 'loutres', summary: 'loutres — ICM du workspace' }])
 
     // L'ICM : arbre + charte + prompt système assemblé. Le scaffold complet
-    // (M13) porte 7 CONTEXT.md (racine + 6 dossiers à rôle) — tous chargés.
+    // (M14) porte 7 CONTEXT.md dans .workspace/ (racine + 6 dossiers à rôle).
     const icm = await api(base, '/workspaces/loutres/icm')
     expect(icm.status).toBe(200)
-    expect(icm.body.system).toContain('agent ICM')
-    expect(icm.body.system).toContain('# loutres — workspace ICM agentique')
-    expect(icm.body.system).toContain('## Arborescence actuelle')
+    expect(icm.body.system).toContain('harness NyWorkflow')
+    expect(icm.body.system).toContain('# loutres — ICM du workspace')
+    expect(icm.body.system).toContain('ICM chargé — arbre du workspace')
+    expect(icm.body.system).toContain('.workspace/')
     expect(icm.body.contexts).toHaveLength(7)
 
     // Création d'une session liée au workspace (via /sessions).
@@ -116,12 +118,13 @@ it(
     expect(session.body.workspace).toBe('loutres')
     const sid: string = session.body.id
 
-    // Un read auto-exécuté, journalisé avec son résultat.
-    const read = await toolCall(base, 'loutres', sid, 'read', { path: 'CONTEXT.md' })
+    // Un read auto-exécuté, journalisé avec son résultat — la charte est
+    // dans .workspace/ (M14), le modèle y accède comme à tout le dossier.
+    const read = await toolCall(base, 'loutres', sid, 'read', { path: '.workspace/CONTEXT.md' })
     expect(read.status).toBe(200)
     expect(read.body.status).toBe('executed')
     expect(read.body.outcome.ok).toBe(true)
-    expect(JSON.stringify(read.body.outcome.data)).toContain('workspace ICM agentique')
+    expect(JSON.stringify(read.body.outcome.data)).toContain('ICM du workspace')
 
     // Un mkdir auto-exécuté : le modèle façonne son arbre.
     const mk = await toolCall(base, 'loutres', sid, 'mkdir', { path: 'notes/2026-11' })
@@ -203,12 +206,19 @@ it(
     const missing = await api(base, '/workspaces/inconnu/icm')
     expect(missing.status).toBe(404)
 
-    // Session sans workspace lié → refus propre des outils.
+    // Session sans workspace (M14) : refusée à la création — le dossier est
+    // obligatoire, l'ICM et les logs vivent dedans.
     const free = await api(base, '/sessions', { method: 'POST', body: JSON.stringify({ title: 'Libre' }) })
-    const sid: string = free.body.id
-    const unbound = await toolCall(base, 'loutres', sid, 'ls', { path: '.' })
+    expect(free.status).toBe(400)
+    expect(free.body.error).toContain('workspace')
+
+    // Session liée à un AUTRE workspace → outils refusés proprement.
+    await api(base, '/workspaces', { method: 'POST', body: JSON.stringify({ name: 'autre' }) })
+    const elsewhere = await api(base, '/sessions', { method: 'POST', body: JSON.stringify({ title: 'Ailleurs', workspace: 'autre' }) })
+    const sid2: string = elsewhere.body.id
+    const unbound = await toolCall(base, 'loutres', sid2, 'ls', { path: '.' })
     expect(unbound.status).toBe(400)
-    expect(unbound.body.error).toContain('aucun')
+    expect(unbound.body.error).toContain('liée au workspace')
 
     // Outil inconnu → refus exécuté et journalisé (le modèle apprend).
     const session = await api(base, '/sessions', { method: 'POST', body: JSON.stringify({ title: 'WS', workspace: 'loutres' }) })
@@ -231,8 +241,8 @@ it(
     // L'aperçu de fichier garde le même périmètre que les outils.
     const escape = await api(base, '/workspaces/loutres/file?path=../../../etc/passwd')
     expect(escape.status).toBe(400)
-    const ok = await api(base, '/workspaces/loutres/file?path=CONTEXT.md')
+    const ok = await api(base, '/workspaces/loutres/file?path=.workspace/CONTEXT.md')
     expect(ok.status).toBe(200)
-    expect(ok.body.content).toContain('workspace ICM agentique')
+    expect(ok.body.content).toContain('ICM du workspace')
   },
 )

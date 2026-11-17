@@ -17,29 +17,35 @@ cookie.json
 # dépôt explicitement quand le pilote veut les partager.
 .nyworkflow/
 
-# Sorties d'exécution des workspaces (e2e, démos locales) — le contenu
-# écrit par l'agent est régénéré ; seuls les GABARITS du scaffold ICM
-# complet (M13) sont versionnés : CONTEXT.md, plan, tâches, journal,
-# décisions, registre des sources, mémoire.
-examples/workspaces/**/inbox/*
-!examples/workspaces/**/inbox/CONTEXT.md
-examples/workspaces/**/notes/*
-!examples/workspaces/**/notes/CONTEXT.md
-!examples/workspaces/**/notes/plan.md
-!examples/workspaces/**/notes/tasks.md
-!examples/workspaces/**/notes/journal.md
-!examples/workspaces/**/notes/decisions.md
-examples/workspaces/**/research/*
-!examples/workspaces/**/research/CONTEXT.md
-!examples/workspaces/**/research/sources.md
-examples/workspaces/**/memory/*
-!examples/workspaces/**/memory/CONTEXT.md
-!examples/workspaces/**/memory/core.md
-!examples/workspaces/**/memory/lessons.md
-examples/workspaces/**/outputs/*
-!examples/workspaces/**/outputs/CONTEXT.md
-examples/workspaces/**/archive/*
-!examples/workspaces/**/archive/CONTEXT.md
+# Workspaces d'exemple (M14) : l'ICM vit dans le dossier caché .workspace/.
+# Seuls les GABARITS de l'arbre ICM complet sont versionnés (charte, plan,
+# tâches, journal, décisions, registre des sources, mémoire) ; tout ce que
+# l'agent ÉCRIT (racine du projet comprise), les logs par session
+# (.logs/<sessionId>/) et les workspaces e2e éphémères restent locaux.
+examples/workspaces/**
+!examples/workspaces/**/
+!examples/workspaces/**/.workspace/
+examples/workspaces/**/.workspace/**
+!examples/workspaces/**/.workspace/CONTEXT.md
+!examples/workspaces/**/.workspace/inbox/
+!examples/workspaces/**/.workspace/inbox/CONTEXT.md
+!examples/workspaces/**/.workspace/notes/
+!examples/workspaces/**/.workspace/notes/CONTEXT.md
+!examples/workspaces/**/.workspace/notes/plan.md
+!examples/workspaces/**/.workspace/notes/tasks.md
+!examples/workspaces/**/.workspace/notes/journal.md
+!examples/workspaces/**/.workspace/notes/decisions.md
+!examples/workspaces/**/.workspace/research/
+!examples/workspaces/**/.workspace/research/CONTEXT.md
+!examples/workspaces/**/.workspace/research/sources.md
+!examples/workspaces/**/.workspace/memory/
+!examples/workspaces/**/.workspace/memory/CONTEXT.md
+!examples/workspaces/**/.workspace/memory/core.md
+!examples/workspaces/**/.workspace/memory/lessons.md
+!examples/workspaces/**/.workspace/outputs/
+!examples/workspaces/**/.workspace/outputs/CONTEXT.md
+!examples/workspaces/**/.workspace/archive/
+!examples/workspaces/**/.workspace/archive/CONTEXT.md
 
 # OS
 .DS_Store

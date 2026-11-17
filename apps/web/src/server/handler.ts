@@ -3,7 +3,10 @@
  *
  * Mounted by the Vite plugin (dev and preview), same origin as the UI:
  *   GET    /sessions              → { sessions: SessionDto[] }  (oldest first)
- *   POST   /sessions              → create (body: { title?, workspace?, security? })
+ *   POST   /sessions              → create (body: { title?, workspace, security? })
+ *                                     M14: workspace OBLIGATORY — the session
+ *                                     folder is selected, its .workspace/ ICM
+ *                                     tree ensured, its .logs/ prepared
  *   DELETE /sessions/:id          → delete the journal (M11)
  *   POST   /sessions/:id/events   → append a chat event (user|assistant message)
  *   POST   /sessions/:id/fork     → fork the journal
@@ -11,6 +14,11 @@
  *   POST   /sessions/:id/security → M13: change the security level live
  *   POST   /sessions/:id/turn     → M13: journal a completed agent turn
  *                                     (turn.completed — durable traces)
+ *
+ * M14 — every session-scoped record (lifecycle, chat, turns) lands BOTH
+ * in the global trio (<home>/.logs) AND in the session's own trio inside
+ * its folder (<sessionFolder>/.logs/<sessionId>/) — the pilot zips and
+ * uploads that folder to refine the harness.
  *
  * Chat events here — tool.call / tool.result events land in the SAME
  * journal through /workspaces (M11): the agent's tools are journaled by
@@ -23,6 +31,7 @@ import { existsSync } from 'node:fs'
 import { access, readdir } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
+import { ensureIcmTree } from '@nyworkflow/core'
 import {
   appendEvent,
   asSecurityLevel,
@@ -35,8 +44,8 @@ import {
   readEvents,
 } from '@nyworkflow/session'
 import type { DerivedSession, SecurityLevel, SessionEvent } from '@nyworkflow/session'
-import type { Profiler } from './logs.ts'
-import { workspaceExists } from './workspaces.ts'
+import { dropSessionProfiler, sessionProfiler, type Profiler } from './logs.ts'
+import { resolveWorkspaceRoot, workspaceExists } from './workspaces.ts'
 
 /** Workspace folder names, same rule as the /workspaces API. */
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
@@ -176,8 +185,7 @@ export function createSessionsHandler(
   }
 
   /** Validates a workspace name against the registry + manifest (M11, M12). */
-  async function checkWorkspace(name: unknown): Promise<string | undefined> {
-    if (name === undefined || name === null) return undefined
+  async function checkWorkspace(name: unknown): Promise<string> {
     if (typeof name !== 'string' || !NAME_RE.test(name) || name === '.' || name === '..') {
       throw badRequest('nom de workspace invalide')
     }
@@ -187,23 +195,63 @@ export function createSessionsHandler(
     return name
   }
 
+  /** M14 — the per-session profiler inside the session's folder, when its
+   * workspace root resolves; undefined otherwise (never fatal). */
+  async function perSession(workspace: string | undefined, sessionId: string): Promise<Profiler | undefined> {
+    if (workspace === undefined || workspacesDir === '') return undefined
+    try {
+      const root = await resolveWorkspaceRoot(workspacesDir, workspace)
+      return root === undefined ? undefined : sessionProfiler(root, sessionId)
+    } catch {
+      return undefined
+    }
+  }
+
   async function create(req: IncomingMessage): Promise<SessionDto> {
     const body = await readJson(req)
     const given = typeof body.title === 'string' ? body.title.trim().slice(0, 60) : ''
+    // M14 — the session folder is MANDATORY: a session without a folder is
+    // no longer possible (the ICM and the logs live in that folder).
+    if (body.workspace === undefined || body.workspace === null || body.workspace === '') {
+      throw badRequest('workspace obligatoire — sélectionnez le dossier de la session')
+    }
     const workspace = await checkWorkspace(body.workspace)
     const security = asSecurityLevel(body.security) ?? 'ask'
     const fallback = `Session ${(await journalNames()).length + 1}`
     const title = given || fallback
     const id = freshId()
     const at = nowIso()
+
+    // M14 — the session folder carries its ICM: the complete .workspace/
+    // tree is created inside when absent, kept as-is when present (a second
+    // session on the same folder continues the living memory). A folder
+    // that cannot carry it is refused honestly.
+    let wsRoot: string | undefined
+    if (workspacesDir !== '') {
+      wsRoot = await resolveWorkspaceRoot(workspacesDir, workspace)
+    }
+    let icm: 'created' | 'present' = 'present'
+    if (wsRoot !== undefined) {
+      try {
+        icm = await ensureIcmTree(wsRoot)
+      } catch (err) {
+        throw badRequest(err instanceof Error ? err.message : String(err))
+      }
+    }
+
     await appendEvent(journalPath(home, id), {
       type: 'session.created',
       at,
       title,
-      ...(workspace !== undefined ? { workspace } : {}),
+      workspace,
       ...(security !== 'ask' ? { security } : {}),
     })
     profiler?.session({ kind: 'session.created', sessionId: id, title, workspace, security })
+    profiler?.activity({ kind: 'icm.tree', sessionId: id, workspace, status: icm, dir: '.workspace' })
+    const sp = await perSession(workspace, id)
+    sp?.engine({ kind: 'session.open', sessionId: id, workspace, security, icm, folder: wsRoot })
+    sp?.session({ kind: 'session.created', sessionId: id, title, workspace, security })
+    sp?.activity({ kind: 'icm.tree', sessionId: id, workspace, status: icm, dir: '.workspace' })
     return {
       id,
       title,
@@ -211,7 +259,7 @@ export function createSessionsHandler(
       security,
       events: [],
       messages: [],
-      ...(workspace !== undefined ? { workspace } : {}),
+      workspace,
     }
   }
 
@@ -232,6 +280,8 @@ export function createSessionsHandler(
     if (text.length > TEXT_MAX) throw badRequest(`texte trop long (max ${TEXT_MAX} caractères)`)
     await appendEvent(file, { type: kind, at: nowIso(), text } as SessionEvent)
     profiler?.session({ kind, sessionId: id, chars: text.length })
+    const d = deriveSession(await readEvents(file))
+    ;(await perSession(d.workspace, id))?.session({ kind, sessionId: id, chars: text.length })
   }
 
   /** M13 — change the security level live: one session.security event, the
@@ -247,9 +297,11 @@ export function createSessionsHandler(
     const level = asSecurityLevel(body.level)
     if (level === undefined) throw badRequest('level : "ask", "accept" ou "no-tools" attendu')
     await appendEvent(file, { type: 'session.security', at: nowIso(), level })
-    profiler?.session({ kind: 'session.security', sessionId: id, level })
     const events = await readEvents(file)
-    return toDto(id, deriveSession(events), events)
+    const d = deriveSession(events)
+    profiler?.session({ kind: 'session.security', sessionId: id, level })
+    ;(await perSession(d.workspace, id))?.session({ kind: 'session.security', sessionId: id, level })
+    return toDto(id, d, events)
   }
 
   /** M13 — journal a completed agent turn (turn.completed): the durable
@@ -297,6 +349,31 @@ export function createSessionsHandler(
       thinkingChars: int(body.thinkingChars, 10_000_000),
       textChars: int(body.textChars, 10_000_000),
     })
+    // M14 — the session's own trio: the turn is its engine view too.
+    const dTurn = deriveSession(await readEvents(file))
+    const spTurn = await perSession(dTurn.workspace, id)
+    spTurn?.engine({
+      kind: 'turn.completed',
+      sessionId: id,
+      model,
+      thinkLevel,
+      rounds: int(body.rounds, 99),
+      ms: int(body.ms, 3_600_000),
+      outcome,
+      toolCalls: int(body.toolCalls, 500),
+    })
+    spTurn?.activity({
+      kind: 'turn.completed',
+      sessionId: id,
+      model,
+      thinkLevel,
+      rounds: int(body.rounds, 99),
+      ms: int(body.ms, 3_600_000),
+      outcome,
+      toolCalls: int(body.toolCalls, 500),
+      thinkingChars: int(body.thinkingChars, 10_000_000),
+      textChars: int(body.textChars, 10_000_000),
+    })
   }
 
   /** Fork d'un journal (M12). */
@@ -311,18 +388,31 @@ export function createSessionsHandler(
     const events = await readEvents(journalPath(home, forkId))
     const d = deriveSession(events)
     profiler?.session({ kind: 'session.forked', sessionId: forkId, from: id, workspace: d.workspace })
+    // M14 — the fork opens its OWN trio in the session folder.
+    const spFork = await perSession(d.workspace, forkId)
+    spFork?.engine({ kind: 'session.open', sessionId: forkId, forkedFrom: id, workspace: d.workspace, security: d.security })
+    spFork?.session({ kind: 'session.forked', sessionId: forkId, from: id, workspace: d.workspace })
     return toDto(forkId, d, events)
   }
 
-  /** M11 — deletes a journal (its messages and tool history with it). */
+  /** M11 — deletes a journal (its messages and tool history with it). The
+   * session's .logs folder inside its workspace STAYS: it is the durable
+   * story the pilot zips and uploads. */
   async function remove(id: string): Promise<void> {
     try {
       await access(journalPath(home, id))
     } catch {
       throw notFound('session inconnue')
     }
-    await deleteJournal(home, id)
+    const d = deriveSession(await readEvents(journalPath(home, id)))
     profiler?.session({ kind: 'session.deleted', sessionId: id })
+    const sp = await perSession(d.workspace, id)
+    sp?.session({ kind: 'session.deleted', sessionId: id })
+    if (d.workspace !== undefined && workspacesDir !== '') {
+      const root = await resolveWorkspaceRoot(workspacesDir, d.workspace).catch(() => undefined)
+      if (root !== undefined) dropSessionProfiler(root, id)
+    }
+    await deleteJournal(home, id)
   }
 
   /** M12 — renames a session (append-only: the session.renamed event wins in derivation). */
@@ -337,9 +427,10 @@ export function createSessionsHandler(
     const title = typeof body.title === 'string' ? body.title.trim().slice(0, 60) : ''
     if (title === '') throw badRequest('titre non vide attendu')
     await appendEvent(file, { type: 'session.renamed', at: nowIso(), title })
-    profiler?.session({ kind: 'session.renamed', sessionId: id, title })
     const events = await readEvents(file)
     const d = deriveSession(events)
+    profiler?.session({ kind: 'session.renamed', sessionId: id, title })
+    ;(await perSession(d.workspace, id))?.session({ kind: 'session.renamed', sessionId: id, title })
     return toDto(id, d, events)
   }
 
