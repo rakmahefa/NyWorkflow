@@ -3,8 +3,9 @@
  * là, un seul implémentateur aujourd'hui. Un deuxième provider (M10) se
  * branchera sans toucher au serveur ni au reste du monorepo.
  */
-import { GeminiWebClient, type GeminiClientConfig } from './gemini.ts'
+import { GeminiWebClient, type GeminiClientConfig, type GeminiDescribe } from './gemini.ts'
 import { messagesToPrompt, type ChatMessage } from './convert.ts'
+import { TurnJournal } from './journal.ts'
 
 export interface ProviderChatOptions {
   model: string
@@ -22,11 +23,11 @@ export interface Provider {
   /** Réponse complète. */
   chatComplete(options: ProviderChatOptions): Promise<string>
   /** Diagnostic pour GET / (aucune requête réseau). */
-  describe(): { cookies: boolean; bl: string | null; defaultModel: string; models: string[] }
+  describe(): GeminiDescribe
 }
 
-export function createGeminiProvider(config: GeminiClientConfig = {}): Provider {
-  const client = new GeminiWebClient(config)
+export function createGeminiProvider(config: GeminiClientConfig = {}, journal?: TurnJournal): Provider {
+  const client = new GeminiWebClient({ ...config, journal })
   return {
     id: 'gemini',
     async listModels(): Promise<string[]> {

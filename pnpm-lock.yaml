@@ -189,6 +189,9 @@ importers:
       '@nyworkflow/tools':
         specifier: workspace:*
         version: link:../../packages/tools
+      '@nyworkflow/webapi':
+        specifier: workspace:*
+        version: link:../../packages/webapi
       react:
         specifier: ^19.3.1
         version: 19.3.1

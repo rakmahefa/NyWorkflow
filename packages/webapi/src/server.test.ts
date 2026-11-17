@@ -84,6 +84,30 @@ describe('GET / — état et diagnostic', () => {
     })
   })
 
+  it('diagnostic M8 : comptes, proxy, journal amont après un tour', async () => {
+    await withServer(undefined, async ({ base }) => {
+      // Un tour réel (contre la maquette) pour alimenter le journal.
+      const res = await fetch(base + '/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+        body: JSON.stringify(chatBody),
+      })
+      await readSse(res)
+
+      const { body } = await getJson(base, '/')
+      const gw = body.gateway
+      expect(gw.cookieFile).toBe('(NYW_WEBAPI_COOKIES)') // libellé env quand les cookies bruts gagnent
+      expect(gw.rawCookies).toBe(true)
+      expect(gw.accounts).toEqual([{ file: '(NYW_WEBAPI_COOKIES)', cookies: true }])
+      expect(gw.activeAccount).toBe(0)
+      expect(gw.proxy).toBeNull()
+      expect(gw.recent).toHaveLength(1)
+      expect(gw.recent[0]).toMatchObject({ ok: true, model: 'gemini-3.6-flash', attempts: 1 })
+      expect(typeof gw.recent[0].ms).toBe('number')
+      expect(typeof gw.recent[0].at).toBe('string')
+    })
+  })
+
   it('normalise les slashs de fin (détail de proxy)', async () => {
     await withServer(undefined, async ({ base }) => {
       const { status } = await getJson(base, '/v1/models/')

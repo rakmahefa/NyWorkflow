@@ -25,6 +25,17 @@ export type { GeminiErrorKind, GeminiClientConfig, GeminiTurnOptions, GeminiStre
 export { loadWebApiConfig, defaultCookieFile, findRepoRoot, DEFAULT_PORT, DEFAULT_HOST, DEFAULT_GEMINI_BASE_URL } from './config.ts'
 export type { WebApiConfig } from './config.ts'
 
+// Multi-comptes & journal (M8)
+export { CookieStore } from './accounts.ts'
+export type { AccountStatus } from './accounts.ts'
+export { TurnJournal, DEFAULT_JOURNAL_CAPACITY } from './journal.ts'
+export type { TurnRecord } from './journal.ts'
+export type { GeminiDescribe } from './gemini.ts'
+
+// Proxy sortant (M8)
+export { parseProxyEnv, shouldBypass, maskCredentials, upstreamFetch, loadTlsCa } from './proxy.ts'
+export type { ProxyEnv, UpstreamResponse, UpstreamInit, UpstreamOptions } from './proxy.ts'
+
 // Modèles (data-driven)
 export { loadModelTable, resolveModel, resolveModelStrict, listModelIds, DEFAULT_MODEL, DEFAULT_MODEL_TABLE, UnknownModelError } from './models.ts'
 export type { ModelSpec, ModelTable, ResolvedModel } from './models.ts'

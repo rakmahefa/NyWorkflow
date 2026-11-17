@@ -27,13 +27,33 @@ Détail de la livraison :
 - **Bornes** : corps de requête 4 Mio, frame 8 Mio, accumulateur brut 64 Kio — plafonds explicites, pas de confiance aveugle en l'amont.
 - Tests : 237 unitaires au total (21 session + 11 adapter + 16 tools + 43 core + 48 web + **98 webapi**) + 12 e2e inchangés, tous verts.
 
+## M8 — Durcissement & diagnostics · 20 % · ✅ Terminé (2026-11-17)
+
+Objectif : la passerelle **vit avec l'application** (plus de « passerelle absente »), l'utilisateur voit tout (menu Paramètres), et les casses historiques ont une parade de plus (multi-comptes, proxy).
+
+- [x] **Passerelle intégrée au démarrage** (`apps/web/src/server/embed.ts`) : `pnpm dev` / `pnpm preview` démarrent la webapi dans le même processus — règles d'engagement explicites (W2A_URL externe respecté, `NYW_WEBAPI_EMBED=0` coupe, port occupé = passerelle externe utilisée telle quelle, jamais sous Vitest), le proxy `/api` suit `NYW_WEBAPI_HOST/PORT`
+- [x] **Menu Paramètres dans l'UI** : modale en 3 sections — Apparence (thème Auto/Clair/Sombre persisté, appliqué via `data-theme`, le CSS garde `prefers-color-scheme` pour Auto), Passerelle (diagnostic vivant), À propos — bouton engrenage en bas de sidebar, `Échap` ferme
+- [x] **Page d'état détaillée** : `GET /` étendu de façon additive — cookies (présents/absents + fichier), **comptes** (fichier, validité, erreur de format, compte actif), `bl`, proxy (identifiants masqués), **journal amont** (50 derniers tours : modèle, durée, essais, compte, erreur typée) — rendu dans Paramètres, rafraîchissable
+- [x] **Multi-comptes cookies** (`packages/webapi/src/accounts.ts`) : `NYW_WEBAPI_COOKIE_FILE` accepte un répertoire (un compte par fichier, trié) ; rotation sur erreur d'authentification **sans jamais dupliquer du texte déjà émis** ; relecture à chaud fichier par fichier (mtime conservée même pour un fichier malformé — le corriger suffit)
+- [x] **Proxy sortant** (`packages/webapi/src/proxy.ts`) : `NYW_WEBAPI_PROXY` > `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` + `NO_PROXY` ; cibles http en URI absolue, cibles https par tunnel CONNECT + TLS maison (`node:tls`), `NYW_WEBAPI_TLS_CA` pour les proxy qui rechiffrent — zéro dépendance, tunnels jetables (teardown à la fin de réponse, pas de fuite de socket)
+- [x] **Journal amont** (`packages/webapi/src/journal.ts`) : tampon circulaire en mémoire, branché dans la boucle de tours du client Gemini (succès, échec typé, annulation)
+- [x] **USERGUIDE.md** : guide utilisateur complet — démarrage en une commande, cookies (3 formats + multi-comptes), tour de l'interface, paramètres, format de workflow, config env exhaustive, table de dépannage
+
+**Livré quand :** `pnpm test` vert sur tout le monorepo, et le programme s'ouvre avec la webapi intégrée sans commande séparée. ✔ (vérifié bout en bout : serveur réel démarré comme un utilisateur, `/api/` répond, l'UI affiche la passerelle UP, aucun message « absente », sélecteur de modèles actif)
+
+Détail de la livraison :
+
+- **Embed** : le plugin Vite démarre la passerelle via `startEmbeddedGateway()` — la fonction ne lève jamais (échec dégradé en raison lisible), rend ses sockets à l'arrêt du serveur ; 5 tests dédiés dont la chaîne complète intégrée (diagnostic + modèles + chat SSE) contre la maquette Gemini.
+- **Anti-casseur proxy** : la première implémentation passait `agent: false` à `https.request` — Node IGNORE alors `createConnection` et contourne le tunnel (leçon consignée : laisser `agent` indéfini) ; les tunnels sont détruits sur `end`/`close` de la réponse (close_notify à travers les pipes d'un proxy = jamais garanti).
+- **Tests** : +50 webapi (137 au total : comptes, journal, proxy http/CONNECT/TLS avec CA de test auto-générée, rotation 401→compte 2, journal typé, `GET /` étendu) ; +11 apps/web (5 embed + 6 thème) → **287 unitaires** au total ; **16 e2e** (4 nouveaux : ouverture/fermeture Paramètres, thème persisté au rechargement, journal amont peuplé après un tour réel, clic overlay/ modale).
+- Docs : README (démarrage en une commande, paramètres, table de config), USERGUIDE.md (nouveau), ARCHITECTURE (D2 révisée), PLAN, ce fichier, CONTEXT.md d'apps/web et packages/webapi.
+
 ## Milestones futurs
 
 > Réécrits à chaque fin de milestone atteint (règle de gouvernance ci-dessus).
 
-- **M8 — Durcissement & diagnostics** (20 %) : page d'état détaillée de la passerelle dans l'UI (cookie présent/expiré, `bl` découvert, derniers échecs typés) ; multi-comptes cookies (rotation sur erreur d'authentification) ; support proxy sortant ; journal structuré des requêtes amont.
-- **M9 — API élargie** (20 %) : routes Google-style `/v1beta/models` (list + generateContent) et `tools` dans `/v1/chat/completions` (blocs `tool_call` façon OpenAI) — si un besoin réel apparaît, sinon reporté.
-- **M10 — Provider suivant** (20 %) : l'abstraction `Provider` reçoit son deuxième implémentateur (à définir fin M8 : interface web d'un autre modèle, ou API officielle) — NyWorkflow choisit son provider par simple env.
+- **M9 — Stabilité & auth multi-sessions** (20 %) : validation proactive des cookies (date d'expiration au diagnostic, pas seulement présent/absent — le pilote voit venir l'expiration), `/u/N` par compte multi-comptes (un fichier = un compte Google ET son index de session), statistiques d'utilisation par compte dans le journal amont.
+- **M10 — API élargie** (20 %) : routes Google-style `/v1beta/models` + `generateContent`, et `tools` dans `/v1/chat/completions` (blocs `tool_call` façon OpenAI) — si un besoin réel apparaît, sinon reporté.
 - **M11 — v0.2.0** (20 %) : dégel du format de contrat ICM si les usages le réclament, `shell` optionnel sous approbation, multi-workspaces à la volée, tag et release.
 
 > Ces jalons sont une intention, pas un engagement : chacun sera réévalué — et réécrit — au milestone précédent.

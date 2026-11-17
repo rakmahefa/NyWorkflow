@@ -10,7 +10,7 @@ test('passerelle absente : message clair + repli simulé', async ({ page }) => {
 
   await expect(page.locator('[data-test="gateway-status"]')).toHaveAttribute('data-state', 'down')
   await expect(page.locator('[data-test="model-select"]')).toBeDisabled()
-  await expect(page.locator('.msg.system').last()).toContainText('Passerelle gemini-web2api absente')
+  await expect(page.locator('.msg.system').last()).toContainText('Passerelle webapi absente')
 
   const box = page.getByLabel('Message')
   await box.fill('Bonjour M2')

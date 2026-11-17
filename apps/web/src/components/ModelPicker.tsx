@@ -10,8 +10,8 @@ interface ModelPickerProps {
 
 const DOT_TITLE: Record<GatewayStatus, string> = {
   checking: 'Passerelle : détection en cours…',
-  up: 'Passerelle gemini-web2api connectée',
-  down: 'Passerelle gemini-web2api absente — mode simulé',
+  up: 'Passerelle webapi connectée',
+  down: 'Passerelle webapi absente — mode simulé',
 }
 
 /** Gateway dot + model select + refresh, in the main header. */

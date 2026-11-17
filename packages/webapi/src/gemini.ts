@@ -7,10 +7,20 @@
  *   2. jetons de page rafraîchis **avant chaque retry** sur erreur HTTP 4xx ;
  *   3. table de modèles data-driven (voir models.ts).
  *
+ * M8 ajoute trois durcissements :
+ *
+ *   4. multi-comptes cookies (rotation sur erreur d'authentification — voir
+ *      accounts.ts) ;
+ *   5. proxy sortant (CONNECT + TLS maison, proxy.ts) ;
+ *   6. journal amont (journal.ts) — les derniers tours, succès comme échecs
+ *      typés, pour le panneau de diagnostic de l'UI.
+ *
  * Le protocole lui-même (payload f.req, frames wrb.fr, snapshots) est un port
  * fidèle : c'est la donnée imposée par Google, pas un choix d'architecture.
  */
-import { CookieJar, loadCookieSource, type CookieSource } from './cookies.ts'
+import { CookieStore, type AccountStatus } from './accounts.ts'
+import type { TurnJournal, TurnRecord } from './journal.ts'
+import { upstreamFetch, maskCredentials, type UpstreamOptions, type UpstreamResponse } from './proxy.ts'
 import { sapisidHash, GEMINI_ORIGIN } from './auth.ts'
 import { resolveModel, loadModelTable, type ModelTable, type ResolvedModel } from './models.ts'
 import { buildFreq, extractPageTokens, extractBl, nextReqid, type PageTokens } from './payload.ts'
@@ -60,6 +70,14 @@ export interface GeminiClientConfig {
   timeoutMs?: number
   retryAttempts?: number
   retryDelayMs?: number
+  /** Proxy sortant (URL http(s)://…, éventuellement user:pass@). */
+  proxy?: string
+  /** Hôtes contournés (NO_PROXY). */
+  noProxy?: string[]
+  /** CA PEM additionnel — TLS derrière un proxy qui rechiffre. */
+  tlsCa?: string
+  /** Journal amont — alimente le diagnostic GET /. */
+  journal?: TurnJournal
 }
 
 export interface GeminiTurnOptions {
@@ -76,6 +94,22 @@ export type GeminiStreamItem =
   | { type: 'text'; delta: string }
   | { type: 'toolCall'; id: string; name: string; arguments: unknown }
   | { type: 'metadata'; kind: string; value: unknown }
+
+/** Diagnostic complet de GET / — additive : les champs v1 restent. */
+export interface GeminiDescribe {
+  cookies: boolean
+  bl: string | null
+  defaultModel: string
+  models: string[]
+  cookieFile: string
+  rawCookies: boolean
+  accounts: AccountStatus[]
+  activeAccount: number
+  /** URL du proxy en cours (identifiants masqués) ou null. */
+  proxy: string | null
+  /** Derniers tours amont (journal en mémoire). */
+  recent: readonly TurnRecord[]
+}
 
 interface PageState {
   tokens: PageTokens
@@ -115,8 +149,7 @@ export function backoffMs(attempt: number, baseMs: number): number {
 
 export class GeminiWebClient {
   private readonly baseUrl: string
-  private readonly cookieFile: string
-  private readonly rawCookies?: string
+  private readonly cookies: CookieStore
   private readonly defaultModel: string
   private readonly modelsFile?: string
   private readonly forcedBl?: string
@@ -124,16 +157,14 @@ export class GeminiWebClient {
   private readonly timeoutMs: number
   private readonly retryAttempts: number
   private readonly retryDelayMs: number
+  private readonly upstream: UpstreamOptions
+  private readonly journal?: TurnJournal
 
-  private cookieSource: CookieSource | undefined
-  private rawJar: CookieJar | undefined
   private page: PageState | undefined
   private modelTableCache: ModelTable | undefined
 
   constructor(config: GeminiClientConfig = {}) {
     this.baseUrl = config.baseUrl?.replace(/\/+$/, '') || GEMINI_ORIGIN
-    this.cookieFile = config.cookieFile ?? ''
-    this.rawCookies = config.rawCookies
     this.defaultModel = config.defaultModel ?? 'gemini-3.6-flash'
     this.modelsFile = config.modelsFile
     this.forcedBl = config.bl
@@ -141,16 +172,27 @@ export class GeminiWebClient {
     this.timeoutMs = config.timeoutMs ?? 180_000
     this.retryAttempts = Math.max(1, config.retryAttempts ?? 3)
     this.retryDelayMs = config.retryDelayMs ?? 2_000
+    this.cookies = new CookieStore(config.cookieFile ?? '', config.rawCookies)
+    this.journal = config.journal
+    const proxy = config.proxy !== undefined && config.proxy.trim() !== '' ? new URL(config.proxy) : undefined
+    this.upstream = { proxy, noProxy: config.noProxy, tlsCa: config.tlsCa }
   }
 
   /** Instantané de diagnostic (aucune requête réseau) — sert l'endpoint /. */
-  describe(): { cookies: boolean; bl: string | null; defaultModel: string; models: string[] } {
+  describe(): GeminiDescribe {
     const table = this.modelTable()
+    const store = this.cookies.describe()
     return {
-      cookies: this.jar()?.hasValidCookies() ?? false,
+      cookies: this.cookies.jar()?.hasValidCookies() ?? false,
       bl: this.forcedBl ?? this.page?.bl ?? null,
       defaultModel: this.defaultModel,
       models: Object.keys(table),
+      cookieFile: store.cookieFile,
+      rawCookies: store.rawCookies,
+      accounts: store.accounts,
+      activeAccount: store.active,
+      proxy: this.upstream.proxy ? maskCredentials(this.upstream.proxy) : null,
+      recent: this.journal?.recent() ?? [],
     }
   }
 
@@ -163,10 +205,84 @@ export class GeminiWebClient {
       throw new GeminiError('unknown-model', errText(err))
     }
     const signal = options.signal
-    const state: TurnState = { decoder: new FrameDecoder(), emitted: '', emittedTools: new Set(), diverged: false, rawAcc: '' }
 
+    const startedAt = Date.now()
+    const record: TurnRecord = {
+      at: new Date(startedAt).toISOString(),
+      model: options.model ?? this.defaultModel,
+      ok: false,
+      attempts: 0,
+      ms: 0,
+      account: this.cookies.activeIndex(),
+    }
+
+    // Rotation multi-comptes : chaque compte est essayé au plus une fois par tour.
+    const triedAccounts = new Set<number>([this.cookies.activeIndex()])
+
+    try {
+      while (true) {
+        const state: TurnState = { decoder: new FrameDecoder(), emitted: '', emittedTools: new Set(), diverged: false, rawAcc: '' }
+        try {
+          yield* this.turnWithRetries(options, resolved, state, signal, record)
+          record.ok = true
+          record.account = this.cookies.activeIndex()
+          return // tour mené à son terme
+        } catch (err) {
+          if (signal?.aborted) {
+            record.error = { kind: 'aborted', message: 'annulé par le client' }
+            return
+          }
+          const error = err instanceof GeminiError ? err : new GeminiError('network', errText(err))
+          // Multi-comptes : un refus d'authentification sans rien d'émis →
+          // on passe au compte suivant (jetons de page liés au compte : reset).
+          if (
+            error.kind === 'authentication' &&
+            state.emitted.length === 0 &&
+            state.emittedTools.size === 0 &&
+            this.cookies.rotate(triedAccounts)
+          ) {
+            triedAccounts.add(this.cookies.activeIndex())
+            record.account = this.cookies.activeIndex()
+            this.page = undefined
+            continue
+          }
+          record.error = {
+            kind: error.kind,
+            message: error.message,
+            ...(error.status !== undefined ? { status: error.status } : {}),
+          }
+          throw error
+        }
+      }
+    } finally {
+      record.ms = Date.now() - startedAt
+      this.journal?.record(record)
+    }
+  }
+
+  /** Réponse complète en chaîne — un tool_call en plein texte est une erreur explicite. */
+  async complete(options: GeminiTurnOptions): Promise<string> {
+    let out = ''
+    for await (const item of this.stream(options)) {
+      if (item.type === 'text') out += item.delta
+      else if (item.type === 'toolCall') throw new GeminiError('upstream', `Gemini a émis un appel d'outil (${item.name}) pendant une complétion texte`)
+    }
+    return out
+  }
+
+  // ---------------------------------------------------------------- internals
+
+  /** La boucle de retries historique, pour UN compte donné. */
+  private async *turnWithRetries(
+    options: GeminiTurnOptions,
+    resolved: ResolvedModel,
+    state: TurnState,
+    signal: AbortSignal | undefined,
+    record: TurnRecord,
+  ): AsyncGenerator<GeminiStreamItem, void, void> {
     for (let attempt = 1; attempt <= this.retryAttempts; attempt++) {
       if (signal?.aborted) return
+      record.attempts++
       try {
         yield* this.attempt(options.prompt, resolved, options.refs ?? [], state, signal)
         return // tentative menée à son terme
@@ -199,18 +315,6 @@ export class GeminiWebClient {
     }
   }
 
-  /** Réponse complète en chaîne — un tool_call en plein texte est une erreur explicite. */
-  async complete(options: GeminiTurnOptions): Promise<string> {
-    let out = ''
-    for await (const item of this.stream(options)) {
-      if (item.type === 'text') out += item.delta
-      else if (item.type === 'toolCall') throw new GeminiError('upstream', `Gemini a émis un appel d'outil (${item.name}) pendant une complétion texte`)
-    }
-    return out
-  }
-
-  // ---------------------------------------------------------------- internals
-
   private async *attempt(
     prompt: string,
     model: ResolvedModel,
@@ -221,18 +325,17 @@ export class GeminiWebClient {
     const { url, headers, body } = await this.buildRequest(prompt, model, refs)
     const timeout = AbortSignal.timeout(this.timeoutMs)
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout
-    let res: Response
+    let res: UpstreamResponse
     try {
-      res = await fetch(url, { method: 'POST', headers, body, signal: combined })
+      res = await upstreamFetch(url, { method: 'POST', headers, body, signal: combined }, this.upstream)
     } catch (err) {
       if (signal?.aborted) return
       throw new GeminiError('network', `requête Gemini impossible : ${errText(err)}`)
     }
     if (!res.ok) throw new GeminiError('http', `Gemini a répondu HTTP ${res.status}`, res.status)
-    if (!res.body) throw new GeminiError('network', 'flux absent dans la réponse Gemini')
 
     const decoder = new TextDecoder()
-    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+    for await (const chunk of res.body) {
       if (signal?.aborted) return
       const text = decoder.decode(chunk, { stream: true })
       if (text.length > 0) yield* this.feedText(text, state)
@@ -313,7 +416,7 @@ export class GeminiWebClient {
       'x-same-domain': '1',
       'user-agent': USER_AGENT,
     }
-    const jar = this.jar()
+    const jar = this.cookies.jar()
     const cookie = jar?.header()
     if (cookie && cookie.length > 0) headers.cookie = cookie
     const sapisid = jar?.sapisid()
@@ -325,17 +428,6 @@ export class GeminiWebClient {
   private modelTable(): ModelTable {
     this.modelTableCache ??= loadModelTable(this.modelsFile)
     return this.modelTableCache
-  }
-
-  private jar(): CookieJar | undefined {
-    if (this.rawCookies !== undefined) {
-      this.rawJar ??= safeParse(this.rawCookies)
-      return this.rawJar
-    }
-    if (this.cookieFile === '') return undefined
-    const fresh = loadCookieSource(this.cookieFile)
-    if (this.cookieSource === undefined || this.cookieSource.mtimeMs !== fresh.mtimeMs) this.cookieSource = fresh
-    return this.cookieSource.jar
   }
 
   /** Jetons de page + bl, avec TTL 10 min ; découverte au premier besoin. */
@@ -351,10 +443,10 @@ export class GeminiWebClient {
     const url = `${this.baseUrl}${prefix}/app`
     try {
       const headers: Record<string, string> = { accept: 'text/html', 'user-agent': USER_AGENT, origin: GEMINI_ORIGIN, referer: `${GEMINI_ORIGIN}${prefix}/app` }
-      const jar = this.jar()
+      const jar = this.cookies.jar()
       const cookie = jar?.header()
       if (cookie && cookie.length > 0) headers.cookie = cookie
-      const res = await fetch(url, { headers, signal: AbortSignal.timeout(30_000) })
+      const res = await upstreamFetch(url, { headers, signal: AbortSignal.timeout(30_000) }, this.upstream)
       if (!res.ok) return // repli : jetons vides + bl constant
       const body = await res.text()
       this.page = { tokens: extractPageTokens(body), bl: extractBl(body) ?? DEFAULT_BL, fetchedAt: Date.now() }
@@ -362,13 +454,5 @@ export class GeminiWebClient {
       // Page injoignable : on garde DEFAULT_BL et des jetons vides — la requête
       // principale dira son mot, avec des erreurs typées.
     }
-  }
-}
-
-function safeParse(raw: string): CookieJar | undefined {
-  try {
-    return CookieJar.parse(raw)
-  } catch {
-    return undefined
   }
 }

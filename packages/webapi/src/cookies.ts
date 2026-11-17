@@ -110,15 +110,21 @@ export class CookieJar {
 export interface CookieSource {
   jar: CookieJar | undefined
   mtimeMs: number | undefined
+  /** Cause de lecture/parse — absent = succès. Fichier illisible ≠ fichier absent. */
+  error?: string
 }
 
 /** Charge la source de cookies (fichier + mtime) — jamais d'exception : absence = jar absent. */
 export function loadCookieSource(cookieFile: string): CookieSource {
+  let mtimeMs: number | undefined
   try {
-    const mtimeMs = statSync(cookieFile).mtimeMs
+    mtimeMs = statSync(cookieFile).mtimeMs
     const jar = CookieJar.parse(readFileSync(cookieFile, 'utf8'))
     return { jar, mtimeMs }
-  } catch {
-    return { jar: undefined, mtimeMs: undefined }
+  } catch (err) {
+    // mtime conservée si le fichier EXISTE mais est malformé : la relecture
+    // à chaud doit repartir dès que l'utilisateur corrige le fichier.
+    const error = err instanceof Error ? err.message : String(err)
+    return { jar: undefined, mtimeMs, error }
   }
 }

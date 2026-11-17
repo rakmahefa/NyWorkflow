@@ -35,13 +35,60 @@ function json(res, status, obj) {
   res.end(JSON.stringify(obj))
 }
 
+let chatCount = 0
+
 /**
  * Starts the mock gateway on 127.0.0.1:<port>.
- * GET /v1/models, GET /v1beta/models, POST /v1/chat/completions (SSE).
+ * GET / (diagnostic M8), GET /v1/models, GET /v1beta/models,
+ * POST /v1/chat/completions (SSE).
  */
 export function startMockGateway(port) {
   const server = createServer((req, res) => {
     const url = req.url ?? '/'
+
+    // Diagnostic GET / — la forme de la passerelle webapi réelle (M8) :
+    // comptes, proxy, journal amont (déterministe : un échec ancien typé +
+    // un tour réussi par conversation réellement servie).
+    if (req.method === 'GET' && (url === '/' || url === '')) {
+      const recent = []
+      if (chatCount > 0) {
+        recent.push({
+          at: new Date(Date.now() - 60_000).toISOString(),
+          model: 'gemini-2.5-flash',
+          ok: false,
+          attempts: 2,
+          ms: 1200,
+          account: 0,
+          error: { kind: 'authentication', message: 'Cookies expirés (maquette)', status: 401 },
+        })
+        recent.push({
+          at: new Date(Date.now() - 1_000).toISOString(),
+          model: 'gemini-2.5-flash',
+          ok: true,
+          attempts: 1,
+          ms: 30,
+          account: 0,
+        })
+      }
+      json(res, 200, {
+        status: 'ok',
+        version: 'maquette-e2e',
+        provider: 'gemini',
+        defaultModel: 'gemini-2.5-flash',
+        models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+        gateway: {
+          cookies: true,
+          bl: null,
+          cookieFile: '(maquette e2e)',
+          rawCookies: false,
+          accounts: [{ file: '(maquette e2e)', cookies: true }],
+          activeAccount: 0,
+          proxy: null,
+          recent,
+        },
+      })
+      return
+    }
 
     if (req.method === 'GET' && (url === '/v1/models' || url === '/v1beta/models')) {
       json(res, 200, { data: [{ id: 'gemini-2.5-flash' }, { id: 'gemini-2.5-pro' }] })
@@ -49,6 +96,7 @@ export function startMockGateway(port) {
     }
 
     if (req.method === 'POST' && url === '/v1/chat/completions') {
+      chatCount++
       let body = ''
       req.on('data', (c) => {
         body += c

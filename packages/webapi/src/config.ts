@@ -5,6 +5,7 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { existsSync } from 'node:fs'
+import { parseProxyEnv, loadTlsCa } from './proxy.ts'
 
 export interface WebApiConfig {
   /** Adresse d'écoute. Boucle par défaut — l'exposition réseau est un milestone à part entière. */
@@ -28,6 +29,12 @@ export interface WebApiConfig {
   timeoutMs: number
   retryAttempts: number
   retryDelayMs: number
+  /** Proxy sortant (URL) — NYW_WEBAPI_PROXY > HTTPS_PROXY > HTTP_PROXY > ALL_PROXY. */
+  proxy?: string
+  /** Liste NO_PROXY (hôtes contournés). */
+  noProxy?: string[]
+  /** CA PEM additionnel (fichier ou inline) pour TLS derrière un proxy qui rechiffre. */
+  tlsCa?: string
 }
 
 export const DEFAULT_PORT = 8081
@@ -69,6 +76,11 @@ function int(env: Record<string, string | undefined>, key: string, fallback: num
 export function loadWebApiConfig(env: Record<string, string | undefined> = process.env): WebApiConfig {
   const rawCookies = env.NYW_WEBAPI_COOKIES?.trim() || undefined
   const authUser = env.NYW_WEBAPI_AUTH_USER !== undefined && env.NYW_WEBAPI_AUTH_USER !== '' ? Number(env.NYW_WEBAPI_AUTH_USER) : undefined
+  const proxyEnv = parseProxyEnv(env)
+  const noProxy = (env.NO_PROXY ?? env.no_proxy ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s.length > 0)
   return {
     host: env.NYW_WEBAPI_HOST?.trim() || DEFAULT_HOST,
     port: int(env, 'NYW_WEBAPI_PORT', DEFAULT_PORT),
@@ -82,5 +94,8 @@ export function loadWebApiConfig(env: Record<string, string | undefined> = proce
     timeoutMs: int(env, 'NYW_WEBAPI_TIMEOUT_MS', DEFAULT_TIMEOUT_MS),
     retryAttempts: Math.max(1, int(env, 'NYW_WEBAPI_RETRY_ATTEMPTS', DEFAULT_RETRY_ATTEMPTS)),
     retryDelayMs: int(env, 'NYW_WEBAPI_RETRY_DELAY_MS', DEFAULT_RETRY_DELAY_MS),
+    proxy: proxyEnv.proxy?.toString(),
+    noProxy,
+    tlsCa: loadTlsCa(env.NYW_WEBAPI_TLS_CA),
   }
 }

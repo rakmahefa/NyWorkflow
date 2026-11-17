@@ -15,6 +15,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { createGeminiProvider, type Provider } from './provider.ts'
 import { GeminiError } from './gemini.ts'
+import { TurnJournal, DEFAULT_JOURNAL_CAPACITY } from './journal.ts'
 import { messagesToPrompt, usage } from './convert.ts'
 import type { WebApiConfig } from './config.ts'
 import { WEBAPI_VERSION } from './version.ts'
@@ -24,20 +25,27 @@ const SSE_PING_MS = 15_000
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
-/** Construit le provider Gemini depuis la config de la passerelle. */
+/** Construit le provider Gemini depuis la config de la passerelle (avec journal amont). */
 export function webApiProviderFromConfig(config: WebApiConfig): Provider {
-  return createGeminiProvider({
-    baseUrl: config.baseUrl,
-    cookieFile: config.cookieFile,
-    rawCookies: config.rawCookies,
-    defaultModel: config.defaultModel,
-    modelsFile: config.modelsFile,
-    bl: config.geminiBl,
-    authUser: config.authUser,
-    timeoutMs: config.timeoutMs,
-    retryAttempts: config.retryAttempts,
-    retryDelayMs: config.retryDelayMs,
-  })
+  const journal = new TurnJournal(DEFAULT_JOURNAL_CAPACITY)
+  return createGeminiProvider(
+    {
+      baseUrl: config.baseUrl,
+      cookieFile: config.cookieFile,
+      rawCookies: config.rawCookies,
+      defaultModel: config.defaultModel,
+      modelsFile: config.modelsFile,
+      bl: config.geminiBl,
+      authUser: config.authUser,
+      timeoutMs: config.timeoutMs,
+      retryAttempts: config.retryAttempts,
+      retryDelayMs: config.retryDelayMs,
+      proxy: config.proxy,
+      noProxy: config.noProxy,
+      tlsCa: config.tlsCa,
+    },
+    journal,
+  )
 }
 
 function json(res: ServerResponse, status: number, data: unknown): void {
@@ -113,7 +121,16 @@ export function createWebApiServer(config: WebApiConfig, provider: Provider = we
       provider: provider.id,
       defaultModel: d.defaultModel,
       models: d.models,
-      gateway: { cookies: d.cookies, bl: d.bl },
+      gateway: {
+        cookies: d.cookies,
+        bl: d.bl,
+        cookieFile: d.cookieFile,
+        rawCookies: d.rawCookies,
+        accounts: d.accounts,
+        activeAccount: d.activeAccount,
+        proxy: d.proxy,
+        recent: d.recent,
+      },
     })
   }
 

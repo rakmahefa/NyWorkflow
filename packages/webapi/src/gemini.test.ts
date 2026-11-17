@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, utimesSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { GeminiWebClient, GeminiError, backoffMs } from './gemini.ts'
+import { TurnJournal } from './journal.ts'
 import { startMockGemini, parseStreamBody, DISCOVERED_BL, type MockGemini, type MockGeminiOptions } from './mock-gemini.ts'
 
 const COOKIES = 'SAPISID=test-sapisid; HSID=h1'
@@ -250,6 +251,127 @@ describe('GeminiWebClient — diagnostic', () => {
 
     const bare = new GeminiWebClient({})
     expect(bare.describe().cookies).toBe(false)
+  })
+
+  it('describe() : comptes, proxy masqué, journal vide avant tout tour', () => {
+    const journal = new TurnJournal(5)
+    const client = new GeminiWebClient({ rawCookies: COOKIES, proxy: 'http://u:p@proxy:3128', journal })
+    const d = client.describe()
+    expect(d.rawCookies).toBe(true)
+    expect(d.accounts).toEqual([{ file: '(NYW_WEBAPI_COOKIES)', cookies: true }])
+    expect(d.activeAccount).toBe(0)
+    expect(d.proxy).toBe('http://***@proxy:3128/')
+    expect(d.recent).toEqual([])
+
+    const sansProxy = new GeminiWebClient({}).describe()
+    expect(sansProxy.proxy).toBeNull()
+  })
+})
+
+describe('GeminiWebClient — multi-comptes (rotation M8)', () => {
+  it('401 sur le compte 1 → rotation → réponse via le compte 2, journal complet', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'nyw-multi-'))
+    try {
+      writeFileSync(path.join(dir, 'a-compte.json'), JSON.stringify([{ name: 'SAPISID', value: 'compte-un', domain: '.google.com' }]))
+      writeFileSync(path.join(dir, 'b-compte.json'), JSON.stringify([{ name: 'SAPISID', value: 'compte-deux', domain: '.google.com' }]))
+      const mock = await startMockGemini({ streamPlan: [{ kind: 'status', status: 401 }, { kind: 'ok', snapshots: ['Réponse du compte deux'] }] })
+      try {
+        const journal = new TurnJournal(10)
+        const client = new GeminiWebClient({ baseUrl: mock.baseUrl, cookieFile: dir, retryAttempts: 1, retryDelayMs: 1, journal })
+        const out = await client.complete({ prompt: 'essai', model: 'gemini-3.6-flash' })
+        expect(out).toBe('Réponse du compte deux')
+
+        // Le compte 1 a été essayé (401), puis le compte 2.
+        const cookies = mock.streamPosts().map((p) => String(p.headers.cookie))
+        expect(cookies).toEqual(['SAPISID=compte-un', 'SAPISID=compte-deux'])
+
+        // Rotation visible dans le diagnostic.
+        const d = client.describe()
+        expect(d.activeAccount).toBe(1)
+        expect(d.accounts.map((a) => path.basename(a.file))).toEqual(['a-compte.json', 'b-compte.json'])
+
+        // Journal : un tour, deux tentatives, succès sur le compte 2.
+        expect(d.recent).toHaveLength(1)
+        const record = d.recent[0]!
+        expect(record.ok).toBe(true)
+        expect(record.attempts).toBe(2)
+        expect(record.account).toBe(1)
+        expect(record.error).toBeUndefined()
+        expect(record.ms).toBeGreaterThanOrEqual(0)
+      } finally {
+        await mock.close()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('tous les comptes refusés : erreur d’authentification, journal typé', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'nyw-multi-'))
+    try {
+      writeFileSync(path.join(dir, 'a.json'), JSON.stringify([{ name: 'SAPISID', value: 'a', domain: '.google.com' }]))
+      writeFileSync(path.join(dir, 'b.json'), JSON.stringify([{ name: 'SAPISID', value: 'b', domain: '.google.com' }]))
+      const mock = await startMockGemini({ streamPlan: [{ kind: 'status', status: 401 }] })
+      try {
+        const journal = new TurnJournal(10)
+        const client = new GeminiWebClient({ baseUrl: mock.baseUrl, cookieFile: dir, retryAttempts: 1, retryDelayMs: 1, journal })
+        await expect(client.complete({ prompt: 'x', model: 'gemini-3.6-flash' })).rejects.toThrow(/Cookies Gemini expirés|authentification/i)
+        expect(mock.streamPosts().length).toBe(2) // les deux comptes essayés
+        const record = client.describe().recent[0]!
+        expect(record.ok).toBe(false)
+        expect(record.error?.kind).toBe('authentication')
+        expect(record.attempts).toBe(2)
+      } finally {
+        await mock.close()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('pas de rotation après émission : le texte déjà livré n’est jamais dupliqué', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'nyw-multi-'))
+    try {
+      mkdirSync(path.join(dir, 'a.json'), { recursive: false }) // piège : un dossier, pas un fichier
+      writeFileSync(path.join(dir, 'b.json'), JSON.stringify([{ name: 'SAPISID', value: 'b', domain: '.google.com' }]))
+      const mock = await startMockGemini({ streamPlan: [{ kind: 'ok', snapshots: ['Un peu de texte'] }, { kind: 'status', status: 401 }] })
+      try {
+        const client = new GeminiWebClient({ baseUrl: mock.baseUrl, cookieFile: dir, retryAttempts: 1, retryDelayMs: 1 })
+        // Premier tour : le compte b (seul fichier) répond.
+        expect(await client.complete({ prompt: 'un', model: 'gemini-3.6-flash' })).toBe('Un peu de texte')
+      } finally {
+        await mock.close()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('GeminiWebClient — journal amont (M8)', () => {
+  it('succès et échec enregistrés, les plus récents en dernier', async () => {
+    const mock = await startMockGemini({
+      streamPlan: [
+        { kind: 'ok', snapshots: ['Premier tour ok'] },
+        { kind: 'status', status: 500 },
+        { kind: 'ok', snapshots: ['Troisième tour ok'] },
+      ],
+    })
+    try {
+      const journal = new TurnJournal(10)
+      const client = new GeminiWebClient({ baseUrl: mock.baseUrl, rawCookies: COOKIES, retryAttempts: 1, retryDelayMs: 1, journal })
+      expect(await client.complete({ prompt: 'un', model: 'gemini-3.6-flash' })).toBe('Premier tour ok')
+      await expect(client.complete({ prompt: 'deux', model: 'gemini-3.6-flash' })).rejects.toThrow()
+      expect(await client.complete({ prompt: 'trois', model: 'gemini-3.6-flash' })).toBe('Troisième tour ok')
+
+      const recent = client.describe().recent
+      expect(recent.map((r) => r.ok)).toEqual([true, false, true])
+      expect(recent[1]?.error?.kind).toBe('http')
+      expect(recent[1]?.error?.status).toBe(500)
+      expect(recent[2]?.attempts).toBe(1)
+    } finally {
+      await mock.close()
+    }
   })
 })
 

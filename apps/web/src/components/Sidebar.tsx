@@ -17,10 +17,12 @@ interface SidebarProps {
   activeWorkspace: string | null
   onSelectWorkspace(name: string): void
   onRefreshWorkspaces(): void
+  /** Menu Paramètres (M8). */
+  onOpenSettings(): void
 }
 
 /** Icônes de navigation, dans l'esprit dsh (trait 1.5, 16px). */
-function NavIcon({ kind }: { kind: 'chat' | 'flow' }) {
+function NavIcon({ kind }: { kind: 'chat' | 'flow' | 'gear' }) {
   if (kind === 'chat') {
     return (
       <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
@@ -29,6 +31,19 @@ function NavIcon({ kind }: { kind: 'chat' | 'flow' }) {
           stroke="currentColor"
           strokeWidth="1.4"
           strokeLinejoin="round"
+        />
+      </svg>
+    )
+  }
+  if (kind === 'gear') {
+    return (
+      <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="2.1" stroke="currentColor" strokeWidth="1.4" />
+        <path
+          d="M8 1.8v1.7M8 12.5v1.7M2.9 4.95l1.45.85M11.65 10.2l1.45.85M2.9 11.05l1.45-.85M11.65 5.8l1.45-.85"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
         />
       </svg>
     )
@@ -54,6 +69,7 @@ export function Sidebar({
   activeWorkspace,
   onSelectWorkspace,
   onRefreshWorkspaces,
+  onOpenSettings,
 }: SidebarProps) {
   return (
     <aside className="sidebar">
@@ -147,6 +163,12 @@ export function Sidebar({
           </nav>
         </>
       )}
+      <div className="sidebar-foot">
+        <button type="button" className="settings-btn" data-test="settings-btn" onClick={onOpenSettings}>
+          <NavIcon kind="gear" />
+          Paramètres
+        </button>
+      </div>
     </aside>
   )
 }

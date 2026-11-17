@@ -20,3 +20,14 @@ export interface ChatMsg {
   /** True while the assistant reply is still streaming. */
   streaming?: boolean
 }
+
+/** Un tour amont tel que journalisé par la passerelle (M8). */
+export interface TurnRecordDto {
+  at: string
+  model: string
+  ok: boolean
+  attempts: number
+  ms: number
+  account?: number
+  error?: { kind: string; message: string; status?: number }
+}

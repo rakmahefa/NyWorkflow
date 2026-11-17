@@ -4,12 +4,14 @@ import { defineConfig } from 'vite'
 import { nyworkflowServerPlugin } from './src/server/plugin.ts'
 
 // Port 3080 — same as deepseek-harness web UI.
-// The gateway (@nyworkflow/webapi — pnpm webapi, default 127.0.0.1:8081) is
-// reached same-origin through /api: no CORS, whatever the target (our
-// gateway, or any OpenAI-compatible server via W2A_URL).
+// The gateway is now EMBEDDED in the dev/preview server (M8, server/embed.ts):
+// whatever NYW_WEBAPI_HOST/PORT says, the /api proxy follows. W2A_URL still
+// wins to target any other OpenAI-compatible server (e.g. the e2e mock).
+const gatewayPort = process.env.NYW_WEBAPI_PORT ?? '8081'
+const gatewayHost = process.env.NYW_WEBAPI_HOST === '0.0.0.0' ? '127.0.0.1' : (process.env.NYW_WEBAPI_HOST ?? '127.0.0.1')
 const proxy = {
   '/api': {
-    target: process.env.W2A_URL ?? 'http://127.0.0.1:8081',
+    target: process.env.W2A_URL ?? `http://${gatewayHost}:${gatewayPort}`,
     changeOrigin: true,
     rewrite: (p: string) => p.replace(/^\/api/, ''),
   },

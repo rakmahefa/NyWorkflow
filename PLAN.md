@@ -30,16 +30,17 @@ La passerelle qui parle à Gemini vit **dans ce repo** : `packages/webapi` (`@ny
 ## Ordre
 
 ```
-M7 webapi cœur (client Gemini + serveur OpenAI-compatible) ──► M8 durcissement
-        │                                                      (multi-comptes, proxy…)
-        ▼
-   provider suivant (Gemini + un autre) ──► …défini à chaque fin de milestone
+M7 webapi cœur (client Gemini + serveur OpenAI-compatible) ──► M8 durcissement ✅
+        │                                                   (intégration au démarrage, paramètres,
+        ▼                                                    multi-comptes, proxy, journal, USERGUIDE)
+   M9 stabilité & auth multi-sessions ──► M10 API élargie (si besoin réel) ──► M11 v0.2.0
+        (réécrits à chaque fin de milestone — règle de gouvernance)
 ```
 
 ## Points de décision
 
-- **Fin M7** : la maquette couvre-t-elle tous les cas d'échec observés historiquement (401, divergence, flux vide) ? Sinon, les cas manquants entrent dans M8.
-- **Fin M8** : dégeler `/v1beta` et les outils dans l'API, ou garder le socle minimal ?
+- **Fin M7** : la maquette couvre-t-elle tous les cas d'échec observés historiquement (401, divergence, flux vide) ? Sinon, les cas manquants entrent dans M8. ✔ Couvert — M8 a ajouté la rotation multi-comptes sur 401 et le proxy.
+- **Fin M8** : dégeler `/v1beta` et les outils dans l'API, ou garder le socle minimal ? ✔ Décision : **reporté** (M10) — aucun besoin réel exprimé ; M9 privilégie la stabilité des comptes (expiration visible, `/u/N` par compte), la douleur la plus fréquente à l'usage.
 - Le format de contrat ICM v1 reste figé jusqu'à v0.2.0 (décision M4, inchangée).
 
 ## Risques

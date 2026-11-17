@@ -18,6 +18,7 @@
     "@nyworkflow/core": "workspace:*",
     "@nyworkflow/session": "workspace:*",
     "@nyworkflow/tools": "workspace:*",
+    "@nyworkflow/webapi": "workspace:*",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },

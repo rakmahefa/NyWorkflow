@@ -4,6 +4,7 @@ import { ChatView } from './components/ChatView'
 import { Composer } from './components/Composer'
 import { ModelPicker } from './components/ModelPicker'
 import { RunPanel } from './components/RunPanel'
+import { SettingsPanel } from './components/SettingsPanel'
 import { Sidebar } from './components/Sidebar'
 import type { View } from './components/Sidebar'
 import { WorkflowsView } from './components/WorkflowsView'
@@ -11,6 +12,7 @@ import { parseInput, runCommand } from './lib/commands'
 import { fakeReply, streamText } from './lib/fakeLLM'
 import { useGatewayStatus } from './lib/gateway'
 import { toLlmHistory } from './lib/history'
+import { applyTheme, loadTheme } from './lib/theme'
 import * as api from './lib/sessionApi'
 import type { RunStateDto, WorkspaceSummaryDto } from './lib/sessionApi'
 import { SessionStore } from './lib/store'
@@ -18,9 +20,9 @@ import type { ChatMsg, SessionInfo } from './lib/types'
 import { APP_VERSION } from './lib/version'
 
 const WELCOME =
-  'Bienvenue dans NyWorkflow (v0.1.0). Sessions journalisées sur disque, moteur ICM avec outils — onglet Workflows pour exécuter un pipeline, écritures du modèle sous approbation. /help pour les commandes.'
+  'Bienvenue dans NyWorkflow (v0.1.0). Passerelle webapi intégrée — sessions journalisées sur disque, moteur ICM avec outils, onglet Workflows pour exécuter un pipeline, écritures du modèle sous approbation. /help pour les commandes, bouton Paramètres pour le diagnostic.'
 const GATEWAY_DOWN =
-  'Passerelle gemini-web2api absente (127.0.0.1:8081) — réponses simulées. Lancez la passerelle du repo ny-gemini-acp pour le streaming réel.'
+  'Passerelle webapi absente — réponses simulées. Elle démarre normalement avec l’application ; ouvrez Paramètres → Passerelle pour le diagnostic, ou vérifiez NYW_WEBAPI_EMBED (0 = désactivée).'
 const MEMORY_FALLBACK =
   'API /sessions indisponible — repli mémoire : cette session ne survivra pas à un rechargement.'
 
@@ -52,6 +54,8 @@ export default function App() {
   const [wsList, setWsList] = useState<readonly WorkspaceSummaryDto[] | null>(null)
   const [wsName, setWsName] = useState<string | null>(null)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  /** M8 : menu Paramètres (thème, diagnostic passerelle, à propos). */
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const gw = useGatewayStatus(client)
 
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot)
@@ -59,6 +63,10 @@ export default function App() {
   const messages = active ? snap.messages.filter((m) => m.sessionId === active.id) : []
 
   // Hydratation au démarrage : journaux → store. Repli mémoire si l'API est absente.
+  // Thème persisté appliqué dès le boot (M8).
+  useEffect(() => {
+    applyTheme(loadTheme())
+  }, [])
   useEffect(() => {
     let cancelled = false
     void (async () => {
@@ -349,6 +357,7 @@ export default function App() {
           setSelectedRunId(null)
         }}
         onRefreshWorkspaces={() => refreshWorkspaces()}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <main className="main">
         <header className="main-head">
@@ -390,6 +399,7 @@ export default function App() {
           </>
         )}
       </main>
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   )
 }
