@@ -1,7 +1,7 @@
 /// <reference types="vitest/config" />
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
-import { nyworkflowSessionsPlugin } from './src/server/plugin.ts'
+import { nyworkflowServerPlugin } from './src/server/plugin.ts'
 
 // Port 3080 — same as deepseek-harness web UI.
 // The gateway (gemini-web2api) is reached same-origin through /api:
@@ -15,7 +15,7 @@ const proxy = {
 }
 
 export default defineConfig({
-  plugins: [react(), nyworkflowSessionsPlugin()],
+  plugins: [react(), nyworkflowServerPlugin()],
   server: { host: '127.0.0.1', port: 3080, strictPort: true, proxy },
   preview: { host: '127.0.0.1', port: 4173, strictPort: true, proxy },
   test: { environment: 'node', include: ['src/**/*.test.ts'] },

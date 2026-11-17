@@ -187,4 +187,15 @@ describe('deriveSession', () => {
     expect(d.baseTitle).toBe('Démo')
     expect(d.forkedFrom).toBe('2026-11-17-0000')
   })
+
+  it('workspace M4 : présent quand session.created le porte, absent sinon', () => {
+    const run = deriveSession([
+      { type: 'session.created', at: T1, title: 'Rapport', workspace: 'exemple-rapport' },
+      userEvent,
+    ])
+    expect(run.workspace).toBe('exemple-rapport')
+
+    const chat = deriveSession([createdEvent, userEvent])
+    expect(chat.workspace).toBeUndefined()
+  })
 })

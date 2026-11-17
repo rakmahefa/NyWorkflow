@@ -20,7 +20,7 @@
 └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Le serveur web embarque aussi l'API `/sessions` (plugin Vite, branchée en dev comme en preview) : le navigateur y lit et écrit les journaux JSONL — il ne touche jamais les fichiers directement. L'emplacement par défaut est `.nyworkflow/` à la racine du repo, surchargeable par `NYW_HOME`.
+Le serveur web embarque aussi deux API same-origin (plugin Vite, branchées en dev comme en preview) : `/sessions` (journaux — le navigateur y lit et écrit les échanges, il ne touche jamais les fichiers) et `/workspaces` (moteur ICM — exécution des étapes côté serveur, l'état des runs dérivé des journaux). Les journaux vivent sous `.nyworkflow/` à la racine du repo, les workspaces sous `examples/workspaces/` — deux emplacements surchargeables par `NYW_HOME` et `NYW_WORKSPACES`.
 
 ## Les 5 règles
 
@@ -57,12 +57,12 @@ Exemple complet : `examples/workspaces/exemple-rapport/`.
 
 ## Flux d'une exécution
 
-1. L'utilisateur choisit un workspace et lance l'étape 1.
-2. `core` lit la carte (CONTEXT.md racine) puis le contrat de l'étape.
-3. `core` assemble le contexte (entrées) et l'envoie via `adapter-llm`.
-4. Les appels d'outils passent par `tools` (approbation dans l'UI le cas échéant).
-5. Chaque événement est journalisé par `session` (JSONL).
-6. La sortie est écrite dans `output/` — vérifiable, éditable, versionnable.
+1. L'utilisateur crée un run (le sujet devient une session) et lance l'étape suivante via `/workspaces/.../advance`.
+2. `core` lit la carte (CONTEXT.md racine) puis le contrat de l'étape, et charge les entrées **sur disque, à l'instant** — la sortie de l'étape N est l'entrée de l'étape N+1, version éditée comprise.
+3. `core` assemble le contexte et l'envoie via le client LLM injecté (server-side, vers la passerelle).
+4. La réponse est écrite telle quelle dans `output/` — vérifiable, éditable, versionnable — et chaque événement (`stage.started`, `stage.output`, `run.completed`) est journalisé par `session` (JSONL).
+5. Pause au checkpoint : l'humain relit, édite, puis relance `advance`. L'état du run se dérive du journal — il survit aux redémarrages.
+6. Les appels d'outils passeront par `tools` (M5) avec approbation dans l'UI.
 
 ## Frontières de maintenance
 

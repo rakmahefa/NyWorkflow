@@ -44,9 +44,29 @@ L'UI fonctionne avec ou sans passerelle. Sans `gemini-web2api` : chat en mode si
 
 Les sessions sont journalisées en append-only sous `.nyworkflow/sessions/` (JSONL, un fichier par session). Fermez l'UI, relancez `pnpm dev` : tout revient — titres, messages, forks. Le bouton **Fork** copie un journal pour explorer une variante sans toucher à l'original ; `/clear` vide l'affichage, jamais le journal. Les messages système (retours de commandes, état de la passerelle) restent éphémères : seuls les échanges user/assistant sont journalisés — c'est exactement l'historique renvoyé au modèle.
 
+### Exécuter un workflow ICM
+
+Le moteur est opérationnel : un workspace (carte racine + étapes numérotées + contrats `CONTEXT.md`) s'exécute étape par étape via l'API `/workspaces`, sans écrire une ligne de code —
+
+```sh
+# lister les workspaces (ceux d'exemples, ou NYW_WORKSPACES=votre-dossier)
+curl -s http://127.0.0.1:3080/workspaces
+
+# créer un run : le sujet devient une session journalisée
+RUN=$(curl -s -X POST http://127.0.0.1:3080/workspaces/exemple-rapport/runs \
+  -H 'content-type: application/json' -d '{"subject": "Les loutres de Madagascar"}' | jq -r .id)
+
+# exécuter l'étape suivante (checkpoint après chaque étape, reprise manuelle)
+curl -s -X POST http://127.0.0.1:3080/workspaces/exemple-rapport/runs/$RUN/advance \
+  -H 'content-type: application/json' -d '{"model": "gemini-2.5-flash"}'
+# → 01-recherche/output/faits.md, puis 02-redaction/output/rapport.md
+```
+
+Chaque étape relit ses entrées sur disque : éditez `faits.md` au checkpoint, l'étape suivante travaille votre version. L'état d'un run survit aux redémarrages (dérivé du journal). Le format de contrat `CONTEXT.md` est figé en v1 jusqu'à v0.2.0.
+
 CI à chaque push/PR : typecheck, build, Vitest, Playwright, puis artefacts (UI construite, rapports de tests, capture README). Voir l'onglet [Actions](https://github.com/rakmahefa/NyWorkflow/actions).
 
-## Avancement — 60 %
+## Avancement — 80 %
 
 | Milestone | Contenu | Poids | État |
 |---|---|---:|---|
@@ -54,7 +74,7 @@ CI à chaque push/PR : typecheck, build, Vitest, Playwright, puis artefacts (UI 
 | M1 | UI web + tests + CI (chat simulé) | 20 % | ✅ Terminé |
 | M2 | Adaptateur LLM (passerelle web2api) | 15 % | ✅ Terminé |
 | M3 | Sessions persistantes (JSONL, fork) | 15 % | ✅ Terminé |
-| M4 | Moteur ICM (étapes, CONTEXT.md) | 20 % | ⬜ À faire |
+| M4 | Moteur ICM (étapes, CONTEXT.md) | 20 % | ✅ Terminé |
 | M5 | Outils + permissions | 10 % | ⬜ À faire |
 | M6 | Vue workflow + v0.1.0 | 10 % | ⬜ À faire |
 

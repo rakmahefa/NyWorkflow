@@ -21,6 +21,8 @@ export interface DerivedSession {
   baseTitle: string
   /** Present when this journal is a fork. */
   forkedFrom?: string
+  /** ICM workspace name, when this session runs a workflow. (M4) */
+  workspace?: string
   /** Chat messages in order. */
   messages: DerivedMessage[]
 }
@@ -55,6 +57,7 @@ export function deriveSession(events: SessionEvent[]): DerivedSession {
     baseTitle,
     title: forked ? `${baseTitle} (fork)` : baseTitle,
     forkedFrom: forked?.from,
+    workspace: created?.workspace,
     messages,
   }
 }

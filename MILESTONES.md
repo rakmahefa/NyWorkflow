@@ -48,17 +48,23 @@ Objectif : fermer et rouvrir sans perdre l'historique.
 
 **Livré quand :** redémarrer le serveur restaure les sessions intactes. ✔ (prouvé par le test d'intégration : boot → échange → fork → arrêt/relance du serveur de dev → tout revient à l'identique ; e2e : rechargement de page, fork, /clear)
 
-## M4 — Moteur ICM · 20 %
+## M4 — Moteur ICM · 20 % · ✅ Terminé (2026-11-17)
 
 Objectif : exécuter un workspace d'étapes — le cœur du projet.
 
-- [ ] Parsing du workspace : carte racine + contrats `CONTEXT.md` (Entrées / Process / Sorties)
-- [ ] Exécution d'une étape : contexte assemblé → LLM → sortie écrite dans `output/`
-- [ ] Chaînage : la sortie de l'étape N est proposée en entrée de l'étape N+1
-- [ ] Checkpoints : pause entre étapes, reprise manuelle
-- [ ] Tests : parsing + exécution sur le workspace d'exemple (LLM mocké)
+- [x] Parsing du workspace : carte racine + contrats `CONTEXT.md` (Entrées / Process / Sorties)
+- [x] Exécution d'une étape : contexte assemblé → LLM → sortie écrite dans `output/`
+- [x] Chaînage : la sortie de l'étape N est proposée en entrée de l'étape N+1
+- [x] Checkpoints : pause entre étapes, reprise manuelle
+- [x] Tests : parsing + exécution sur le workspace d'exemple (LLM mocké)
 
-**Livré quand :** `examples/workspaces/exemple-rapport` s'exécute de bout en bout.
+**Livré quand :** `examples/workspaces/exemple-rapport` s'exécute de bout en bout. ✔ (prouvé en intégration sur le vrai serveur Vite : sujet → étape 1 → checkpoint → étape 2 → done, sorties sur disque, reprise après redémarrage du serveur ; LLM maquette OpenAI-compatible)
+
+Détail de la livraison :
+
+- `packages/core` — `parse.ts` (carte + contrats, format v1 **figé** jusqu'à v0.2.0 : sections Entrées/Process/Sorties, chemins entre backticks, une entrée non-fichier = le sujet, une sortie par étape), `prompt.ts` (assemblage pur), `engine.ts` (`runStage`, `createRun` avec pause à chaque étape, `runStateFromEvents` — l'état dérivé du journal, donc survivant aux redémarrages). Le LLM est injecté (`StageLlm`) : core ne fait aucun HTTP.
+- Le chaînage est déclaratif : les entrées sont relues sur disque à chaque exécution — un humain peut éditer une sortie au checkpoint, l'étape suivante lit la version éditée.
+- `apps/web` — API `/workspaces` (plugin Vite, dev et preview) : listing, détail + contrats + runs, création de run (le sujet devient une session journalisée), `advance` pour exécuter l'étape suivante côté serveur (garde anti-double-exécution 409). La vue workflow dans l'UI arrive en M6 ; l'API est pilotable aujourd'hui.
 
 ## M5 — Outils + permissions · 10 %
 

@@ -46,6 +46,7 @@ jobs:
           path: |
             apps/web/test-results
             packages/adapter-llm/test-results
+            packages/core/test-results
             packages/session/test-results
           if-no-files-found: warn
 

@@ -8,6 +8,11 @@
  * M3 note: two additive fields joined the original frozen contract —
  * `title` on session.created (titles survive restarts) and the
  * session.forked event (fork provenance). Old journals stay readable.
+ *
+ * M4 note: one more additive field on DerivedSession — `workspace`, read
+ * from session.created, so /workspaces can list the runs of a workspace.
+ * The stage.started / stage.output / run.completed events (declared since
+ * the original contract) are now written by the core engine.
  */
 
 /** Every fact of a session, in order. */

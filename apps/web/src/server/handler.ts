@@ -7,8 +7,8 @@
  *   POST /sessions/:id/events   → append a chat event (user|assistant message)
  *   POST /sessions/:id/fork     → fork the journal
  *
- * Chat events only for now — tool and stage events arrive with M4/M5,
- * through the same route.
+ * Chat events only — tool and stage events arrive through /workspaces
+ * (M4), which journals them as the engine runs.
  */
 import { existsSync } from 'node:fs'
 import { access, readdir } from 'node:fs/promises'
@@ -31,6 +31,8 @@ export interface SessionDto {
   title: string
   createdAt: number
   forkedFrom?: string
+  /** ICM workspace name, when this session runs a workflow. (M4) */
+  workspace?: string
   messages: { role: 'user' | 'assistant'; text: string; at: number }[]
 }
 
@@ -117,6 +119,7 @@ export function createSessionsHandler(home: string): (req: IncomingMessage, res:
       title: d.title,
       createdAt: toMs(d.createdAt),
       forkedFrom: d.forkedFrom,
+      workspace: d.workspace,
       messages: d.messages.map((m) => ({ role: m.role, text: m.text, at: toMs(m.at) })),
     }
   }

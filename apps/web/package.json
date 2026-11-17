@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@nyworkflow/adapter-llm": "workspace:*",
+    "@nyworkflow/core": "workspace:*",
     "@nyworkflow/session": "workspace:*",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

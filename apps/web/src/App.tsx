@@ -14,7 +14,7 @@ import type { ChatMsg, SessionInfo } from './lib/types'
 import { APP_VERSION } from './lib/version'
 
 const WELCOME =
-  'Bienvenue dans NyWorkflow (M3). Les sessions sont journalisées sur disque — fermez et rouvrez, rien ne se perd. /help pour les commandes.'
+  'Bienvenue dans NyWorkflow (M4). Sessions journalisées sur disque — fermez et rouvrez, rien ne se perd. Le moteur ICM exécute les workspaces via l’API /workspaces (vue dédiée en M6). /help pour les commandes.'
 const GATEWAY_DOWN =
   'Passerelle gemini-web2api absente (127.0.0.1:8081) — réponses simulées. Lancez la passerelle du repo ny-gemini-acp pour le streaming réel.'
 const MEMORY_FALLBACK =
@@ -24,6 +24,8 @@ type Mode = 'booting' | 'server' | 'memory'
 
 /**
  * M3 shell: sessions persisted as JSONL journals through /sessions.
+ * M4: the ICM engine runs workspaces server-side through /workspaces
+ * (chat UI unchanged — the workflow view lands in M6).
  * Boot hydrates from the journals; chat messages are journaled as they
  * settle; forking copies a journal. When /sessions is unreachable the
  * app degrades to in-memory sessions with a clear notice — never a
@@ -247,7 +249,7 @@ export default function App() {
               onSelect={gw.select}
               onRefresh={() => void gw.refresh()}
             />
-            <span className="tag">M3 · v{APP_VERSION}</span>
+            <span className="tag">M4 · v{APP_VERSION}</span>
           </div>
         </header>
         <ChatView messages={messages} />

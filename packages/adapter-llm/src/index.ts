@@ -27,5 +27,9 @@ export interface LlmAdapter {
   chatStream(options: ChatOptions): AsyncIterable<string>
 }
 
-export { createWeb2ApiClient, AdapterError } from './adapter'
-export type { AdapterErrorKind, ClientOptions } from './adapter'
+// Re-exports carry explicit .ts extensions: the package is loaded by plain
+// Node (type stripping) through the bundled vite config (the web server
+// plugin imports the client for server-side stage execution), where
+// extensionless ESM imports do not resolve.
+export { createWeb2ApiClient, AdapterError } from './adapter.ts'
+export type { AdapterErrorKind, ClientOptions } from './adapter.ts'
