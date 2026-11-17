@@ -11,6 +11,8 @@
   "scripts": {
     "dev": "pnpm --filter @nyworkflow/web dev",
     "build": "pnpm -r --if-present build",
-    "test": "pnpm -r --if-present test"
+    "test": "pnpm -r --if-present test",
+    "test:e2e": "pnpm --filter @nyworkflow/web test:e2e",
+    "typecheck": "pnpm -r --if-present typecheck"
   }
 }

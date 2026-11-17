@@ -10,18 +10,19 @@ La somme des poids fait 100 %. L'avancement global est mis à jour dans le READM
 - [x] Squelette : monorepo pnpm, `apps/web` + 4 packages, `CONTEXT.md` par dossier
 - [x] Workspace ICM d'exemple (`examples/workspaces/exemple-rapport`)
 
-## M1 — UI web + tests · 20 %
+## M1 — UI web + tests · 20 % · ✅ Terminé (2026-11-17)
 
 Objectif : une UI utilisable sans backend, fidèle à l'esprit deepseek-harness.
 
-- [ ] `pnpm dev` démarre `apps/web` sur `127.0.0.1:3080`
-- [ ] Sidebar sessions (liste, nouvelle session)
-- [ ] Zone de chat + streaming simulé (réponses factices, aucune API)
-- [ ] Commandes locales : `/new`, `/help`, `/clear`
-- [ ] Vitest : commandes + état des sessions (≥ 5 tests)
-- [ ] Playwright : ouvrir la page, envoyer un message, créer une session
+- [x] `pnpm dev` démarre `apps/web` sur `127.0.0.1:3080`
+- [x] Sidebar sessions (liste, nouvelle session)
+- [x] Zone de chat + streaming simulé (réponses factices, aucune API)
+- [x] Commandes locales : `/new`, `/help`, `/clear`
+- [x] Vitest : commandes + état des sessions — 22 tests
+- [x] Playwright : ouvrir la page, envoyer un message, créer une session — 3 tests
+- [x] CI GitHub Actions : typecheck + build + tests + artefacts (dist, rapports)
 
-**Livré quand :** `pnpm test` vert et démo sans backend possible.
+**Livré quand :** `pnpm test` vert et démo sans backend possible. ✔
 
 ## M2 — Adaptateur LLM · 15 %
 
