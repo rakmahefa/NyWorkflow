@@ -76,6 +76,36 @@ test('paramètres : journal amont peuplé après un tour réel', async ({ page }
   await expect(journal).toContainText('ok')
 })
 
+test('paramètres : sessions /u/N par compte, expiration vue d’avance, stats par compte', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Paramètres' }).click()
+
+  // Table Comptes & sessions : /u/N par compte, libellés du manifeste.
+  const accounts = page.locator('[data-test="gateway-accounts"]')
+  await expect(accounts).toBeVisible()
+  await expect(accounts.locator('[data-test="account-row"]')).toHaveCount(2)
+  await expect(accounts).toContainText('Perso')
+  await expect(accounts).toContainText('Pro')
+  await expect(accounts).toContainText('/u/0')
+  await expect(accounts).toContainText('/u/1')
+
+  // Expiration : le compte Perso porte une date (warn/ok selon J-12), le compte
+  // Pro est expiré depuis 3 j — le pilote le voit AVANT le 401.
+  await expect(accounts).toContainText('expiré depuis 3 j')
+
+  // La session effective du compte actif apparaît dans le diagnostic.
+  const diag = page.locator('[data-test="gateway-diag"]')
+  await expect(diag).toContainText('Session')
+  await expect(diag).toContainText('/u/0')
+
+  // Statistiques par compte : tours, réussites, échecs, dernier tour.
+  const usage = page.locator('[data-test="gateway-usage"]')
+  await expect(usage).toBeVisible()
+  await expect(usage.locator('[data-test="usage-row"]')).toHaveCount(1)
+  await expect(usage).toContainText('Perso')
+  await expect(usage).toContainText('2') // tours
+})
+
 test('paramètres : clic sur l\'overlay ferme, pas sur la modale', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Paramètres' }).click()

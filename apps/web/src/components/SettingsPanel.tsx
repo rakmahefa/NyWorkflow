@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { fetchGatewayDiagnostic, timeOf, type GatewayDiagnostic } from '../lib/gatewayDiag'
+import { fetchGatewayDiagnostic, timeOf, formatExpiry, type GatewayAccountDto, type GatewayDiagnostic } from '../lib/gatewayDiag'
 import { loadTheme, saveTheme, applyTheme, type ThemePreference } from '../lib/theme'
 import { APP_VERSION } from '../lib/version'
 
@@ -20,6 +20,10 @@ const THEMES: { value: ThemePreference; label: string }[] = [
  *   Passerelle : le diagnostic GET / de la webapi — cookies, comptes, bl,
  *               proxy, journal amont (les derniers échecs typés) ;
  *   À propos   : versions et guide utilisateur.
+ *
+ * M9 : la section Passerelle montre aussi la table Comptes & sessions
+ * (/u/N par compte, expiration des cookies — on voit venir l'expiration)
+ * et les statistiques d'utilisation par compte.
  */
 export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [theme, setTheme] = useState<ThemePreference>(() => (typeof document === 'undefined' ? 'auto' : loadTheme()))
@@ -54,6 +58,16 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const gw = diag?.ok ? diag.data.gateway : undefined
   const accounts = gw?.accounts ?? []
   const recent = [...(gw?.recent ?? [])].reverse().slice(0, 12) // les plus récents d'abord
+  const usage = gw?.accountUsage ?? []
+
+  // M9 : table Comptes & sessions — dès qu'il y a plusieurs comptes OU des
+  // informations de session/expiration à montrer.
+  const showAccounts =
+    accounts.length > 1 || accounts.some((a) => a.authUser !== undefined || a.expiresAt !== undefined)
+  const shortFile = (f: string): string => f.split('/').pop() || f
+  const accountName = (a: GatewayAccountDto): string => a.label ?? shortFile(a.file)
+  const nameByIndex = (i: number): string =>
+    accounts[i] !== undefined ? accountName(accounts[i] as GatewayAccountDto) : `Compte n°${i + 1}`
 
   return (
     <div className="modal-overlay" data-test="settings-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -101,6 +115,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               {diag.error} — la passerelle démarre normalement avec l'application ; vérifiez NYW_WEBAPI_EMBED ou relancez.
             </p>
           ) : (
+            <>
             <dl className="diag" data-test="gateway-diag">
               <div className="diag-row">
                 <dt>État</dt>
@@ -135,6 +150,12 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   </dd>
                 </div>
               ) : null}
+              {gw?.authUser !== undefined && gw?.authUser !== null ? (
+                <div className="diag-row">
+                  <dt>Session</dt>
+                  <dd>/u/{gw.authUser} · compte actif n°{(gw?.activeAccount ?? 0) + 1}</dd>
+                </div>
+              ) : null}
               <div className="diag-row">
                 <dt>bl</dt>
                 <dd>{gw?.bl ?? 'auto-découvert au premier tour'}</dd>
@@ -144,6 +165,76 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 <dd>{gw?.proxy ?? 'aucun'}</dd>
               </div>
             </dl>
+          {showAccounts ? (
+            <>
+              <h5 className="journal-title">Comptes &amp; sessions</h5>
+              <table className="journal" data-test="gateway-accounts">
+                <thead>
+                  <tr>
+                    <th>Compte</th>
+                    <th>Session</th>
+                    <th>Cookies</th>
+                    <th>Expiration</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {accounts.map((a) => {
+                    const expiry = a.expiresAt !== undefined ? formatExpiry(a.expiresAt) : undefined
+                    return (
+                      <tr key={a.file} data-test="account-row">
+                        <td className="journal-model">{accountName(a)}</td>
+                        <td>{a.authUser !== undefined ? `/u/${a.authUser}` : '—'}</td>
+                        <td>
+                          {a.cookies ? (
+                            <span className="tag tag-ok">présents</span>
+                          ) : (
+                            <span className="tag tag-err" title={a.error ?? 'aucun cookie exploitable'}>
+                              {a.error !== undefined ? 'illisibles' : 'expirés/absents'}
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          {expiry !== undefined ? (
+                            <span className={`tag tag-${expiry.tone}`}>{expiry.text}</span>
+                          ) : (
+                            '—'
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </>
+          ) : null}
+          {usage.length > 0 ? (
+            <>
+              <h5 className="journal-title">Statistiques par compte</h5>
+              <table className="journal" data-test="gateway-usage">
+                <thead>
+                  <tr>
+                    <th>Compte</th>
+                    <th>Tours</th>
+                    <th>OK</th>
+                    <th>Échecs</th>
+                    <th>Dernier</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usage.map((u) => (
+                    <tr key={u.account} data-test="usage-row">
+                      <td className="journal-model">{nameByIndex(u.account)}</td>
+                      <td>{u.turns}</td>
+                      <td>{u.ok}</td>
+                      <td>{u.failed}</td>
+                      <td>{u.lastAt !== undefined ? timeOf(u.lastAt) : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          ) : null}
+          </>
           )}
 
           <h5 className="journal-title">Journal amont — derniers tours</h5>

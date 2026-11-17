@@ -33,6 +33,7 @@ export function webApiProviderFromConfig(config: WebApiConfig): Provider {
       baseUrl: config.baseUrl,
       cookieFile: config.cookieFile,
       rawCookies: config.rawCookies,
+      accountsFile: config.accountsFile,
       defaultModel: config.defaultModel,
       modelsFile: config.modelsFile,
       bl: config.geminiBl,
@@ -128,6 +129,10 @@ export function createWebApiServer(config: WebApiConfig, provider: Provider = we
         rawCookies: d.rawCookies,
         accounts: d.accounts,
         activeAccount: d.activeAccount,
+        /** M9 — session /u/N effective du compte actif (null = sans préfixe). */
+        authUser: d.authUser,
+        /** M9 — statistiques d'utilisation par compte (fenêtre du journal amont). */
+        accountUsage: d.accountUsage,
         proxy: d.proxy,
         recent: d.recent,
       },

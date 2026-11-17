@@ -2,8 +2,8 @@
 
 Rôle : servir l'interface web Gemini (et demain d'autres providers) en OpenAI-compatible, **dans le repo** — la refonte moderne et maintenue de `ny-gemini-acp` (Rust, non maintenu). C'est le seul endroit du monorepo qui connaît Gemini : cookies, SAPISIDHASH, payload `f.req`, frames `wrb.fr`, version `bl`.
 
-Entrées : requêtes OpenAI-compatible (`/v1/models`, `/v1/chat/completions`), cookies Gemini dans `.nyworkflow/cookies/gemini.json` (3 formats : EditThisCookie, objet `{"cookie","sapisid"}`, chaîne brute), un **répertoire de fichiers cookies = multi-comptes** (`NYW_WEBAPI_COOKIE_FILE`), ou `NYW_WEBAPI_COOKIES`.
-Sorties : JSON et SSE au format OpenAI — exactement ce qu'`adapter-llm` consomme déjà (port 8081 par défaut = remplacement direct de l'ancienne passerelle) ; diagnostic `GET /` (cookies, comptes, `bl`, proxy masqué, journal amont).
+Entrées : requêtes OpenAI-compatible (`/v1/models`, `/v1/chat/completions`), cookies Gemini dans `.nyworkflow/cookies/gemini.json` (3 formats : EditThisCookie, objet `{"cookie","sapisid"}`, chaîne brute), un **répertoire de fichiers cookies = multi-comptes** (`NYW_WEBAPI_COOKIE_FILE`), un **manifeste `accounts.json` = un `/u/N` et un libellé par compte** (M9, auto à côté des cookies ou `NYW_WEBAPI_ACCOUNTS_FILE`), ou `NYW_WEBAPI_COOKIES`.
+Sorties : JSON et SSE au format OpenAI — exactement ce qu'`adapter-llm` consomme déjà (port 8081 par défaut = remplacement direct de l'ancienne passerelle) ; diagnostic `GET /` (cookies, **expiration par compte**, sessions `/u/N`, `bl`, proxy masqué, journal amont, **stats par compte** — M9, tous les champs M9 sont additifs, les consommateurs antérieurs ne bougent pas).
 
 Ne fait pas : orchestration, sessions, outils — jamais. Ne touche pas au reste du monorepo : Gemini évolue → le patch reste ici.
 
@@ -17,9 +17,10 @@ Ne fait pas : orchestration, sessions, outils — jamais. Ne touche pas au reste
 | retry à l'identique | backoff exponentiel + jitter, retry seulement si rien n'a été émis |
 | flux vide = échec immédiat | flux vide retenté (délibéré : échec souvent transitoire), puis erreur typée `empty` |
 | divergences retryées même après émission | on ne réessaie jamais après avoir émis — le consommateur voit l'erreur, pas un texte dupliqué |
-| un seul compte = tout tombe à la première expiration | **multi-comptes** (`accounts.ts`) : répertoire de cookies, rotation sur erreur d'authentification, jamais après émission |
+| un seul compte = tout tombe à la première expiration | **multi-comptes** (`accounts.ts`) : répertoire de cookies, rotation sur erreur d'authentification, jamais après émission — et depuis M9, **`/u/N` par compte** (`accounts.json`) : la rotation change de session toute seule, l'index n'est plus global |
+| expiration découverte en 401, jamais vue venir | **expiration au diagnostic** (M9, `cookies.ts` `earliestExpiry`) : la plus proche des cookies vivants par compte, avertissement CLI ≤ 7 j |
 | pas de proxy sortant | **tunnel CONNECT + TLS maison** (`proxy.ts`) : `NYW_WEBAPI_PROXY`/`HTTPS_PROXY` + `NO_PROXY`, `NYW_WEBAPI_TLS_CA` pour les proxy qui rechiffrent |
-| diagnostics muets | **journal amont** (`journal.ts`) : 50 derniers tours (modèle, durée, essais, compte, erreur typée) sur `GET /` |
+| diagnostics muets | **journal amont** (`journal.ts`) : 50 derniers tours (modèle, durée, essais, compte, erreur typée) sur `GET /` — et depuis M9, **stats par compte** (`accountUsage` : tours, ok, échecs, dernier tour) |
 
 ## Déviations assumées par rapport au port (documentées dans les tests)
 
@@ -40,4 +41,4 @@ pnpm dev             # intégré : le serveur web démarre la passerelle (apps/w
 
 Leçons Node (consignées) : avec `agent: false`, `https.request` IGNORE `createConnection` et contourne le tunnel — laisser `agent` indéfini ; un tunnel CONNECT se détruit à la main sur `end`/`close` de la réponse, la propagation de `close_notify` à travers les pipes n'est pas garantie.
 
-Tâches : M7 ✅, M8 ✅ (multi-comptes, proxy, journal amont, diagnostic étendu — 2026-11-17) — voir MILESTONES.md.
+Tâches : M7 ✅, M8 ✅ (multi-comptes, proxy, journal amont, diagnostic étendu), M9 ✅ (auth multi-sessions `/u/N`, expiration vue d'avance, stats par compte — 2026-11-17) — voir MILESTONES.md.

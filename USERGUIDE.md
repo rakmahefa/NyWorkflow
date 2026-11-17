@@ -87,10 +87,40 @@ Pointez `NYW_WEBAPI_COOKIE_FILE` vers un **répertoire** : chaque fichier dedans
 .nyworkflow/cookies/
 ├── compte-a.json
 ├── compte-b.json
-└── compte-c.json
+├── compte-c.json
+└── accounts.json     ← optionnel : le manifeste des sessions (M9)
 ```
 
 L'état de chaque compte (fichier, cookies valides, erreur de format) est visible dans **Paramètres → Passerelle**.
+
+### Sessions Google par compte — `accounts.json` (M9)
+
+Chaque fichier de cookies est un compte Google **et son index de session**. L'index, c'est le `/u/N` qui apparaît dans la barre d'adresse de Gemini quand vous êtes connecté à ce compte : `gemini.google.com/u/1/app` → index `1` (le compte par défaut du navigateur est presque toujours `/u/0`).
+
+Posez un fichier `accounts.json` à côté des cookies pour dire à la passerelle qui est qui :
+
+```jsonc
+{
+  "accounts": [
+    { "file": "compte-a.json", "authUser": 0, "label": "Perso" },
+    { "file": "compte-b.json", "authUser": 1, "label": "Pro" }
+  ]
+}
+```
+
+- **Pourquoi c'est important** : sans manifeste, la rotation M8 envoyait le compte 2 avec l'adresse de session du compte 1 — Google répondait 401. Avec le manifeste, le préfixe `/u/N`, le referer et l'en-tête `x-goog-authuser` suivent le compte **actif** : la rotation change de session toute seule.
+- Le `label` est purement cosmétique — il s'affiche dans les Paramètres et les stats à la place du nom de fichier.
+- Pas d'entrée pour un compte ? La passerelle replie sur `NYW_WEBAPI_AUTH_USER` (entier ≥ 0), sinon pas de préfixe.
+- Le manifeste est **relu à chaud** (changer un index ne redémarre rien) ; entrées invalides ignorées une par une, jamais fatal. Surcharge : `NYW_WEBAPI_ACCOUNTS_FILE` pointe un manifeste ailleurs.
+
+### Voir venir l'expiration des cookies (M9)
+
+L'export EditThisCookie porte les dates d'expiration : la passerelle montre **la plus proche** par compte, **avant** qu'elle ne devienne un 401 —
+
+- dans **Paramètres → Passerelle**, table « Comptes & sessions » : « dans 6 j » (orange, à ≤ 7 jours), la date seule au-delà, « expiré depuis 3 j » (rouge) ;
+- au démarrage de `pnpm webapi` : `expiration : Perso — cookies expirés dans ~5 j`.
+
+Une chaîne brute n'a pas de date : rien ne s'affiche pour elle (on ne peut pas prédire). Un compte « expiré depuis » se recharge comme n'importe quel cookie — le fichier est relu à chaud.
 
 ## 3. Tour de l'interface
 
@@ -125,7 +155,9 @@ L'état d'un run **survit aux redémarrages** — il se reconstruit du journal.
 Le bouton **Paramètres** (engrenage, bas de la barre latérale) ouvre une modale en trois sections :
 
 - **Apparence** — thème **Auto (système) / Clair / Sombre**, appliqué à l'instant et persisté (localStorage). « Auto » suit la préférence du système.
-- **Passerelle webapi** — le diagnostic vivant de la passerelle : état, version, modèle par défaut, **cookies présents/absents** (avec le chemin du fichier), comptes multi-comptes valides, `bl` découvert, proxy configuré, et le **journal amont** — les derniers tours avec leur résultat : `ok`, ou l'erreur **typée** (`authentication`, `http 500`, `divergence`…) avec la durée et le nombre d'essais. Survolez un badge d'erreur pour le message complet.
+- **Passerelle webapi** — le diagnostic vivant de la passerelle : état, version, modèle par défaut, **cookies présents/absents** (avec le chemin du fichier), session effective `/u/N` du compte actif, `bl` découvert, proxy configuré, et le **journal amont** — les derniers tours avec leur résultat : `ok`, ou l'erreur **typée** (`authentication`, `http 500`, `divergence`…) avec la durée et le nombre d'essais. Survolez un badge d'erreur pour le message complet. Depuis M9, deux tableaux de plus :
+  - **Comptes & sessions** — un compte par ligne : libellé (du manifeste `accounts.json`) ou nom de fichier, session `/u/N`, validité des cookies, et **expiration vue d'avance** (« dans 6 j » en orange, « expiré depuis 3 j » en rouge) ;
+  - **Statistiques par compte** — tours, réussites, échecs et dernier tour par compte (fenêtre du journal amont, 50 tours).
 - **À propos** — versions et lien vers ce guide.
 
 `Échap` ou le bouton ✕ ferment la modale.
@@ -185,12 +217,13 @@ Toute la config vit dans des variables `NYW_WEBAPI_*` (12 facteurs, rien de cach
 |---|---|---|
 | `NYW_WEBAPI_EMBED` | `1` | `0` = ne pas démarrer la passerelle intégrée avec l'UI |
 | `NYW_WEBAPI_HOST` / `NYW_WEBAPI_PORT` | `127.0.0.1` / `8081` | Adresse d'écoute (le proxy `/api` suit automatiquement) |
-| `NYW_WEBAPI_COOKIE_FILE` | `.nyworkflow/cookies/gemini.json` | Fichier de cookies — **ou répertoire multi-comptes** |
+| `NYW_WEBAPI_COOKIE_FILE` | `.nyworkflow/cookies/gemini.json` | Fichier de cookies — **ou répertoire multi-comptes** (M8) |
+| `NYW_WEBAPI_ACCOUNTS_FILE` | `accounts.json` à côté des cookies | **Manifeste des comptes (M9)** : `{"file", "authUser", "label"}` — session `/u/N` par compte + libellé, relu à chaud |
 | `NYW_WEBAPI_COOKIES` | — | Chaîne de cookies directe (gagne sur le fichier) |
 | `NYW_WEBAPI_MODEL` | `gemini-3.6-flash` | Modèle par défaut |
 | `NYW_WEBAPI_MODELS_FILE` | table interne | Table de modèles JSON de remplacement (le réflexe « Google a renommé ses modèles ») |
 | `NYW_WEBAPI_GEMINI_BL` | auto-découvert | Force la version de l'interface Gemini |
-| `NYW_WEBAPI_AUTH_USER` | — | Compte multi-session Google (préfixe `/u/N`) |
+| `NYW_WEBAPI_AUTH_USER` | — | Index de session **de repli** (entier ≥ 0) — le manifeste `accounts.json` gagne par compte (M9) |
 | `NYW_WEBAPI_PROXY` | — | **Proxy sortant** (`http://user:pass@proxy:3128`) ; à défaut `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` sont respectés, `NO_PROXY` exclut des hôtes |
 | `NYW_WEBAPI_TLS_CA` | — | CA PEM additionnel (fichier ou chaîne) — indispensable derrière un proxy qui rechiffre |
 | `NYW_WEBAPI_TIMEOUT_MS` | `180000` | Délai maximal d'une requête amont |
@@ -220,7 +253,8 @@ En direct : `curl -s http://127.0.0.1:8081/` (ou `http://127.0.0.1:3080/api/` à
 | Symptôme | Cause | Quoi faire |
 |---|---|---|
 | Message « Passerelle webapi absente » | `NYW_WEBAPI_EMBED=0`, ou le port est occupé par autre chose qu'une passerelle | Retirez `NYW_WEBAPI_EMBED=0` ; vérifiez le port (`NYW_WEBAPI_PORT`) ; ouvrez Paramètres → Passerelle pour le diagnostic |
-| Badge « cookies absents » dans Paramètres | `.nyworkflow/cookies/gemini.json` absent ou vide | Section [2](#2-connecter-gemini-cookies) — le fichier est relu à chaud, pas de redémarrage |
+| Badge « cookies absents » dans Paramètres | `.nyworkflow/cookies/gemini.json` absent ou vide | Section [2](#2-connecter-gemini-cookies) — le fichier est relu à chaud, pas de redémarrage. Un compte peut aussi être **expiré** : la table Comptes & sessions l'affiche (« expiré depuis N j ») avant même le premier 401 — rechargez ce fichier-là |
+| La rotation passe au compte suivant mais tout échoue | Sessions mal adressées : le compte 2 parle avec l'index du compte 1 | Posez un `accounts.json` (section [2](#2-connecter-gemini-cookies)) — un fichier = un compte **et** son `/u/N` |
 | `Cookies Gemini expirés ou refusés (HTTP 401/403)` | Session Google expirée | Re-connectez-vous à gemini.google.com et **remplacez** le fichier de cookies ; avec un répertoire multi-comptes, la rotation passe au compte suivant automatiquement |
 | `Gemini a refusé de répondre (blockReason…)` | Politique de sécurité Google | Reformulez le prompt — ce n'est pas un bug |
 | `le flux Gemini a divergé` | Snapshots incompatibles (interface en évolution) | Réessayez ; si ça persiste, forcez `NYW_WEBAPI_GEMINI_BL` récent ou vérifiez la table de modèles |

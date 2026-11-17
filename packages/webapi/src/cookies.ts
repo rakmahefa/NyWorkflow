@@ -25,6 +25,16 @@ function isGoogleDomain(domain: string): boolean {
   return domain === 'google.com' || domain.endsWith('.google.com')
 }
 
+/** Le cookie entrerait dans l'en-tête (non vide, non expiré, domaine Google connu) ? */
+function isUsable(c: CookieEntry, nowSec: number): boolean {
+  return (
+    c.name !== '' &&
+    c.value !== '' &&
+    (c.expiresAt === undefined || c.expiresAt > nowSec) &&
+    (c.domain === undefined || isGoogleDomain(c.domain))
+  )
+}
+
 export class CookieJar {
   readonly entries: CookieEntry[]
   private readonly sapisidOverride?: string
@@ -85,15 +95,29 @@ export class CookieJar {
   /** En-tête `Cookie` — entrées valides uniquement, jointes par « ; ». */
   header(nowSec: number = Math.floor(Date.now() / 1000)): string {
     return this.entries
-      .filter(
-        (c) =>
-          c.name !== '' &&
-          c.value !== '' &&
-          (c.expiresAt === undefined || c.expiresAt > nowSec) &&
-          (c.domain === undefined || isGoogleDomain(c.domain)),
-      )
+      .filter((c) => isUsable(c, nowSec))
       .map((c) => `${c.name}=${c.value}`)
       .join('; ')
+  }
+
+  /**
+   * M9 — expiration la plus proche parmi les cookies qui SERVENT encore
+   * (mêmes règles que l'en-tête). Plus aucun ne sert (tout est expiré) :
+   * la plus proche parmi tous ceux qui portaient une date — passée, donc
+   * « expiré depuis ». Aucune date connue nulle part (chaîne brute, cookies
+   * de session) : undefined — on ne peut pas prédire.
+   */
+  earliestExpiry(nowSec: number = Math.floor(Date.now() / 1000)): number | undefined {
+    const live = this.entries.filter((c) => isUsable(c, nowSec) && c.expiresAt !== undefined)
+    if (live.length > 0) return Math.min(...live.map((c) => c.expiresAt as number))
+    // Plus rien ne sert : la cause parmi les cookies qui SERAIENT servis sans
+    // l’expiration (non vides, domaine Google) — pas ceux d’un autre domaine,
+    // qui n’ont jamais été candidats.
+    const dead = this.entries.filter(
+      (c) => c.expiresAt !== undefined && c.name !== '' && c.value !== '' && (c.domain === undefined || isGoogleDomain(c.domain)),
+    )
+    if (dead.length > 0) return Math.min(...dead.map((c) => c.expiresAt as number))
+    return undefined
   }
 
   /** Le SAPISID : celui de l'objet gemini-web2api, sinon le cookie du même nom. */

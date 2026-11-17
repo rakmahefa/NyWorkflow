@@ -25,11 +25,11 @@ export type { GeminiErrorKind, GeminiClientConfig, GeminiTurnOptions, GeminiStre
 export { loadWebApiConfig, defaultCookieFile, findRepoRoot, DEFAULT_PORT, DEFAULT_HOST, DEFAULT_GEMINI_BASE_URL } from './config.ts'
 export type { WebApiConfig } from './config.ts'
 
-// Multi-comptes & journal (M8)
-export { CookieStore } from './accounts.ts'
-export type { AccountStatus } from './accounts.ts'
-export { TurnJournal, DEFAULT_JOURNAL_CAPACITY } from './journal.ts'
-export type { TurnRecord } from './journal.ts'
+// Multi-comptes & journal (M8) — manifeste /u/N, expiration et stats par compte (M9)
+export { CookieStore, loadAccountsManifest } from './accounts.ts'
+export type { AccountStatus, ManifestSource } from './accounts.ts'
+export { TurnJournal, DEFAULT_JOURNAL_CAPACITY, accountUsage } from './journal.ts'
+export type { TurnRecord, AccountUsage } from './journal.ts'
 export type { GeminiDescribe } from './gemini.ts'
 
 // Proxy sortant (M8)

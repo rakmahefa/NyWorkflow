@@ -75,6 +75,62 @@ describe('CookieJar — filtrage de validité', () => {
   })
 })
 
+describe('CookieJar — earliestExpiry (M9 : le pilote voit venir l’expiration)', () => {
+  const NOW = 2_000_000_000 // epoch secondes, fixe pour des tests déterministes
+  const etc = (rows: { name: string; value: string; expiresAt?: number; domain?: string }[]) =>
+    CookieJar.parse(
+      JSON.stringify(
+        rows.map((r) => ({
+          name: r.name,
+          value: r.value,
+          domain: r.domain ?? '.google.com',
+          // le format EditThisCookie s'appelle expirationDate — la clé lue par le parseur
+          ...(r.expiresAt !== undefined ? { expirationDate: r.expiresAt } : {}),
+        })),
+      ),
+    )
+
+  it('la plus proche parmi les cookies vivants gagne', () => {
+    const jar = etc([
+      { name: 'A', value: '1', expiresAt: NOW + 10 * 86_400 },
+      { name: 'B', value: '2', expiresAt: NOW + 3 * 86_400 },
+      { name: 'C', value: '3' }, // sans date — n'entre pas dans le calcul
+    ])
+    expect(jar.earliestExpiry(NOW)).toBe(NOW + 3 * 86_400)
+  })
+
+  it('cookies vivants sans date connue → undefined (on ne peut pas prédire)', () => {
+    const jar = CookieJar.parse('A=1; B=2') // chaîne brute : aucune date
+    expect(jar.earliestExpiry(NOW)).toBeUndefined()
+  })
+
+  it('tout est expiré → la date PASSÉE la plus proche (lue « expiré depuis »)', () => {
+    const jar = etc([
+      { name: 'A', value: '1', expiresAt: NOW - 5 * 86_400 },
+      { name: 'B', value: '2', expiresAt: NOW - 2 * 86_400 },
+    ])
+    expect(jar.header(NOW)).toBe('') // plus rien ne sert
+    expect(jar.earliestExpiry(NOW)).toBe(NOW - 5 * 86_400)
+  })
+
+  it('mélange vivants/expirés : seuls les vivants comptent (l’expiré est déjà sorti de l’en-tête)', () => {
+    const jar = etc([
+      { name: 'A', value: '1', expiresAt: NOW - 5 * 86_400 },
+      { name: 'B', value: '2', expiresAt: NOW + 30 * 86_400 },
+    ])
+    expect(jar.header(NOW)).toBe('B=2')
+    expect(jar.earliestExpiry(NOW)).toBe(NOW + 30 * 86_400)
+  })
+
+  it('les cookies expirés d’un domaine hors Google n’entrent jamais dans le calcul', () => {
+    const jar = etc([
+      { name: 'A', value: '1', expiresAt: NOW - 5 * 86_400, domain: 'example.com' },
+      { name: 'B', value: '2', domain: '.google.com' },
+    ])
+    expect(jar.earliestExpiry(NOW)).toBeUndefined()
+  })
+})
+
 describe('loadCookieSource', () => {
   it('fichier absent → jar undefined, sans exception', () => {
     const src = loadCookieSource(path.join(tmpdir(), 'nexiste-pas', 'cookie.json'))

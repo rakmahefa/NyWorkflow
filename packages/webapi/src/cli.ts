@@ -8,6 +8,7 @@
  * Note : depuis M8, `pnpm dev` démarre AUSSI la passerelle intégrée — ce CLI
  * sert au lancement autonome (plusieurs passerelles, autre port, etc.).
  */
+import path from 'node:path'
 import { loadWebApiConfig } from './config.ts'
 import { createWebApiServer, webApiProviderFromConfig } from './server.ts'
 import { WEBAPI_VERSION } from './version.ts'
@@ -34,6 +35,28 @@ server.listen(config.port, config.host, () => {
     console.log(`multi-comptes : ${accounts.length} fichiers dans ${d.cookieFile} (${ok} valides) — rotation sur erreur d'authentification`)
   } else {
     console.log(`cookies : ${d.cookies ? 'présents' : `absents (${d.cookieFile}) — voir USERGUIDE.md`}`)
+  }
+
+  // M9 — sessions /u/N par compte + expiration vue d'avance.
+  const sessions = accounts.filter((a) => a.authUser !== undefined)
+  if (sessions.length > 0) {
+    console.log(
+      `sessions : ${sessions
+        .map((a) => `${a.label ?? path.basename(a.file)} → /u/${a.authUser} ${a.cookies === false ? '(cookies expirés ou absents)' : ''}`.trim())
+        .join(' · ')}`,
+    )
+  } else if (d.authUser !== null) {
+    console.log(`session : /u/${d.authUser} (NYW_WEBAPI_AUTH_USER — pas de manifeste par compte)`)
+  }
+  const nowSec = Math.floor(Date.now() / 1000)
+  const soon = accounts.filter((a) => a.expiresAt !== undefined && a.expiresAt > nowSec && a.expiresAt <= nowSec + 7 * 86_400)
+  const dead = accounts.filter((a) => a.expiresAt !== undefined && a.expiresAt <= nowSec)
+  for (const a of dead) {
+    console.log(`expiration : ${a.label ?? path.basename(a.file)} — cookies expirés, rechargez le fichier (voir USERGUIDE.md)`)
+  }
+  for (const a of soon) {
+    const days = Math.max(1, Math.round((a.expiresAt! - nowSec) / 86_400))
+    console.log(`expiration : ${a.label ?? path.basename(a.file)} — cookies expirés dans ~${days} j`)
   }
   console.log(`proxy : ${d.proxy ?? 'aucun'}`)
   console.log('Ctrl+C pour arrêter.')

@@ -46,10 +46,12 @@ export function startMockGateway(port) {
   const server = createServer((req, res) => {
     const url = req.url ?? '/'
 
-    // Diagnostic GET / — la forme de la passerelle webapi réelle (M8) :
-    // comptes, proxy, journal amont (déterministe : un échec ancien typé +
-    // un tour réussi par conversation réellement servie).
+    // Diagnostic GET / — la forme de la passerelle webapi réelle (M8 + M9) :
+    // comptes avec session /u/N et expiration, stats par compte, proxy,
+    // journal amont (déterministe : un échec ancien typé + un tour réussi
+    // par conversation réellement servie).
     if (req.method === 'GET' && (url === '/' || url === '')) {
+      const nowSec = Math.floor(Date.now() / 1000)
       const recent = []
       if (chatCount > 0) {
         recent.push({
@@ -81,8 +83,15 @@ export function startMockGateway(port) {
           bl: null,
           cookieFile: '(maquette e2e)',
           rawCookies: false,
-          accounts: [{ file: '(maquette e2e)', cookies: true }],
+          accounts: [
+            { file: '(maquette e2e)', cookies: true, authUser: 0, label: 'Perso', expiresAt: nowSec + 12 * 86_400 },
+            { file: '(maquette e2e) 2', cookies: false, authUser: 1, label: 'Pro', expiresAt: nowSec - 3 * 86_400 },
+          ],
           activeAccount: 0,
+          authUser: 0,
+          accountUsage: [
+            { account: 0, turns: 2, ok: 1, failed: 1, lastAt: new Date(Date.now() - 1_000).toISOString(), totalMs: 1230 },
+          ],
           proxy: null,
           recent,
         },

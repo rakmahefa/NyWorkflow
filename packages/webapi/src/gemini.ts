@@ -19,7 +19,8 @@
  * fidèle : c'est la donnée imposée par Google, pas un choix d'architecture.
  */
 import { CookieStore, type AccountStatus } from './accounts.ts'
-import type { TurnJournal, TurnRecord } from './journal.ts'
+import type { TurnJournal, TurnRecord, AccountUsage } from './journal.ts'
+import { accountUsage } from './journal.ts'
 import { upstreamFetch, maskCredentials, type UpstreamOptions, type UpstreamResponse } from './proxy.ts'
 import { sapisidHash, GEMINI_ORIGIN } from './auth.ts'
 import { resolveModel, loadModelTable, type ModelTable, type ResolvedModel } from './models.ts'
@@ -61,6 +62,8 @@ export interface GeminiClientConfig {
   cookieFile?: string
   /** Cookies bruts « k=v; … » — gagne sur le fichier. */
   rawCookies?: string
+  /** M9 : manifeste des comptes (accounts.json) — sinon auto à côté du répertoire de cookies. */
+  accountsFile?: string
   defaultModel?: string
   modelsFile?: string
   /** Force le `bl` (sinon auto-découverte + repli constant). */
@@ -109,6 +112,10 @@ export interface GeminiDescribe {
   proxy: string | null
   /** Derniers tours amont (journal en mémoire). */
   recent: readonly TurnRecord[]
+  /** M9 : index de session EFFECTIF du compte actif (manifeste ?? config), null = sans préfixe. */
+  authUser: number | null
+  /** M9 : statistiques d'utilisation par compte (fenêtre du journal). */
+  accountUsage: readonly AccountUsage[]
 }
 
 interface PageState {
@@ -172,7 +179,7 @@ export class GeminiWebClient {
     this.timeoutMs = config.timeoutMs ?? 180_000
     this.retryAttempts = Math.max(1, config.retryAttempts ?? 3)
     this.retryDelayMs = config.retryDelayMs ?? 2_000
-    this.cookies = new CookieStore(config.cookieFile ?? '', config.rawCookies)
+    this.cookies = new CookieStore(config.cookieFile ?? '', config.rawCookies, config.accountsFile)
     this.journal = config.journal
     const proxy = config.proxy !== undefined && config.proxy.trim() !== '' ? new URL(config.proxy) : undefined
     this.upstream = { proxy, noProxy: config.noProxy, tlsCa: config.tlsCa }
@@ -182,6 +189,7 @@ export class GeminiWebClient {
   describe(): GeminiDescribe {
     const table = this.modelTable()
     const store = this.cookies.describe()
+    const authUser = this.effectiveAuthUser()
     return {
       cookies: this.cookies.jar()?.hasValidCookies() ?? false,
       bl: this.forcedBl ?? this.page?.bl ?? null,
@@ -193,6 +201,8 @@ export class GeminiWebClient {
       activeAccount: store.active,
       proxy: this.upstream.proxy ? maskCredentials(this.upstream.proxy) : null,
       recent: this.journal?.recent() ?? [],
+      authUser: authUser ?? null,
+      accountUsage: this.journal !== undefined ? accountUsage(this.journal.recent()) : [],
     }
   }
 
@@ -271,6 +281,15 @@ export class GeminiWebClient {
   }
 
   // ---------------------------------------------------------------- internals
+
+  /**
+   * M9 — index de session effectif : celui du compte ACTIF dans le manifeste
+   * (accounts.json), à défaut l'index global de config (NYW_WEBAPI_AUTH_USER).
+   * C'est la rotation M8 qui décide du compte — l'index suit tout seul.
+   */
+  private effectiveAuthUser(): number | undefined {
+    return this.cookies.activeAuthUser() ?? this.authUser
+  }
 
   /** La boucle de retries historique, pour UN compte donné. */
   private async *turnWithRetries(
@@ -405,7 +424,8 @@ export class GeminiWebClient {
     model: ResolvedModel,
     refs: string[],
   ): Promise<{ url: string; headers: Record<string, string>; body: string }> {
-    const prefix = this.authUser !== undefined ? `/u/${this.authUser}` : ''
+    const authUser = this.effectiveAuthUser()
+    const prefix = authUser !== undefined ? `/u/${authUser}` : ''
     const page = await this.pageState()
     const bl = this.forcedBl ?? page.bl
     const url = `${this.baseUrl}${prefix}/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?bl=${encodeURIComponent(bl)}&hl=en&_reqid=${nextReqid()}&rt=c`
@@ -421,7 +441,7 @@ export class GeminiWebClient {
     if (cookie && cookie.length > 0) headers.cookie = cookie
     const sapisid = jar?.sapisid()
     if (sapisid) headers.authorization = sapisidHash(sapisid, GEMINI_ORIGIN)
-    if (this.authUser !== undefined) headers['x-goog-authuser'] = String(this.authUser)
+    if (authUser !== undefined) headers['x-goog-authuser'] = String(authUser)
     return { url, headers, body: buildFreq(prompt, model, refs, page.tokens.at) }
   }
 
@@ -439,7 +459,8 @@ export class GeminiWebClient {
   }
 
   private async refreshPage(): Promise<void> {
-    const prefix = this.authUser !== undefined ? `/u/${this.authUser}` : ''
+    const authUser = this.effectiveAuthUser()
+    const prefix = authUser !== undefined ? `/u/${authUser}` : ''
     const url = `${this.baseUrl}${prefix}/app`
     try {
       const headers: Record<string, string> = { accept: 'text/html', 'user-agent': USER_AGENT, origin: GEMINI_ORIGIN, referer: `${GEMINI_ORIGIN}${prefix}/app` }

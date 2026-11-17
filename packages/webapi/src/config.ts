@@ -15,13 +15,15 @@ export interface WebApiConfig {
   cookieFile: string
   /** Cookies bruts « k=v; k2=v2 » passés directement (gagne sur le fichier). */
   rawCookies?: string
+  /** M9 : manifeste des comptes (accounts.json) — surcharge l'auto-découverte à côté du répertoire de cookies. */
+  accountsFile?: string
   /** Modèle par défaut quand la requête n'en porte pas. */
   defaultModel: string
   /** Table de modèles JSON de remplacement (data-driven — voir models.ts). */
   modelsFile?: string
   /** Force la version `bl` de l'interface Gemini (sinon : auto-découverte + repli). */
   geminiBl?: string
-  /** Compte multi-session Google (préfixe /u/N). */
+  /** Compte multi-session Google (préfixe /u/N) — repli quand le manifeste n'a pas d'entrée pour le compte actif. */
   authUser?: number
   /** Base de l'interface Gemini — surchargée par les tests (maquette locale). */
   baseUrl: string
@@ -75,7 +77,9 @@ function int(env: Record<string, string | undefined>, key: string, fallback: num
 
 export function loadWebApiConfig(env: Record<string, string | undefined> = process.env): WebApiConfig {
   const rawCookies = env.NYW_WEBAPI_COOKIES?.trim() || undefined
-  const authUser = env.NYW_WEBAPI_AUTH_USER !== undefined && env.NYW_WEBAPI_AUTH_USER !== '' ? Number(env.NYW_WEBAPI_AUTH_USER) : undefined
+  const authUserNum = env.NYW_WEBAPI_AUTH_USER !== undefined && env.NYW_WEBAPI_AUTH_USER !== '' ? Number(env.NYW_WEBAPI_AUTH_USER) : undefined
+  // M9 : index de session — entier ≥ 0 seulement (—1 ou « 2.5 » : ignorés, pas de /u/-1 dans la nature).
+  const authUser = authUserNum !== undefined && Number.isInteger(authUserNum) && authUserNum >= 0 ? authUserNum : undefined
   const proxyEnv = parseProxyEnv(env)
   const noProxy = (env.NO_PROXY ?? env.no_proxy ?? '')
     .split(',')
@@ -86,10 +90,11 @@ export function loadWebApiConfig(env: Record<string, string | undefined> = proce
     port: int(env, 'NYW_WEBAPI_PORT', DEFAULT_PORT),
     cookieFile: env.NYW_WEBAPI_COOKIE_FILE?.trim() || defaultCookieFile(),
     rawCookies,
+    accountsFile: env.NYW_WEBAPI_ACCOUNTS_FILE?.trim() || undefined,
     defaultModel: env.NYW_WEBAPI_MODEL?.trim() || 'gemini-3.6-flash',
     modelsFile: env.NYW_WEBAPI_MODELS_FILE?.trim() || undefined,
     geminiBl: env.NYW_WEBAPI_GEMINI_BL?.trim() || undefined,
-    authUser: Number.isFinite(authUser) ? authUser : undefined,
+    authUser,
     baseUrl: env.NYW_WEBAPI_GEMINI_BASE_URL?.trim() || DEFAULT_GEMINI_BASE_URL,
     timeoutMs: int(env, 'NYW_WEBAPI_TIMEOUT_MS', DEFAULT_TIMEOUT_MS),
     retryAttempts: Math.max(1, int(env, 'NYW_WEBAPI_RETRY_ATTEMPTS', DEFAULT_RETRY_ATTEMPTS)),

@@ -38,7 +38,7 @@ Prérequis : Node.js 22.18+ (la passerelle), pnpm 12+.
 pnpm install
 pnpm dev          # UI sur http://127.0.0.1:3080 — AVEC la passerelle webapi intégrée
 pnpm webapi       # passerelle SEULE en autonome (optionnel — voir USERGUIDE.md)
-pnpm test         # Vitest — unitaires (287, dont 137 webapi sans réseau)
+pnpm test         # Vitest — unitaires (322, dont 166 webapi sans réseau)
 pnpm test:e2e     # Playwright — UI réelle (télécharge Chromium au besoin)
 pnpm typecheck    # TypeScript
 ```
@@ -53,14 +53,14 @@ La passerelle parle à l'interface web Gemini avec vos cookies de session — au
 
 1. Connectez-vous à [gemini.google.com](https://gemini.google.com) dans votre navigateur.
 2. Exportez vos cookies Google (extension type EditThisCookie, ou copiez la chaîne `Cookie` de la requête).
-3. Posez-les dans `.nyworkflow/cookies/gemini.json` (déjà gitignoré) — 3 formats acceptés : export EditThisCookie, objet `{"cookie": "…", "sapisid": "…"}`, ou chaîne brute `"k=v; k2=v2"`. **Multi-comptes (M8)** : pointez `NYW_WEBAPI_COOKIE_FILE` vers un répertoire — chaque fichier est un compte, la passerelle tourne au suivant sur erreur d'authentification.
+3. Posez-les dans `.nyworkflow/cookies/gemini.json` (déjà gitignoré) — 3 formats acceptés : export EditThisCookie, objet `{"cookie": "…", "sapisid": "…"}`, ou chaîne brute `"k=v; k2=v2"`. **Multi-comptes (M8)** : pointez `NYW_WEBAPI_COOKIE_FILE` vers un répertoire — chaque fichier est un compte, la passerelle tourne au suivant sur erreur d'authentification. **Sessions /u/N par compte (M9)** : un `accounts.json` à côté des cookies donne à chaque fichier son index de session Google et son libellé (`{"accounts": [{"file": "a.json", "authUser": 0, "label": "Perso"}, …]}`).
 4. C'est parti — le fichier est relu à chaud : changer de cookie ne redémarre rien.
 
-Configuration par environnement (`NYW_WEBAPI_*`) : `PORT`, `HOST`, `MODEL`, `MODELS_FILE` (table de modèles de remplacement — le réflexe anti-« Google a encore renommé ses modèles »), `GEMINI_BL` (force la version d'interface), `COOKIES` (chaîne directe), `AUTH_USER` (compte multi-session), `TIMEOUT_MS`, `RETRY_ATTEMPTS`, `RETRY_DELAY_MS`, `PROXY` + `TLS_CA` (M8 : proxy sortant avec tunnel CONNECT maison et CA d'entreprise), `EMBED`. Le diagnostic vit sur `GET /` : cookies, comptes, `bl`, proxy, **journal amont** (les derniers tours, échecs typés compris).
+Configuration par environnement (`NYW_WEBAPI_*`) : `PORT`, `HOST`, `MODEL`, `MODELS_FILE` (table de modèles de remplacement — le réflexe anti-« Google a encore renommé ses modèles »), `GEMINI_BL` (force la version d'interface), `COOKIES` (chaîne directe), `AUTH_USER` (index de session de repli — le manifeste `accounts.json` gagne par compte), `ACCOUNTS_FILE` (manifeste des comptes : `/u/N` + libellés, sinon auto-découvert à côté des cookies), `TIMEOUT_MS`, `RETRY_ATTEMPTS`, `RETRY_DELAY_MS`, `PROXY` + `TLS_CA` (M8 : proxy sortant avec tunnel CONNECT maison et CA d'entreprise), `EMBED`. Le diagnostic vit sur `GET /` : cookies, **expiration par compte** (M9 — on voit venir l'expiration avant le 401), sessions `/u/N`, `bl`, proxy, **journal amont** (les derniers tours, échecs typés compris) et **stats par compte**.
 
-### Le menu Paramètres (M8)
+### Le menu Paramètres (M8 + M9)
 
-Bouton engrenage en bas de la barre latérale : **thème** Auto/Clair/Sombre (persisté), **diagnostic passerelle** en direct (état, cookies, comptes, `bl`, proxy, journal des derniers tours avec erreurs typées), **à propos**. Le même diagnostic se lit en JSON sur `GET /api/`.
+Bouton engrenage en bas de la barre latérale : **thème** Auto/Clair/Sombre (persisté), **diagnostic passerelle** en direct — état, cookies, `bl`, proxy, journal des derniers tours avec erreurs typées — et depuis M9 la table **Comptes & sessions** (libellé, `/u/N`, validité des cookies, **expiration vue d'avance** : « dans 6 j », « expiré depuis 3 j ») et les **statistiques par compte** (tours, réussites, échecs, dernier tour), **à propos**. Le même diagnostic se lit en JSON sur `GET /api/`.
 
 ## Guide utilisateur
 
@@ -120,9 +120,9 @@ CI à chaque push/PR : typecheck, build, Vitest, Playwright, puis artefacts (UI 
 |---|---|---:|---|
 | M7 | Passerelle webapi (refonte de ny-gemini-acp dans le repo) | 20 % | ✅ Terminé |
 | M8 | Durcissement & diagnostics : passerelle intégrée au démarrage, menu Paramètres (thème + diagnostic + journal amont), multi-comptes, proxy, USERGUIDE | 20 % | ✅ Terminé |
-| M9 | Stabilité & auth multi-sessions Google (vérification cookie proactive, /u/N par compte, statistiques d'utilisation) | 20 % | ⏳ Futur |
-| M10 | API élargie (`/v1beta`, tools) — si un besoin réel apparaît | 20 % | ⏳ Futur |
-| M11 | v0.2.0 (dégel du format de contrat, shell optionnel, multi-workspaces à la volée) | 20 % | ⏳ Futur |
+| M9 | Stabilité & auth multi-sessions Google (vérification cookie proactive, /u/N par compte, statistiques d'utilisation) | 20 % | ✅ Terminé |
+| M10 | API élargie (`/v1beta`, tools) — seulement si un besoin réel apparaît | 20 % | ⏳ Futur |
+| M11 | v0.2.0 (dégel du format de contrat, shell optionnel, multi-workspaces à la volée) — sur le socle stable de comptes/sessions M9 | 20 % | ⏳ Futur |
 
 > Règle de gouvernance phase 2 : à chaque fin de milestone atteint, les milestones futurs sont réécrits en fin de [MILESTONES.md](MILESTONES.md).
 

@@ -375,6 +375,153 @@ describe('GeminiWebClient — journal amont (M8)', () => {
   })
 })
 
+describe('GeminiWebClient — auth multi-sessions /u/N (M9)', () => {
+  const ACCOUNTS_JSON = JSON.stringify({ accounts: [
+    { file: 'a-perso.json', authUser: 0, label: 'Perso' },
+    { file: 'b-pro.json', authUser: 2, label: 'Pro' },
+  ] })
+
+  it('le préfixe /u/N du compte actif est dans l’URL, le referer ET x-goog-authuser', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'nyw-u-n-'))
+    try {
+      writeFileSync(path.join(dir, 'a-perso.json'), JSON.stringify([{ name: 'SAPISID', value: 'perso', domain: '.google.com' }]))
+      writeFileSync(path.join(dir, 'b-pro.json'), JSON.stringify([{ name: 'SAPISID', value: 'pro', domain: '.google.com' }]))
+      writeFileSync(path.join(dir, 'accounts.json'), ACCOUNTS_JSON)
+      const mock = await startMockGemini({ streamPlan: [{ kind: 'ok', snapshots: ['Bonjour par u/0'] }] })
+      try {
+        const client = new GeminiWebClient({ baseUrl: mock.baseUrl, cookieFile: dir, retryAttempts: 1, retryDelayMs: 1 })
+        // Le compte actif est a-perso → /u/0 attendu.
+        expect(await client.complete({ prompt: 'essai', model: 'gemini-3.6-flash' })).toBe('Bonjour par u/0')
+
+        const streamPost = mock.streamPosts()[0]!
+        expect(streamPost.url).toContain('/u/0/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate')
+        expect(streamPost.headers['x-goog-authuser']).toBe('0')
+        expect(String(streamPost.headers.referer)).toContain('/u/0/app')
+        // La page de jetons aussi, via le préfixe du compte actif.
+        expect(mock.requests.some((r) => r.url === '/u/0/app')).toBe(true)
+
+        const d = client.describe()
+        expect(d.authUser).toBe(0)
+        expect(d.accounts.map((a) => a.label)).toEqual(['Perso', 'Pro'])
+      } finally {
+        await mock.close()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rotation 401 : le PRÉFIXE change avec le compte (la stabilité que M8 n’avait pas)', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'nyw-u-n-'))
+    try {
+      writeFileSync(path.join(dir, 'a-perso.json'), JSON.stringify([{ name: 'SAPISID', value: 'perso', domain: '.google.com' }]))
+      writeFileSync(path.join(dir, 'b-pro.json'), JSON.stringify([{ name: 'SAPISID', value: 'pro', domain: '.google.com' }]))
+      writeFileSync(path.join(dir, 'accounts.json'), ACCOUNTS_JSON)
+      // 401 pour le premier tour (compte a, /u/0), succès pour le second (compte b, /u/2).
+      const mock = await startMockGemini({ streamPlan: [{ kind: 'status', status: 401 }, { kind: 'ok', snapshots: ['Réponse du compte pro'] }] })
+      try {
+        const client = new GeminiWebClient({ baseUrl: mock.baseUrl, cookieFile: dir, retryAttempts: 1, retryDelayMs: 1 })
+        expect(await client.complete({ prompt: 'essai', model: 'gemini-3.6-flash' })).toBe('Réponse du compte pro')
+
+        const posts = mock.streamPosts()
+        expect(posts).toHaveLength(2)
+        expect(posts[0]!.url).toContain('/u/0/')
+        expect(posts[0]!.headers['x-goog-authuser']).toBe('0')
+        expect(posts[1]!.url).toContain('/u/2/')
+        expect(posts[1]!.headers['x-goog-authuser']).toBe('2')
+
+        // La page a été re-téléchargée dans le préfixe du NOUVEAU compte.
+        expect(mock.requests.some((r) => r.url === '/u/2/app')).toBe(true)
+        const d = client.describe()
+        expect(d.authUser).toBe(2)
+        expect(d.activeAccount).toBe(1)
+      } finally {
+        await mock.close()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('précédence : entrée du manifeste > authUser de config > pas de préfixe', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'nyw-u-n-'))
+    try {
+      // a.json : pas d’entrée ; b.json : /u/5. Config globale : /u/9 (repli).
+      writeFileSync(path.join(dir, 'a.json'), JSON.stringify([{ name: 'SAPISID', value: 'a', domain: '.google.com' }]))
+      writeFileSync(path.join(dir, 'b.json'), JSON.stringify([{ name: 'SAPISID', value: 'b', domain: '.google.com' }]))
+      writeFileSync(path.join(dir, 'accounts.json'), JSON.stringify({ accounts: [{ file: 'b.json', authUser: 5 }] }))
+      const mock = await startMockGemini({ streamPlan: [{ kind: 'status', status: 401 }, { kind: 'ok', snapshots: ['OK après repli'] }] })
+      try {
+        // Sans config globale : a (pas d’entrée) → pas de préfixe.
+        const client = new GeminiWebClient({ baseUrl: mock.baseUrl, cookieFile: dir, retryAttempts: 1, retryDelayMs: 1 })
+        expect(await client.complete({ prompt: 'x', model: 'gemini-3.6-flash' })).toBe('OK après repli')
+        const first = mock.streamPosts()[0]!
+        expect(first.url).not.toContain('/u/')
+        expect(first.headers['x-goog-authuser']).toBeUndefined()
+        // Fin du tour sur b (entrée /u/5) : le second POST porte bien le préfixe,
+        // et le diagnostic effectif suit le compte actif.
+        expect(mock.streamPosts()[1]!.url).toContain('/u/5/')
+        expect(client.describe().authUser).toBe(5)
+      } finally {
+        await mock.close()
+      }
+
+      // Avec config globale : a sans entrée → /u/9 ; b avec entrée → /u/5 (gagne).
+      const mock2 = await startMockGemini({ streamPlan: [{ kind: 'status', status: 401 }, { kind: 'ok', snapshots: ['OK après repli 2'] }] })
+      try {
+        const client2 = new GeminiWebClient({ baseUrl: mock2.baseUrl, cookieFile: dir, retryAttempts: 1, retryDelayMs: 1, authUser: 9 })
+        expect(await client2.complete({ prompt: 'x', model: 'gemini-3.6-flash' })).toBe('OK après repli 2')
+        const posts = mock2.streamPosts()
+        expect(posts[0]!.url).toContain('/u/9/')
+        expect(posts[0]!.headers['x-goog-authuser']).toBe('9')
+        expect(posts[1]!.url).toContain('/u/5/')
+        expect(posts[1]!.headers['x-goog-authuser']).toBe('5')
+      } finally {
+        await mock2.close()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('cookies bruts : NYW_WEBAPI_AUTH_USER historique s’applique (compte unique)', async () => {
+    await withClient(
+      { mock: { streamPlan: [{ kind: 'ok', snapshots: ['Salut'] }] }, client: { rawCookies: COOKIES, authUser: 3 } },
+      async (mock, client) => {
+        expect(await client.complete({ prompt: 'x', model: 'gemini-3.6-flash' })).toBe('Salut')
+        const post = mock.streamPosts()[0]!
+        expect(post.url).toContain('/u/3/')
+        expect(post.headers['x-goog-authuser']).toBe('3')
+        expect(client.describe().authUser).toBe(3)
+      },
+    )
+  })
+
+  it('describe() porte les stats d’utilisation par compte', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'nyw-u-n-'))
+    try {
+      writeFileSync(path.join(dir, 'a-perso.json'), JSON.stringify([{ name: 'SAPISID', value: 'perso', domain: '.google.com' }]))
+      writeFileSync(path.join(dir, 'b-pro.json'), JSON.stringify([{ name: 'SAPISID', value: 'pro', domain: '.google.com' }]))
+      writeFileSync(path.join(dir, 'accounts.json'), ACCOUNTS_JSON)
+      const mock = await startMockGemini({ streamPlan: [{ kind: 'status', status: 401 }, { kind: 'ok', snapshots: ['Un'] }, { kind: 'ok', snapshots: ['Deux'] }] })
+      try {
+        const journal = new TurnJournal(10)
+        const client = new GeminiWebClient({ baseUrl: mock.baseUrl, cookieFile: dir, retryAttempts: 1, retryDelayMs: 1, journal })
+        await client.complete({ prompt: 'un', model: 'gemini-3.6-flash' }) // 401 a → b, succès
+        await client.complete({ prompt: 'deux', model: 'gemini-3.6-flash' }) // succès direct sur b
+        const d = client.describe()
+        expect(d.accountUsage).toEqual([
+          { account: 1, turns: 2, ok: 2, failed: 0, totalMs: expect.any(Number), lastAt: expect.any(String) },
+        ])
+      } finally {
+        await mock.close()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('backoffMs', () => {
   it('croît, plafonne à 30 s ± jitter', () => {
     const first = backoffMs(1, 2000)

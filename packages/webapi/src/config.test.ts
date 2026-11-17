@@ -19,6 +19,7 @@ describe('loadWebApiConfig', () => {
       NYW_WEBAPI_PORT: '9999',
       NYW_WEBAPI_COOKIE_FILE: '/tmp/c.json',
       NYW_WEBAPI_COOKIES: 'A=1',
+      NYW_WEBAPI_ACCOUNTS_FILE: '/tmp/comptes.json',
       NYW_WEBAPI_MODEL: 'gemini-auto',
       NYW_WEBAPI_MODELS_FILE: '/tmp/m.json',
       NYW_WEBAPI_GEMINI_BL: 'boq_test',
@@ -33,6 +34,7 @@ describe('loadWebApiConfig', () => {
       port: 9999,
       cookieFile: '/tmp/c.json',
       rawCookies: 'A=1',
+      accountsFile: '/tmp/comptes.json',
       defaultModel: 'gemini-auto',
       modelsFile: '/tmp/m.json',
       geminiBl: 'boq_test',
@@ -48,6 +50,14 @@ describe('loadWebApiConfig', () => {
     const c = loadWebApiConfig({ NYW_WEBAPI_PORT: 'pas-un-nombre', NYW_WEBAPI_AUTH_USER: 'x' })
     expect(c.port).toBe(DEFAULT_PORT)
     expect(c.authUser).toBeUndefined()
+    expect(c.accountsFile).toBeUndefined()
+  })
+
+  it('M9 : authUser doit être un entier ≥ 0 (-1, 2.5, chaîne → undefined)', () => {
+    expect(loadWebApiConfig({ NYW_WEBAPI_AUTH_USER: '-1' }).authUser).toBeUndefined()
+    expect(loadWebApiConfig({ NYW_WEBAPI_AUTH_USER: '2.5' }).authUser).toBeUndefined()
+    expect(loadWebApiConfig({ NYW_WEBAPI_AUTH_USER: '0' }).authUser).toBe(0)
+    expect(loadWebApiConfig({ NYW_WEBAPI_AUTH_USER: '7' }).authUser).toBe(7)
   })
 
   it('retryAttempts reste ≥ 1', () => {

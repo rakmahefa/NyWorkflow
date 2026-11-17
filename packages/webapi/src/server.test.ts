@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Server } from 'node:http'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { createWebApiServer } from './server.ts'
 import type { WebApiConfig } from './config.ts'
 import { startMockGemini, type MockGemini, type MockGeminiOptions } from './mock-gemini.ts'
@@ -13,7 +16,7 @@ interface Ctx {
 }
 
 /** Monte la maquette Gemini + la passerelle complète (serveur HTTP réel, port éphémère). */
-async function withServer(mockOptions: MockGeminiOptions | undefined, fn: (ctx: Ctx) => Promise<void>): Promise<void> {
+async function withServer(mockOptions: MockGeminiOptions | undefined, fn: (ctx: Ctx) => Promise<void>, overrides: Partial<WebApiConfig> = {}): Promise<void> {
   const mock = await startMockGemini(mockOptions)
   const config: WebApiConfig = {
     host: '127.0.0.1',
@@ -25,6 +28,7 @@ async function withServer(mockOptions: MockGeminiOptions | undefined, fn: (ctx: 
     retryAttempts: 1,
     retryDelayMs: 1,
     timeoutMs: 5_000,
+    ...overrides,
   }
   const server = createWebApiServer(config)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -106,6 +110,57 @@ describe('GET / — état et diagnostic', () => {
       expect(typeof gw.recent[0].ms).toBe('number')
       expect(typeof gw.recent[0].at).toBe('string')
     })
+  })
+
+  it('diagnostic M9 : sessions /u/N par compte, expiration et stats d’utilisation', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'nyw-srv-m9-'))
+    try {
+      const nowSec = Math.floor(Date.now() / 1000)
+      writeFileSync(path.join(dir, 'a-perso.json'), JSON.stringify([
+        { name: 'SAPISID', value: 'perso', domain: '.google.com', expirationDate: nowSec + 12 * 86_400 },
+      ]))
+      // b-pro : cookies déjà expirés (date passée) — distinguable d’un compte absent.
+      writeFileSync(path.join(dir, 'b-pro.json'), JSON.stringify([
+        { name: 'SAPISID', value: 'pro', domain: '.google.com', expirationDate: nowSec - 3 * 86_400 },
+      ]))
+      writeFileSync(path.join(dir, 'accounts.json'), JSON.stringify({ accounts: [
+        { file: 'a-perso.json', authUser: 0, label: 'Perso' },
+        { file: 'b-pro.json', authUser: 1, label: 'Pro' },
+      ] }))
+
+      // 401 sur le compte a → rotation vers b… qui est expiré : échec typé.
+      await withServer(
+        { streamPlan: [{ kind: 'status', status: 401 }, { kind: 'status', status: 401 }] },
+        async ({ base }) => {
+          // Un tour (échec) alimente le journal → stats visibles.
+          const res = await fetch(base + '/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+            body: JSON.stringify(chatBody),
+          })
+          await readSse(res) // se termine en finish_reason error — jamais déguisé
+
+          const { body } = await getJson(base, '/')
+          const gw = body.gateway
+          // Sessions /u/N par compte.
+          expect(gw.accounts.map((a: { authUser?: number }) => a.authUser)).toEqual([0, 1])
+          expect(gw.accounts.map((a: { label?: string }) => a.label)).toEqual(['Perso', 'Pro'])
+          // Expiration : future pour Perso, passée pour Pro.
+          expect(gw.accounts[0].expiresAt).toBeGreaterThan(nowSec)
+          expect(gw.accounts[1].cookies).toBe(false)
+          expect(gw.accounts[1].expiresAt).toBeLessThan(nowSec)
+          // La session effective du compte ACTIF.
+          expect(gw.authUser).toBe(1)
+          // Stats : le tour a échoué sur le compte final (b) — échec compté.
+          expect(gw.accountUsage).toEqual([
+            { account: 1, turns: 1, ok: 0, failed: 1, totalMs: expect.any(Number), lastAt: expect.any(String) },
+          ])
+        },
+        { cookieFile: dir, rawCookies: undefined },
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('normalise les slashs de fin (détail de proxy)', async () => {

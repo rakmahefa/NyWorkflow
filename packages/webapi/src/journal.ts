@@ -39,4 +39,44 @@ export class TurnJournal {
   recent(): readonly TurnRecord[] {
     return [...this.entries]
   }
+
+  /** M9 — statistiques d'utilisation par compte, sur la fenêtre du journal. */
+  usage(): AccountUsage[] {
+    return accountUsage(this.entries)
+  }
+}
+
+/**
+ * M9 — statistiques d'utilisation par compte : tours, réussites, échecs,
+ * durée cumulée, dernier tour. Les enregistrements sans compte (jamais
+ * arrivés jusqu'à la rotation) sont ignorés. Tri par index de compte.
+ */
+export interface AccountUsage {
+  account: number
+  turns: number
+  ok: number
+  failed: number
+  /** ISO 8601 du DERNIER tour de ce compte. */
+  lastAt?: string
+  /** Durée cumulée des tours du compte, ms. */
+  totalMs: number
+}
+
+/** Agrège des tours (déjà dans l'ordre chronologique) par compte. */
+export function accountUsage(records: readonly TurnRecord[]): AccountUsage[] {
+  const byAccount = new Map<number, AccountUsage>()
+  for (const r of records) {
+    if (r.account === undefined) continue
+    let usage = byAccount.get(r.account)
+    if (usage === undefined) {
+      usage = { account: r.account, turns: 0, ok: 0, failed: 0, totalMs: 0 }
+      byAccount.set(r.account, usage)
+    }
+    usage.turns++
+    usage.totalMs += r.ms
+    if (r.ok) usage.ok++
+    else usage.failed++
+    usage.lastAt = r.at // les enregistrements sont chronologiques
+  }
+  return [...byAccount.values()].sort((a, b) => a.account - b.account)
 }
