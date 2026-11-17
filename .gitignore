@@ -1,0 +1,15 @@
+# Dépendances et build
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+
+# Secret / local — jamais commis
+.env
+.env.*
+*.local
+cookie.json
+
+# OS
+.DS_Store
