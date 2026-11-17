@@ -53,8 +53,16 @@ test('paramètres : thème sombre appliqué et persisté au rechargement', async
 test('paramètres : journal amont peuplé après un tour réel', async ({ page }) => {
   await page.goto('/')
 
-  // Un tour réel via la maquette (streaming).
+  // Session dédiée (marqueur unique) : les specs tournent en parallèle sur CI
+  // et partagent les journaux — jamais de message dans « la session active »
+  // qui peut être celle d'un autre test (leçon M3).
+  const marker = `Journal ${Date.now()}`
   const box = page.getByLabel('Message')
+  await box.fill(`/new ${marker}`)
+  await box.press('Enter')
+  await expect(page.locator('[data-test="session-item"]').filter({ hasText: marker })).toBeVisible()
+
+  // Un tour réel via la maquette (streaming).
   await box.fill('Présente NyWorkflow')
   await box.press('Enter')
   await expect(page.locator('.msg.assistant').last()).toContainText('NyWorkflow orchestre', { timeout: 10_000 })

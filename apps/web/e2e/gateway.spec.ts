@@ -48,8 +48,14 @@ test('passerelle présente : modèles chargés + streaming réel', async ({ page
   await expect(select).toHaveValue('gemini-2.5-flash')
 
   // Change de modèle puis envoie : la maquette doit recevoir le bon id.
+  // Session dédiée (marqueur) : specs parallèles sur CI, journaux partagés —
+  // le message ne doit jamais atterrir dans la session d'un autre test.
   await select.selectOption('gemini-2.5-pro')
   const box = page.getByLabel('Message')
+  const marker = `Ping ${Date.now()}`
+  await box.fill(`/new ${marker}`)
+  await box.press('Enter')
+  await expect(page.locator('[data-test="session-item"]').filter({ hasText: marker })).toBeVisible()
   await box.fill('ping')
   await box.press('Enter')
 
