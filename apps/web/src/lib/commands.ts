@@ -22,7 +22,8 @@ export function parseInput(raw: string): ParsedInput {
 
 export const HELP_TEXT = [
   'Commandes disponibles :',
-  '  /new [titre] — créer une session (et basculer dessus)',
+  '  /new — ouvrir la boîte de nouvelle session (titre + workspace ICM)',
+  '  /delete — supprimer la session active (confirmation demandée)',
   '  /clear — vider l’affichage de la session courante (le journal est conservé)',
   '  /help — cette aide',
   'Une commande inconnue n’est jamais envoyée au modèle.',
@@ -31,24 +32,25 @@ export const HELP_TEXT = [
 export interface CommandOutcome {
   /** System message to append (in newActiveId's session if given). */
   systemText: string
-  /** Set by /new: the freshly created session to switch to. */
-  newActiveId?: string
+  /** Set by /new: the new-session dialog opens with this title prefilled. */
+  openNewDialog?: boolean
+  /** Set by /delete: the active session to remove. */
+  deleteActive?: boolean
 }
 
 export interface CommandDeps {
   store: SessionStore
-  /** Session factory — server journal in server mode, local in memory mode. */
-  createSession: (title?: string) => Promise<SessionInfo>
   activeSessionId: string
 }
 
 /** Executes a local command. Never calls any model. */
 export async function runCommand(deps: CommandDeps, name: string, args: string): Promise<CommandOutcome> {
   switch (name) {
-    case 'new': {
-      const s = await deps.createSession(args || undefined)
-      return { systemText: `Session « ${s.title} » créée.`, newActiveId: s.id }
-    }
+    case 'new':
+      // The dialog needs a workspace choice — the App opens it (args = title prérempli).
+      return { systemText: '', openNewDialog: true }
+    case 'delete':
+      return { systemText: '', deleteActive: true }
     case 'clear': {
       // The journal is append-only: /clear empties the view, nothing more.
       const removed = deps.store.clearMessages(deps.activeSessionId)

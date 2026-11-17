@@ -76,7 +76,7 @@ describe('resolveInScope — la garde lexicale', () => {
 describe('checkToolCall — validation avant exécution', () => {
   it('outil inconnu et arguments malformés : refusés avant tout', async () => {
     const root = sandbox()
-    const unknown = await checkToolCall(root, { tool: 'shell' as ToolCall['tool'], args: {} })
+    const unknown = await checkToolCall(root, { tool: 'rm-rf' as ToolCall['tool'], args: {} })
     expect(unknown.ok).toBe(false)
     expect(unknown.refusal?.code).toBe('unknown_tool')
     expect(unknown.refusal?.summary).toMatch(/outil inconnu/)

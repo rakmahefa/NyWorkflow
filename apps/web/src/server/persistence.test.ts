@@ -6,9 +6,10 @@ import { createServer as createViteServer } from 'vite'
 import type { ViteDevServer } from 'vite'
 
 /**
- * M3 delivery proof, over the REAL app config (vite.config.ts): drive the
- * /sessions API over HTTP, restart the dev server, and check that every
- * session comes back intact — ids, titles, messages, forks.
+ * M3 delivery proof (M11 edition), over the REAL app config (vite.config.ts):
+ * drive the /sessions API over HTTP — creation with a workspace binding,
+ * chat events, the raw journal events in the DTO, forks, DELETION, and a
+ * dev-server restart that brings every session back intact.
  */
 
 interface TestSession {
@@ -16,21 +17,30 @@ interface TestSession {
   title: string
   createdAt: number
   forkedFrom?: string
+  workspace?: string
+  events: unknown[]
   messages: { role: 'user' | 'assistant'; text: string; at: number }[]
 }
 
 let server: ViteDevServer | undefined
 let home = ''
-const prevEnv = process.env.NYW_HOME
+let spaces = ''
+const prevEnv = { NYW_HOME: process.env.NYW_HOME, NYW_WORKSPACES: process.env.NYW_WORKSPACES }
 
 beforeAll(() => {
   home = mkdtempSync(join(tmpdir(), 'nyw-persistence-'))
+  spaces = mkdtempSync(join(tmpdir(), 'nyw-persistence-ws-'))
+  process.env.NYW_HOME = home
+  process.env.NYW_WORKSPACES = spaces
 })
 
 afterAll(() => {
   rmSync(home, { recursive: true, force: true })
-  if (prevEnv === undefined) delete process.env.NYW_HOME
-  else process.env.NYW_HOME = prevEnv
+  rmSync(spaces, { recursive: true, force: true })
+  for (const key of Object.keys(prevEnv) as (keyof typeof prevEnv)[]) {
+    if (prevEnv[key] === undefined) delete process.env[key]
+    else process.env[key] = prevEnv[key]
+  }
 })
 
 afterEach(async () => {
@@ -39,7 +49,6 @@ afterEach(async () => {
 })
 
 async function boot(): Promise<string> {
-  process.env.NYW_HOME = home
   server = await createViteServer({
     configFile: join(import.meta.dirname, '../../vite.config.ts'),
     server: { port: 0, strictPort: false },
@@ -63,29 +72,41 @@ async function api(base: string, path: string, init?: RequestInit): Promise<{ st
 }
 
 it(
-  'création → échange → fork → redémarrage : sessions intactes',
+  'création (workspace) → échange → fork → suppression → redémarrage : sessions intactes',
   { timeout: 120_000 },
   async () => {
     const a = await boot()
+
+    // Un workspace agentique pour lier la session.
+    const ws = await api(a, '/workspaces', { method: 'POST', body: JSON.stringify({ name: 'missions' }) })
+    expect(ws.status).toBe(201)
 
     // État initial : vide.
     const empty = await api(a, '/sessions')
     expect(empty.status).toBe(200)
     expect(empty.body.sessions).toEqual([])
 
-    // Création avec titre (trim appliqué).
-    const created = await api(a, '/sessions', { method: 'POST', body: JSON.stringify({ title: ' Rapport Q3 ' }) })
+    // Création avec titre + workspace (trim appliqué, liaison enregistrée).
+    const created = await api(a, '/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ title: ' Rapport Q3 ', workspace: 'missions' }),
+    })
     expect(created.status).toBe(201)
     expect(created.body.title).toBe('Rapport Q3')
+    expect(created.body.workspace).toBe('missions')
     const id: string = created.body.id
     expect(id).toMatch(/^\d{4}-\d{2}-\d{2}-[0-9a-f]{4}$/)
+
+    // Workspace inconnu à la création : refus propre (M11).
+    const badWs = await api(a, '/sessions', { method: 'POST', body: JSON.stringify({ title: 'X', workspace: 'ailleurs' }) })
+    expect(badWs.status).toBe(400)
 
     // Sans titre : repli numéroté côté serveur.
     const second = await api(a, '/sessions', { method: 'POST', body: '{}' })
     expect(second.status).toBe(201)
     expect(second.body.title).toBe('Session 2')
 
-    // Échange journalisé (user puis assistant).
+    // Échange journalisé (user puis assistant) — le DTO porte les événements bruts.
     const ask = await api(a, `/sessions/${id}/events`, {
       method: 'POST',
       body: JSON.stringify({ type: 'user.message', text: 'Présente le projet' }),
@@ -93,9 +114,17 @@ it(
     expect(ask.status).toBe(201)
     const answer = await api(a, `/sessions/${id}/events`, {
       method: 'POST',
-      body: JSON.stringify({ type: 'assistant.message', text: 'NyWorkflow orchestre des dossiers numérotés.' }),
+      body: JSON.stringify({ type: 'assistant.message', text: "NyWorkflow charge l'ICM du workspace vers le modèle." }),
     })
     expect(answer.status).toBe(201)
+
+    const mine = ((await api(a, '/sessions')).body.sessions as TestSession[]).find((s) => s.id === id) as TestSession
+    expect(mine.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
+    expect(mine.events.map((e: any) => e.type)).toEqual([
+      'session.created',
+      'user.message',
+      'assistant.message',
+    ])
 
     // Refus prévisibles : type hors périmètre, id invalide, id inconnu.
     const badType = await api(a, `/sessions/${id}/events`, {
@@ -123,12 +152,22 @@ it(
     const before: TestSession[] = (await api(a, '/sessions')).body.sessions
     expect(before).toHaveLength(3)
 
+    // ==== Suppression (M11) : le journal disparaît, les autres restent. ====
+    const gone = await api(a, `/sessions/${second.body.id}`, { method: 'DELETE' })
+    expect(gone.status).toBe(200)
+    expect(gone.body).toEqual({ ok: true })
+    const afterDelete: TestSession[] = (await api(a, '/sessions')).body.sessions
+    expect(afterDelete.map((s) => s.id)).toEqual(before.filter((s) => s.id !== second.body.id).map((s) => s.id))
+    // Double suppression → 404 honnête.
+    const twice = await api(a, `/sessions/${second.body.id}`, { method: 'DELETE' })
+    expect(twice.status).toBe(404)
+
     // ==== Redémarrage du serveur ====
     await stop()
     const b = await boot()
 
     const after: TestSession[] = (await api(b, '/sessions')).body.sessions
-    expect(after).toEqual(before) // ordre, titres, messages, fork : tout est revenu
+    expect(after).toEqual(afterDelete) // ordre, titres, events, fork : tout est revenu
 
     // Le journal du fork contient l'historique hérité.
     const forkEntry = after.find((s) => s.forkedFrom !== undefined) as TestSession

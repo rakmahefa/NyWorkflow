@@ -1,72 +1,80 @@
 import { createWeb2ApiClient } from '@nyworkflow/adapter-llm'
+import type { ToolCallRequest } from '@nyworkflow/adapter-llm'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { ChatView } from './components/ChatView'
 import { Composer } from './components/Composer'
 import { ModelPicker } from './components/ModelPicker'
-import { RunPanel } from './components/RunPanel'
+import { NewSessionDialog } from './components/NewSessionDialog'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Sidebar } from './components/Sidebar'
-import type { View } from './components/Sidebar'
-import { WorkflowsView } from './components/WorkflowsView'
+import { ToolApprovalCard } from './components/ToolApprovalCard'
+import { AGENT_TOOLS, parseToolArgs } from './lib/agentTools'
 import { parseInput, runCommand } from './lib/commands'
 import { fakeReply, streamText } from './lib/fakeLLM'
 import { useGatewayStatus } from './lib/gateway'
-import { toLlmHistory } from './lib/history'
+import { toAgentMessages } from './lib/history'
 import { applyTheme, loadTheme } from './lib/theme'
 import * as api from './lib/sessionApi'
-import type { RunStateDto, WorkspaceSummaryDto } from './lib/sessionApi'
+import type { ToolRunDto } from './lib/sessionApi'
 import { SessionStore } from './lib/store'
 import type { ChatMsg, SessionInfo } from './lib/types'
 import { APP_VERSION } from './lib/version'
 
 const WELCOME =
-  'Bienvenue dans NyWorkflow (v0.1.0). Passerelle webapi intégrée — sessions journalisées sur disque, moteur ICM avec outils, onglet Workflows pour exécuter un pipeline, écritures du modèle sous approbation. /help pour les commandes, bouton Paramètres pour le diagnostic.'
+  'Bienvenue dans NyWorkflow (v0.2.0). Sessions ICM agentiques — chaque session vit dans un workspace (arbre libre + CONTEXT.md) : le modèle charge l’ICM et agit avec ses outils (read, write, ls, glob, mkdir, shell, websearch). Les écritures et commandes attendent votre approbation. /help pour les commandes.'
 const GATEWAY_DOWN =
   'Passerelle webapi absente — réponses simulées. Elle démarre normalement avec l’application ; ouvrez Paramètres → Passerelle pour le diagnostic, ou vérifiez NYW_WEBAPI_EMBED (0 = désactivée).'
 const MEMORY_FALLBACK =
   'API /sessions indisponible — repli mémoire : cette session ne survivra pas à un rechargement.'
+const MAX_ROUNDS = 12
 
 type Mode = 'booting' | 'server' | 'memory'
 
+/** A paused decision the turn loop is waiting on. */
+interface DecisionWaiter {
+  sessionId: string
+  rowId: string
+  resolve: (outcome: ToolRunDto) => void
+}
+
 /**
- * M3 shell: sessions persisted as JSONL journals through /sessions.
- * M4: the ICM engine runs workspaces server-side through /workspaces.
- * M5: a session that runs a workflow shows its tool activity and, when a
- * write pauses for a human, an approval card — the one-click decision the
- * engine resumes from.
- * M6: a second view — Workflows — drives the whole pipeline from the UI:
- * runs are created and advanced there, stages light up as they finish,
- * outputs preview from disk. The chat view stays for conversation.
- * Boot hydrates from the journals; chat messages are journaled as they
- * settle; forking copies a journal. When /sessions is unreachable the
- * app degrades to in-memory sessions with a clear notice — never a
- * silent loss.
+ * M11 — sessions ICM agentiques. The app IS its sessions: every session is
+ * bound to a workspace, and a chat turn runs the agent loop in the browser
+ * — ICM system prompt (tree + CONTEXT.md, loaded fresh each round), history
+ * derived from the journal rows (chat + tool round-trips), standard
+ * tool_calls through the gateway. Tool calls execute server-side (scope
+ * guard + caps); dangerous ones (write, shell) pause for a human — the
+ * decision resolves the pause and the loop continues. The journal stays
+ * the truth: everything the UI shows is derived from it, on disk.
  */
 export default function App() {
   const [boot] = useState(() => ({ store: new SessionStore(), client: createWeb2ApiClient({ baseUrl: '/api' }) }))
   const { store, client } = boot
   const [mode, setMode] = useState<Mode>('booting')
   const [activeId, setActiveId] = useState<string | null>(null)
-  /** Run side of the active session, when it executes a workflow (M5). */
-  const [run, setRun] = useState<RunStateDto | null>(null)
-  /** M6: which face of the app is shown, and the workflows selection. */
-  const [view, setView] = useState<View>('chat')
-  const [wsList, setWsList] = useState<readonly WorkspaceSummaryDto[] | null>(null)
-  const [wsName, setWsName] = useState<string | null>(null)
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
-  /** M8 : menu Paramètres (thème, diagnostic passerelle, à propos). */
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [newSessionOpen, setNewSessionOpen] = useState(false)
+  const [newSessionTitle, setNewSessionTitle] = useState('')
+  /** The agent turn in flight (composer disabled while it runs). */
+  const [agentRun, setAgentRun] = useState<{ sessionId: string } | null>(null)
   const gw = useGatewayStatus(client)
 
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const active = snap.sessions.find((s) => s.id === activeId) ?? snap.sessions.at(-1) ?? null
-  const messages = active ? snap.messages.filter((m) => m.sessionId === active.id) : []
+  const rows = active ? snap.messages.filter((m) => m.sessionId === active.id) : []
+  /** The paused tool call of the active session, if any (approval card). */
+  const pendingRow = [...rows].reverse().find((m) => m.role === 'tool' && m.ok === undefined)
 
-  // Hydratation au démarrage : journaux → store. Repli mémoire si l'API est absente.
+  /** The paused decision the live loop waits on (survives re-renders). */
+  const waiterRef = useRef<DecisionWaiter | null>(null)
+
   // Thème persisté appliqué dès le boot (M8).
   useEffect(() => {
     applyTheme(loadTheme())
   }, [])
+
+  // Hydratation au démarrage : journaux → store ; première session liée à un
+  // workspace (scaffold d'office si le registre est vide — jamais de session orpheline).
   useEffect(() => {
     let cancelled = false
     void (async () => {
@@ -74,19 +82,15 @@ export default function App() {
         const sessions = await api.listSessions()
         if (cancelled) return
         if (sessions.length === 0) {
-          const first = await api.createSession()
-          if (cancelled) return
-          store.addSession(first)
+          const { first, welcome } = await createFirstSession()
+          if (cancelled || !first) return
+          store.addSession({ id: first.id, title: first.title, createdAt: first.createdAt, workspace: first.workspace })
           setActiveId(first.id)
-          store.appendMessage(first.id, 'system', WELCOME)
+          store.appendMessage(first.id, 'system', welcome)
         } else {
           store.ingest(
             sessions.map((d): SessionInfo => ({ id: d.id, title: d.title, createdAt: d.createdAt, workspace: d.workspace })),
-            sessions.flatMap((d) =>
-              d.messages.map(
-                (m, k): ChatMsg => ({ id: `${d.id}:${k}`, sessionId: d.id, role: m.role, text: m.text, at: m.at }),
-              ),
-            ),
+            sessions.flatMap((d) => rowsFromEvents(d.id, d.events)),
           )
           setActiveId(sessions[sessions.length - 1]!.id)
         }
@@ -103,7 +107,28 @@ export default function App() {
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store])
+
+  /** Première session : workspace existant ou scaffold d'un workspace par défaut. */
+  async function createFirstSession(): Promise<{ first: api.SessionDto | null; welcome: string }> {
+    let workspace: string | undefined
+    try {
+      const list = await api.listWorkspaces()
+      workspace = list[0]?.name
+      if (workspace === undefined) {
+        workspace = (await api.createWorkspace('mon-workspace')).name
+      }
+    } catch {
+      workspace = undefined
+    }
+    const first = await api.createSession(undefined, workspace)
+    const welcome =
+      workspace !== undefined
+        ? WELCOME
+        : `${WELCOME}\n(Aucun workspace disponible — la session sera une conversation simple, sans outils.)`
+    return { first, welcome }
+  }
 
   // Annonce une seule fois l'absence de passerelle, dans la session active.
   const announcedDown = useRef(false)
@@ -115,101 +140,76 @@ export default function App() {
     }
   }, [gw.status, downTargetId, store])
 
-  // Session de run active → état du run + activité d'outils (M5).
-  const activeWorkspace = active?.workspace
-  const activeRunId = active?.id
-  const refreshRun = useCallback(() => {
-    if (mode !== 'server' || !activeWorkspace || !activeRunId) {
-      setRun(null)
-      return
-    }
-    let cancelled = false
-    void api
-      .getRun(activeWorkspace, activeRunId)
-      .then((r) => {
-        if (!cancelled) setRun(r)
-      })
-      .catch(() => {
-        // Un journal sans workspace valide ou une API absente : pas de panneau.
-        if (!cancelled) setRun(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [activeRunId, activeWorkspace, mode])
-  useEffect(() => {
-    setRun(null)
-    return refreshRun()
-  }, [refreshRun])
-
-  /** Décision humaine sur un appel d'outil en attente — puis rafraîchissement. */
-  const handleResolved = useCallback(
-    (decision: 'approve' | 'refuse', state: RunStateDto['state']) => {
-      if (active) {
-        store.appendMessage(
-          active.id,
-          'system',
-          decision === 'approve'
-            ? `Écriture approuvée — étape reprise (${state.status}).`
-            : `Appel refusé — étape reprise sans l'écriture (${state.status}).`,
-        )
+  /** Journal events → UI rows, order preserved (chat + tool activity). */
+  function rowsFromEvents(sessionId: string, events: api.SessionDto['events']): ChatMsg[] {
+    const out: ChatMsg[] = []
+    let k = 0
+    for (const e of events) {
+      if (e.type === 'user.message' || e.type === 'assistant.message') {
+        out.push({ id: `${sessionId}:${k++}`, sessionId, role: e.type === 'user.message' ? 'user' : 'assistant', text: e.text, at: Date.parse(e.at) || 0 })
+      } else if (e.type === 'tool.call') {
+        out.push({ id: `${sessionId}:${k++}`, sessionId, role: 'tool', text: '', at: Date.parse(e.at) || 0, tool: e.tool, args: e.args })
+      } else if (e.type === 'tool.result') {
+        const open = [...out].reverse().find((r) => r.role === 'tool' && r.ok === undefined)
+        if (open) {
+          open.ok = e.ok
+          open.summary = e.summary
+          if (e.ok && e.data !== undefined) open.data = e.data
+        }
       }
-      refreshRun()
+    }
+    return out
+  }
+
+  /** Décision humaine sur l'appel en pause — le journal reçoit le résultat, la boucle reprend. */
+  const handleDecision = useCallback(
+    async (decision: 'approve' | 'refuse') => {
+      if (!active?.workspace || !pendingRow) return
+      try {
+        const res = await api.decideTool(active.workspace, active.id, decision)
+        if (res.status === 'executed') {
+          store.resolveToolCall(pendingRow.id, res.outcome)
+        }
+        const waiter = waiterRef.current
+        if (waiter !== null && waiter.sessionId === active.id && waiter.rowId === pendingRow.id) {
+          waiterRef.current = null
+          waiter.resolve(res)
+        }
+      } catch (err) {
+        const why = err instanceof Error ? err.message : String(err)
+        store.appendMessage(active.id, 'system', `Décision impossible : ${why}`)
+      }
     },
-    [active, refreshRun, store],
+    [active, pendingRow, store],
   )
 
-  /** Création de session — journal serveur, ou locale en mode mémoire. */
-  const createSession = useCallback(
-    async (title?: string): Promise<SessionInfo> => {
-      if (mode === 'server') {
-        const dto = await api.createSession(title)
-        return store.addSession({ id: dto.id, title: dto.title, createdAt: dto.createdAt })
+  /** Suppression d'une session (M11) — journal serveur ou locale en mode mémoire. */
+  const doDelete = useCallback(
+    async (id: string) => {
+      const target = store.findSessionById(id)
+      if (!target) return
+      try {
+        if (mode === 'server') await api.deleteSession(id)
+      } catch (err) {
+        const why = err instanceof Error ? err.message : String(err)
+        const anchor = store.findSessionById(id)
+        if (anchor) store.appendMessage(id, 'system', `Suppression impossible : ${why}`)
+        return
       }
-      return store.createSession(title)
+      // Une boucle en pause sur cette session se termine proprement.
+      const waiter = waiterRef.current
+      if (waiter !== null && waiter.sessionId === id) {
+        waiterRef.current = null
+        waiter.resolve({ status: 'executed', outcome: { ok: false, code: 'refused_by_user', summary: 'session supprimée' } })
+      }
+      store.removeSession(id)
+      const rest = store.listSessions()
+      if (activeId === id) setActiveId(rest.length > 0 ? rest[rest.length - 1]!.id : null)
+      if (rest.length === 0) {
+        setNewSessionOpen(true)
+      }
     },
-    [mode, store],
-  )
-
-  // --- Vue Workflows (M6) : listing, sélection, création de run. ---
-
-  const refreshWorkspaces = useCallback(() => {
-    if (mode !== 'server') return
-    let cancelled = false
-    void api
-      .listWorkspaces()
-      .then((list) => {
-        if (!cancelled) setWsList(list)
-      })
-      .catch(() => {
-        if (!cancelled) setWsList([])
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [mode])
-
-  useEffect(() => {
-    if (view !== 'workflows') return
-    return refreshWorkspaces()
-  }, [view, refreshWorkspaces])
-
-  // Premier workspace parsable sélectionné d'office à l'ouverture de l'onglet.
-  useEffect(() => {
-    if (wsName !== null || wsList === null || wsList.length === 0) return
-    const first = wsList.find((w) => w.error === undefined) ?? wsList[0]!
-    setWsName(first.name)
-  }, [wsList, wsName])
-
-  /** Crée le run côté serveur et synchronise le store (la session apparaît dans l'onglet Sessions). */
-  const createWorkflowRun = useCallback(
-    (workspace: string, subject: string): Promise<RunStateDto> => {
-      return api.createRun(workspace, subject).then((dto) => {
-        store.addSession({ id: dto.id, title: dto.title, createdAt: dto.createdAt, workspace })
-        return dto
-      })
-    },
-    [store],
+    [activeId, mode, store],
   )
 
   /** Fork d'une session : copie du journal, historique hérité, bascule dessus. */
@@ -220,7 +220,7 @@ export default function App() {
       try {
         if (mode === 'server') {
           const dto = await api.forkSession(id)
-          store.addSession({ id: dto.id, title: dto.title, createdAt: dto.createdAt })
+          store.addSession({ id: dto.id, title: dto.title, createdAt: dto.createdAt, workspace: dto.workspace })
           store.copyMessages(id, dto.id)
           store.appendMessage(dto.id, 'system', `Fork de « ${src.title} » créé.`)
           setActiveId(dto.id)
@@ -239,20 +239,6 @@ export default function App() {
     [mode, store],
   )
 
-  const openNewSession = useCallback(
-    async (title?: string) => {
-      try {
-        const s = await createSession(title)
-        store.appendMessage(s.id, 'system', `Session « ${s.title} » créée.`)
-        setActiveId(s.id)
-      } catch (err) {
-        const why = err instanceof Error ? err.message : String(err)
-        if (active) store.appendMessage(active.id, 'system', `Création impossible : ${why}`)
-      }
-    },
-    [active, createSession, store],
-  )
-
   /** Journalise la réponse assistant une fois le flux terminé (complète ou partielle). */
   const journalAssistant = useCallback(
     (sessionId: string, msgId: string) => {
@@ -267,25 +253,111 @@ export default function App() {
     [mode, store],
   )
 
+  /**
+   * The agent loop (M11): ICM → model → tool_calls → tools (approvals
+   * pause) → model… until a plain answer. One turn, journal-visible.
+   */
+  const runAgentTurn = useCallback(
+    async (session: SessionInfo, userText: string) => {
+      const workspace = session.workspace
+      if (workspace === undefined) return
+      setAgentRun({ sessionId: session.id })
+      try {
+        for (let round = 0; round < MAX_ROUNDS; round++) {
+          if (store.findSessionById(session.id) === undefined) return // session supprimée
+          if (gw.status !== 'up' || !gw.selected) return // passerelle tombée entre-temps
+
+          // L'ICM vers le modèle — rechargé à chaque tour (l'arbre a pu grandir).
+          let system = ''
+          try {
+            system = (await api.getIcm(workspace)).system
+          } catch (err) {
+            const why = err instanceof Error ? err.message : String(err)
+            store.appendMessage(session.id, 'system', `ICM inaccessible (${why}) — réponse sans contexte du workspace.`)
+            return
+          }
+
+          const messages = [{ role: 'system' as const, content: system }, ...toAgentMessages(store.listMessages(session.id))]
+          const placeholder = store.appendMessage(session.id, 'assistant', '')
+          store.setStreaming(placeholder.id, true)
+          let text = ''
+          let calls: ToolCallRequest[] = []
+          try {
+            for await (const ev of client.chatStream({ model: gw.selected, messages, tools: AGENT_TOOLS })) {
+              if (ev.type === 'text') {
+                if (!store.appendText(placeholder.id, ev.delta)) return // session effacée
+                text += ev.delta
+              } else if (ev.type === 'tool_calls') {
+                calls = ev.calls
+              }
+            }
+          } catch (err) {
+            const remaining = store.listMessages(session.id).find((m) => m.id === placeholder.id)
+            if (!remaining) return
+            if (remaining.text.trim() === '') store.removeMessage(placeholder.id)
+            else {
+              store.setStreaming(placeholder.id, false)
+              journalAssistant(session.id, placeholder.id)
+            }
+            const why = err instanceof Error ? err.message : String(err)
+            store.appendMessage(session.id, 'system', `Erreur passerelle : ${why}`)
+            return
+          }
+          store.setStreaming(placeholder.id, false)
+          journalAssistant(session.id, placeholder.id)
+
+          if (calls.length === 0) return // réponse finale — tour terminé
+
+          // Exécution des appels — séquentielle, approuvations comprises.
+          for (const call of calls) {
+            if (store.findSessionById(session.id) === undefined) return
+            const args = parseToolArgs(call.function.arguments)
+            const row = store.appendToolCall(session.id, call.function.name, args)
+            let res: ToolRunDto
+            try {
+              res = await api.runTool(workspace, session.id, call.function.name, args)
+            } catch (err) {
+              const why = err instanceof Error ? err.message : String(err)
+              const outcome = { ok: false, summary: `outil injoignable : ${why}` }
+              store.resolveToolCall(row.id, outcome)
+              continue
+            }
+            if (res.status === 'executed') {
+              store.resolveToolCall(row.id, res.outcome)
+              continue
+            }
+            // Dangereux : en pause — la carte d'approbation décide, la boucle attend.
+            const outcome = await new Promise<ToolRunDto>((resolve) => {
+              waiterRef.current = { sessionId: session.id, rowId: row.id, resolve }
+            })
+            if (store.findSessionById(session.id) === undefined) return
+            if (outcome.status === 'executed') store.resolveToolCall(row.id, outcome.outcome)
+          }
+        }
+        store.appendMessage(session.id, 'system', `Boucle interrompue après ${MAX_ROUNDS} tours — précisez la demande pour continuer.`)
+      } finally {
+        setAgentRun(null)
+      }
+    },
+    [client, gw.selected, gw.status, journalAssistant, store],
+  )
+
   const handleSend = useCallback(
     async (raw: string) => {
-      if (!active) return
+      if (!active || agentRun !== null) return
       const parsed = parseInput(raw)
 
       if (parsed.kind === 'command') {
-        try {
-          const out = await runCommand(
-            { store, createSession, activeSessionId: active.id },
-            parsed.name ?? '',
-            parsed.args ?? '',
-          )
-          const targetId = out.newActiveId ?? active.id
-          store.appendMessage(targetId, 'system', out.systemText)
-          if (out.newActiveId) setActiveId(out.newActiveId)
-        } catch (err) {
-          const why = err instanceof Error ? err.message : String(err)
-          store.appendMessage(active.id, 'system', `Création impossible : ${why}`)
+        const out = await runCommand({ store, activeSessionId: active.id }, parsed.name ?? '', parsed.args ?? '')
+        if (out.openNewDialog) {
+          setNewSessionTitle(parsed.args ?? '')
+          setNewSessionOpen(true)
         }
+        if (out.deleteActive) {
+          await doDelete(active.id)
+          return
+        }
+        if (out.systemText !== '') store.appendMessage(active.id, 'system', out.systemText)
         return
       }
 
@@ -297,35 +369,13 @@ export default function App() {
         })
       }
 
-      if (gw.status === 'up' && gw.selected) {
-        // Flux réel via la passerelle (proxy /api → gemini-web2api).
-        const history = toLlmHistory(store.listMessages(active.id))
-        const placeholder = store.appendMessage(active.id, 'assistant', '')
-        store.setStreaming(placeholder.id, true)
-        void (async () => {
-          try {
-            for await (const token of client.chatStream({ model: gw.selected, messages: history })) {
-              if (!store.appendText(placeholder.id, token)) break
-            }
-            store.setStreaming(placeholder.id, false)
-            journalAssistant(active.id, placeholder.id)
-          } catch (err) {
-            const remaining = store.listMessages(active.id).find((m) => m.id === placeholder.id)
-            if (!remaining) return // session effacée entre-temps
-            if (remaining.text.trim() === '') {
-              store.removeMessage(placeholder.id)
-            } else {
-              store.setStreaming(placeholder.id, false)
-              journalAssistant(active.id, placeholder.id)
-            }
-            const why = err instanceof Error ? err.message : String(err)
-            store.appendMessage(active.id, 'system', `Erreur passerelle : ${why}`)
-          }
-        })()
+      // Session agentique : la boucle tourne dans le navigateur (ICM + outils).
+      if (mode === 'server' && active.workspace !== undefined && gw.status === 'up' && gw.selected) {
+        void runAgentTurn(active, parsed.text)
         return
       }
 
-      // Repli simulé (passerelle absente) — comportement M1.
+      // Repli simulé (passerelle absente ou session sans workspace).
       const placeholder = store.appendMessage(active.id, 'assistant', '')
       store.setStreaming(placeholder.id, true)
       streamText(fakeReply(parsed.text), (token) => store.appendText(placeholder.id, token)).done.then(() => {
@@ -333,35 +383,30 @@ export default function App() {
         journalAssistant(active.id, placeholder.id)
       })
     },
-    [active, client, createSession, gw.selected, gw.status, journalAssistant, mode, store],
+    [active, agentRun, doDelete, gw.selected, gw.status, journalAssistant, mode, runAgentTurn, store],
   )
 
   if (!active) return null
 
-  const headerTitle = view === 'workflows' ? (wsName ?? 'Workflows') : active.title
+  const busy = agentRun !== null
 
   return (
     <div className="app">
       <Sidebar
-        view={view}
-        onViewChange={setView}
         sessions={snap.sessions}
         activeId={active.id}
         onSelect={setActiveId}
-        onNew={() => void openNewSession()}
-        onFork={(id) => void doFork(id)}
-        workspaces={mode === 'server' ? wsList : null}
-        activeWorkspace={wsName}
-        onSelectWorkspace={(name) => {
-          setWsName(name)
-          setSelectedRunId(null)
+        onNew={() => {
+          setNewSessionTitle('')
+          setNewSessionOpen(true)
         }}
-        onRefreshWorkspaces={() => refreshWorkspaces()}
+        onFork={(id) => void doFork(id)}
+        onDelete={(id) => void doDelete(id)}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <main className="main">
         <header className="main-head">
-          <h2>{headerTitle}</h2>
+          <h2>{active.title}</h2>
           <div className="main-tools">
             <ModelPicker
               status={gw.status}
@@ -373,32 +418,37 @@ export default function App() {
             <span className="tag">v{APP_VERSION}</span>
           </div>
         </header>
-        {view === 'workflows' ? (
-          <WorkflowsView
-            key={wsName ?? 'none'}
-            name={wsName}
-            memory={mode === 'memory'}
-            model={gw.selected}
-            modelAvailable={gw.status === 'up' && gw.selected !== ''}
-            selectedRunId={selectedRunId}
-            onSelectRun={setSelectedRunId}
-            onCreateRun={(subject) => createWorkflowRun(wsName ?? '', subject)}
+        {active.workspace !== undefined ? (
+          <div className="ws-banner" data-test="ws-banner">
+            <span className="ws-chip" title="Workspace ICM de la session">
+              ICM · {active.workspace}
+            </span>
+            <span className="ws-api">API {client.apiVersion}</span>
+          </div>
+        ) : null}
+        <ChatView messages={rows} />
+        {mode === 'server' && active.workspace !== undefined && pendingRow ? (
+          <ToolApprovalCard
+            tool={pendingRow.tool ?? ''}
+            args={pendingRow.args}
+            onDecide={(d) => void handleDecision(d)}
           />
-        ) : (
-          <>
-            <ChatView messages={messages} />
-            {mode === 'server' && active.workspace && run ? (
-              <RunPanel
-                workspace={active.workspace}
-                run={run}
-                onResolved={handleResolved}
-                onError={(why) => active && store.appendMessage(active.id, 'system', `Décision impossible : ${why}`)}
-              />
-            ) : null}
-            <Composer onSend={handleSend} />
-          </>
-        )}
+        ) : null}
+        <Composer onSend={handleSend} disabled={busy} />
       </main>
+      {newSessionOpen ? (
+        <NewSessionDialog
+          mode={mode}
+          initialTitle={newSessionTitle}
+          onClose={() => setNewSessionOpen(false)}
+          onCreated={(s) => {
+            store.addSession(s)
+            store.appendMessage(s.id, 'system', `Session « ${s.title} » créée — workspace « ${s.workspace} » chargé vers le modèle.`)
+            setActiveId(s.id)
+            setNewSessionOpen(false)
+          }}
+        />
+      ) : null}
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   )

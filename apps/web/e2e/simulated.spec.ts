@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test'
 
 // Passerelle « absente » : chaque appel /api est coupé au niveau de la page.
+// Les sessions restent serveur (/sessions, /workspaces) : la boîte de
+// dialogue fonctionne, mais sans modèle — repli simulé, jamais de perte.
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/**', (route) => route.abort())
 })
@@ -18,8 +20,13 @@ test('passerelle absente : message clair + repli simulé', async ({ page }) => {
   const box = page.getByLabel('Message')
   await box.fill(`/new ${marker}`)
   await box.press('Enter')
+  const dialog = page.locator('[data-test="new-session-dialog"]')
+  await expect(dialog).toBeVisible()
+  await page.locator('[data-test="session-title-input"]').fill(marker)
+  await page.locator('[data-test="create-session-btn"]').click()
   await expect(page.locator('[data-test="session-item"]').filter({ hasText: marker })).toBeVisible()
 
+  // Sans passerelle, pas de boucle agentique : réponse simulée.
   await box.fill('Bonjour M2')
   await box.press('Enter')
 

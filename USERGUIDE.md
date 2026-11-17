@@ -1,6 +1,6 @@
 # Guide utilisateur — NyWorkflow
 
-> Le mode d'emploi complet du harness : installation, cookies Gemini, interface, workflows ICM, paramètres, passerelle et dépannage. Pour le « pourquoi » du projet et son architecture, voir le [README](README.md) et [ARCHITECTURE.md](ARCHITECTURE.md).
+> Le mode d'emploi complet du harness : installation, cookies Gemini, interface, sessions ICM agentiques, workspaces, paramètres, passerelle et dépannage. Pour le « pourquoi » du projet et son architecture, voir le [README](README.md) et [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Sommaire
 
@@ -8,7 +8,7 @@
 2. [Connecter Gemini (cookies)](#2-connecter-gemini-cookies)
 3. [Tour de l'interface](#3-tour-de-linterface)
 4. [Le menu Paramètres](#4-le-menu-paramètres)
-5. [Créer son propre workflow](#5-créer-son-propre-workflow)
+5. [Créer son propre workspace](#5-créer-son-propre-workspace)
 6. [La passerelle webapi](#6-la-passerelle-webapi)
 7. [Dépannage](#7-dépannage)
 
@@ -124,31 +124,57 @@ Une chaîne brute n'a pas de date : rien ne s'affiche pour elle (on ne peut pas 
 
 ## 3. Tour de l'interface
 
-Deux onglets dans la barre latérale, deux visages du même harness.
+Une seule surface : **les sessions** — et chaque session est un agent ICM qui vit dans son workspace.
 
-### Sessions — la conversation
+### Nouvelle session — le dialogue
 
-- Posez une question, la réponse arrive **en streaming** ; le modèle se choisit dans l'en-tête.
-- **Tout est journalisé** en append-only sous `.nyworkflow/sessions/` (un fichier JSONL par session) : fermez l'UI, relancez `pnpm dev`, tout revient — titres, messages, forks.
-- Le bouton **Fork** copie un journal pour explorer une variante sans toucher à l'original.
+Le bouton **Nouvelle session** (ou `/new`) ouvre un dialogue :
+
+- **Titre** (optionnel) ;
+- **Workspace ICM** — le dossier où la session vit et travaille : ceux d'`examples/workspaces/` (ou votre dossier via `NYW_WORKSPACES`) ;
+- ou **créer un nouveau workspace** dans la foulée : la charte agentique est posée d'office (voir §5).
+
+Le dernier workspace utilisé est retenu pour la prochaine fois. Le bandeau sous l'en-tête rappelle le workspace de la session active (`ICM · nom — API v1beta`).
+
+### La boucle agentique
+
+À chaque message :
+
+1. **L'ICM part vers le modèle** — l'arborescence du workspace et tous ses `CONTEXT.md` sont assemblés en prompt système, **rechargé à chaque tour** (l'arbre grandit pendant que la session vit).
+2. **Le modèle agit avec ses outils** — `tool_calls` standard (façon OpenAI) : il lit, liste, cherche, crée des dossiers, propose des écritures. L'activité apparaît **dans le flux du chat** (lignes `read « CONTEXT.md » — 1726 caractères`, en vert quand ça réussit, rouge au refus).
+3. **Vous décidez** — toute **écriture** (`write`, `shell`) met le tour en pause : la **carte d'approbation** s'affiche, un clic **Approuve** (exécution) ou **Refuse** (l'agent continue sans) — et la boucle reprend toute seule. Un appel en attente **survit aux redémarrages** (il se dérive du journal) : rechargez la page, la carte est toujours là.
+4. **La réponse finale arrive en streaming**, le modèle se choisit dans l'en-tête.
+
+Les **sept outils** (tous fonctionnels, périmètre = la racine du workspace, garde lexicale **et** realpath — un symlink ne s'échappe pas) :
+
+| Outil | Arguments | Exécution |
+|---|---|---|
+| `read` | `{"path"}` | auto (32 Kio max) |
+| `write` | `{"path","content"}` | **approbation** (128 Kio max) |
+| `ls` | `{"path"}` | auto |
+| `glob` | `{"pattern"}` (`*`, `**`, `?`) | auto |
+| `mkdir` | `{"path"}` | auto — l'arbre est libre, le modèle le façonne |
+| `shell` | `{"command"}` | **approbation** — bash, cwd = racine, 30 s max, sorties bornées |
+| `websearch` | `{"query"}` ou `{"url"}` | auto — recherche (titres/URLs/snippets) ou page **nettoyée** |
+
+**websearch nettoie pour le modèle** (demande du pilote) : scripts, styles, navigation, en-têtes/pieds de page, formulaires, commentaires et attributs inutiles sont retirés ; les URI `data:` (mégaoctets de base64) sautent ; les **balises sémantiques restent** (`h1..h6`, `p`, `li`, `table`, `pre/code`, `a href`…) — le contenu arrive structuré et lisible, plafonné à 64 Kio.
+
+Tout est journalisé : messages, appels d'outils, refus (`tool.call` / `tool.result` en append-only sous `.nyworkflow/sessions/`, un JSONL par session). Un chemin hors workspace est refusé **et tracé**, jamais silencieux.
+
+### Sessions — gestion
+
+- **Fork** copie un journal (avec son historique d'outils) pour explorer une variante sans toucher à l'original.
+- **Supprimer** (icône corbeille, deux clics — armer puis confirmer) efface la session : son journal disparaît du disque, l'UI bascule sur la session précédente. Une suppression est une décision, pas une édition.
+- Sessions anciennes (M4–M10) : elles restent lisibles ; une session liée à un ancien workspace d'étapes devient agentique telle quelle (l'arbre se lit pareil), une session sans workspace converse simplement sans outils.
 
 Commandes du chat (préfixées par `/`) :
 
 | Commande | Effet |
 |---|---|
-| `/new [titre]` | Nouvelle session (titre optionnel) |
-| `/help` | Liste des commandes |
+| `/new [titre]` | Ouvre le dialogue de nouvelle session (titre prérempli) |
+| `/delete` | Supprime la session active (même garde-fou que le bouton) |
+| `/help` | Liste les commandes |
 | `/clear` | Vide l'affichage — **le journal reste intact** |
-
-### Workflows — le pipeline ICM
-
-1. Choisissez un workspace dans la barre latérale (ceux d'`examples/workspaces/`, ou votre dossier via `NYW_WORKSPACES`).
-2. Donnez un **sujet** et cliquez **Nouveau run** — le sujet devient une session journalisée, visible aussi dans l'onglet Sessions.
-3. Cliquez **Exécuter l'étape suivante** : le moteur assemble le contexte, interroge le modèle, écrit la réponse dans `output/`. L'étape passe à **Fait**, la suivante attend.
-4. À chaque étape : prévisualisez les sorties (un clic — contenu actuel du fichier), **éditez-les si vous voulez** : l'étape suivante lira votre version.
-5. Cochez **Outils** : le modèle peut `read` / `ls` / `glob` dans le workspace (automatiques) et `write` — mais **toute écriture met le run en pause** : une carte d'approbation s'affiche, vous décidez d'un clic (Approuver / Refuser), l'étape reprend. Refus et appels hors périmètre sont journalisés.
-
-L'état d'un run **survit aux redémarrages** — il se reconstruit du journal.
 
 ## 4. Le menu Paramètres
 
@@ -162,36 +188,31 @@ Le bouton **Paramètres** (engrenage, bas de la barre latérale) ouvre une modal
 
 `Échap` ou le bouton ✕ ferment la modale.
 
-## 5. Créer son propre workflow
+## 5. Créer son propre workspace
 
-Un workflow = un dossier d'étapes numérotées, posé dans `examples/workspaces/` (ou le dossier pointé par `NYW_WORKSPACES`) :
+Un workspace = **un dossier libre**. Le plus simple : cochez « Créer un nouveau workspace » dans le dialogue de nouvelle session, ou :
 
-```
-mon-workflow/
-├── CONTEXT.md        # la carte : objectif, tableau des étapes, règles (max 80 lignes)
-├── 01-recherche/
-│   ├── CONTEXT.md    # le contrat : ## Entrées / ## Process / ## Sorties
-│   └── output/       # la sortie de l'étape 1 devient l'entrée de l'étape 2
-└── 02-redaction/
-    ├── CONTEXT.md
-    └── output/
+```sh
+curl -s -X POST http://127.0.0.1:3080/workspaces \
+  -H 'content-type: application/json' -d '{"name": "missions"}'
 ```
 
-Le contrat d'étape (format **figé en v1 jusqu'à v0.2.0**) :
+Le **scaffold agentique** est posé d'office — moderne et complet :
 
-```markdown
-## Entrées
-- `01-recherche/output/faits.md`        # un chemin = un fichier relu sur disque
-- le sujet                              # une entrée sans backticks = le sujet du run
-
-## Process
-Ce que l'étape doit faire, en une à trois phrases.
-
-## Sorties
-- `output/fiche.md`                     # une seule sortie par étape
+```
+missions/
+├── CONTEXT.md        # la charte agentique : Mission, Méthode ICM, Arborescence, Outils, Règles
+├── inbox/            # ce que VOUS déposez (entrées de la session)
+├── notes/            # plans et raisonnement de l'agent
+├── research/         # lectures web nettoyées (websearch)
+└── outputs/          # livrables finaux
 ```
 
-Exemple complet et commenté : `examples/workspaces/exemple-rapport/`. Le workspace apparaît dans l'onglet Workflows au rechargement (bouton ↻ Rafraîchir).
+**Éditez le `CONTEXT.md`** : c'est la première chose que le modèle lit à chaque tour. Remplacez la section Mission par l'objectif réel du workspace, ajustez les conventions — tout le reste (arbre, outils, approbations) est déjà enseigné au modèle par la charte et le prompt système.
+
+L'arbre est **libre** : le modèle crée les dossiers dont il a besoin (`mkdir`), et un sous-dossier qui acquiert un rôle mérite son propre `CONTEXT.md` (relu comme les autres, jusqu'à 8 fichiers de 32 Kio). Vos propres dossiers hors du repo : `NYW_WORKSPACES=/chemin/vers/mes/workspaces pnpm dev`.
+
+Exemple complet et commenté : `examples/workspaces/exemple-agentique/`.
 
 ## 6. La passerelle webapi
 
@@ -230,13 +251,14 @@ Toute la config vit dans des variables `NYW_WEBAPI_*` (12 facteurs, rien de cach
 | `NYW_WEBAPI_RETRY_ATTEMPTS` / `NYW_WEBAPI_RETRY_DELAY_MS` | `3` / `2000` | Retries avec backoff + jitter |
 | `NYW_WEBAPI_GEMINI_BASE_URL` | `https://gemini.google.com` | Pour les tests (maquette locale) |
 
-### L'API servie (deux dialectes — M10)
+### L'API servie (deux dialectes, deux namespaces — M10 + M11)
 
 ```
-# OpenAI-compatible
-GET  /                     # diagnostic : version, modèles, cookies, comptes, proxy, journal
-GET  /v1/models            # liste des modèles
-POST /v1/chat/completions  # chat — stream SSE ("stream": true) ou complet, avec tools
+# OpenAI-compatible — sous v1 ET v1beta (M11 : l'app consomme v1beta par défaut)
+GET  /                                  # diagnostic : version, modèles, cookies, comptes, proxy, journal
+GET  /v1/models                         # liste des modèles (forme OpenAI)
+POST /v1/chat/completions               # chat — stream SSE ("stream": true) ou complet, avec tools
+POST /v1beta/chat/completions           # le MÊME dialecte OpenAI sous le namespace v1beta
 
 # Google-style (v1beta)
 GET  /v1beta/models                     # liste (forme Google)
@@ -245,7 +267,7 @@ POST /v1beta/models/{modèle}:generateContent          # chat (candidates/parts/
 POST /v1beta/models/{modèle}:streamGenerateContent    # stream : ?alt=sse → SSE, sinon tableau JSON
 ```
 
-En direct : `curl -s http://127.0.0.1:8081/` (ou `http://127.0.0.1:3080/api/` à travers l'UI). Tout serveur OpenAI-compatible peut remplacer la passerelle : `W2A_URL=http://… pnpm dev`. Le suffixe `@think=N` marche partout (`/v1/chat/completions` comme le chemin `:generateContent`).
+La liste des namespaces est **une donnée** côté passerelle (`OPENAI_CHAT_PATHS`) : le jour où Google sert un `v2`, il s'ajoute sans toucher au moteur ; côté client, l'adaptateur expose `apiVersion` (défaut `v1beta`). En direct : `curl -s http://127.0.0.1:8081/` (ou `http://127.0.0.1:3080/api/` à travers l'UI). Tout serveur OpenAI-compatible peut remplacer la passerelle : `W2A_URL=http://… pnpm dev` (l'adaptateur retombe sur `/v1/models` si `/v1beta/models` répond 404). Le suffixe `@think=N` marche partout.
 
 **Les tools façon OpenAI** — déclarez vos fonctions, la passerelle enseigne la convention au modèle et décode ses appels :
 

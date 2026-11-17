@@ -22,82 +22,57 @@ describe('parseInput', () => {
   })
 })
 
-describe('runCommand', () => {
-  /** Store-backed factory — the memory-mode wiring the app falls back to. */
+describe('runCommand (M11 — la boîte de dialogue porte la création)', () => {
   function depsFor(s: SessionStore, activeId: string): CommandDeps {
-    return {
-      store: s,
-      activeSessionId: activeId,
-      createSession: (title) => Promise.resolve(s.createSession(title)),
-    }
+    return { store: s, activeSessionId: activeId }
   }
 
-  it('new: creates a session and asks the UI to switch to it', async () => {
+  it('new : ouvre la boîte de dialogue, sans toucher au store', async () => {
     const s = new SessionStore()
     const active = s.createSession()
     const out = await runCommand(depsFor(s, active.id), 'new', 'Rapport Q3')
-    expect(out.newActiveId).toBeDefined()
-    expect(out.newActiveId).not.toBe(active.id)
-    expect(out.systemText).toContain('Rapport Q3')
-    expect(s.listSessions()).toHaveLength(2)
-    expect(s.findSessionById(out.newActiveId!)?.title).toBe('Rapport Q3')
+    expect(out.openNewDialog).toBe(true)
+    expect(out.systemText).toBe('')
+    expect(s.listSessions()).toHaveLength(1)
   })
 
-  it('new without args: numbered title', async () => {
+  it('delete : demande la suppression de la session active', async () => {
     const s = new SessionStore()
     const active = s.createSession()
-    const out = await runCommand(depsFor(s, active.id), 'new', '')
-    expect(out.systemText).toContain('Session 2')
+    const out = await runCommand(depsFor(s, active.id), 'delete', '')
+    expect(out.deleteActive).toBe(true)
   })
 
-  it('new: passes the title to the injected factory (server path)', async () => {
+  it('clear : vide l’affichage, le journal (store) est conservé hors messages', async () => {
     const s = new SessionStore()
     const active = s.createSession()
-    let asked: string | undefined
-    const deps: CommandDeps = {
-      store: s,
-      activeSessionId: active.id,
-      createSession: async (title) => {
-        asked = title
-        return s.createSession('Réponse serveur')
-      },
-    }
-    const out = await runCommand(deps, 'new', 'Titre passé')
-    expect(asked).toBe('Titre passé')
-    expect(out.systemText).toContain('Réponse serveur')
-    expect(out.newActiveId).toBeDefined()
-  })
-
-  it('clear: reports the count and keeps the journal', async () => {
-    const s = new SessionStore()
-    const active = s.createSession()
-    s.appendMessage(active.id, 'user', 'un')
+    s.appendMessage(active.id, 'user', 'q')
+    s.appendMessage(active.id, 'assistant', 'r')
     const out = await runCommand(depsFor(s, active.id), 'clear', '')
-    expect(out.systemText).toBe('1 message(s) effacé(s) — journal conservé (append-only).')
+    expect(out.systemText).toContain('2 message(s) effacé(s)')
     expect(s.listMessages(active.id)).toHaveLength(0)
   })
 
-  it('clear on an empty session: nothing to erase', async () => {
+  it('clear sans rien : rien à effacer', async () => {
     const s = new SessionStore()
     const active = s.createSession()
-    expect((await runCommand(depsFor(s, active.id), 'clear', '')).systemText).toBe('Rien à effacer.')
+    const out = await runCommand(depsFor(s, active.id), 'clear', '')
+    expect(out.systemText).toBe('Rien à effacer.')
   })
 
-  it('help: lists the commands', async () => {
+  it('help : la liste des commandes, avec /delete (M11)', async () => {
     const s = new SessionStore()
     const active = s.createSession()
     const out = await runCommand(depsFor(s, active.id), 'help', '')
     expect(out.systemText).toBe(HELP_TEXT)
-    expect(out.systemText).toContain('/new')
-    expect(out.systemText).toContain('/clear')
-    expect(out.systemText).toContain('journal est conservé')
+    expect(HELP_TEXT).toContain('/delete')
+    expect(HELP_TEXT).toContain('/new')
   })
 
-  it('unknown command: explains and never reaches a model', async () => {
+  it('commande inconnue : jamais envoyée au modèle', async () => {
     const s = new SessionStore()
     const active = s.createSession()
-    const out = await runCommand(depsFor(s, active.id), 'grognon', '')
-    expect(out.systemText).toContain('Commande inconnue')
-    expect(s.listMessages(active.id)).toHaveLength(0) // nothing appended by runCommand
+    const out = await runCommand(depsFor(s, active.id), 'banana', 'x')
+    expect(out.systemText).toContain('Commande inconnue : /banana')
   })
 })

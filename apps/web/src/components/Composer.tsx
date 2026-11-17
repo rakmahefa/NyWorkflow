@@ -3,13 +3,15 @@ import { useRef, useState } from 'react'
 /**
  * Composer façon DeepSeek Harness : carte flottante rayon 16 (bordure +
  * ombre légère), textarea qui grandit, rangée basse avec indice à gauche et
- * bouton d'envoi circulaire à droite. Entrée = envoyer.
+ * bouton d'envoi circulaire à droite. Entrée = envoyer. Désactivé pendant
+ * qu'un tour agentique est en vol (M11) — l'agent terminera d'abord.
  */
-export function Composer({ onSend }: { onSend(text: string): void }) {
+export function Composer({ onSend, disabled = false }: { onSend(text: string): void; disabled?: boolean }) {
   const [value, setValue] = useState('')
   const ref = useRef<HTMLTextAreaElement>(null)
 
   const submit = () => {
+    if (disabled) return
     const text = value.trim()
     if (!text) return
     onSend(text)
@@ -25,7 +27,8 @@ export function Composer({ onSend }: { onSend(text: string): void }) {
           rows={1}
           value={value}
           aria-label="Message"
-          placeholder="Écrivez un message — /help pour les commandes"
+          placeholder={disabled ? 'Tour agentique en cours…' : 'Écrivez un message — /help pour les commandes'}
+          disabled={disabled}
           onChange={(e) => {
             setValue(e.target.value)
             e.target.style.height = 'auto'
@@ -45,7 +48,7 @@ export function Composer({ onSend }: { onSend(text: string): void }) {
             data-test="send-btn"
             aria-label="Envoyer"
             onClick={submit}
-            disabled={!value.trim()}
+            disabled={disabled || !value.trim()}
           >
             <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <path

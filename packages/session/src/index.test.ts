@@ -6,6 +6,7 @@ import {
   appendEvent,
   deriveSession,
   forkJournal,
+  deleteJournal,
   isSessionId,
   journalPath,
   newSessionId,
@@ -131,6 +132,27 @@ describe('forkJournal', () => {
   })
 })
 
+describe('deleteJournal (M11 — suppression de session)', () => {
+  it('supprime le fichier journal, pas les autres', async () => {
+    const home = tmpHome()
+    const a = '2026-11-17-a1b2'
+    const b = '2026-11-17-b2c3'
+    await appendEvent(journalPath(home, a), createdEvent)
+    await appendEvent(journalPath(home, b), createdEvent)
+
+    await deleteJournal(home, a)
+
+    await expect(readEvents(journalPath(home, a))).rejects.toThrow(/ENOENT/i)
+    const rest = await readEvents(journalPath(home, b))
+    expect(rest).toHaveLength(1)
+  })
+
+  it('propage l’absence du journal (id inconnu → 404 côté HTTP)', async () => {
+    const home = tmpHome()
+    await expect(deleteJournal(home, '2026-11-17-404a')).rejects.toThrow(/ENOENT/i)
+  })
+})
+
 describe('deriveSession', () => {
   const toolCall: SessionEvent = { type: 'tool.call', at: T2, tool: 'read', args: {} }
   const stageEvent: SessionEvent = { type: 'stage.started', at: T2, stage: '01-recherche' }
@@ -190,10 +212,10 @@ describe('deriveSession', () => {
 
   it('workspace M4 : présent quand session.created le porte, absent sinon', () => {
     const run = deriveSession([
-      { type: 'session.created', at: T1, title: 'Rapport', workspace: 'exemple-rapport' },
+      { type: 'session.created', at: T1, title: 'Rapport', workspace: 'exemple-agentique' },
       userEvent,
     ])
-    expect(run.workspace).toBe('exemple-rapport')
+    expect(run.workspace).toBe('exemple-agentique')
 
     const chat = deriveSession([createdEvent, userEvent])
     expect(chat.workspace).toBeUndefined()

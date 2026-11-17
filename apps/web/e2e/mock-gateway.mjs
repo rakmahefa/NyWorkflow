@@ -1,24 +1,42 @@
 // Maquette gemini-web2api pour les tests e2e et la capture README :
 // OpenAI-compatible, SSE inclus, sans aucune dépendance.
+// M11 : la maquette parle AUSSI le namespace v1beta (l'app y va par défaut)
+// — /v1beta/models au format Google, /v1beta/chat/completions en OpenAI —
+// et scénarise des tool_calls standards quand la requête porte des tools.
 import { createServer } from 'node:http'
 
 // Réponse « réelle » quand on demande une présentation du projet.
 const FIXED_REPLY =
-  "NyWorkflow orchestre des workflows IA à partir de dossiers numérotés (méthode ICM). Chaque étape lit son CONTEXT.md, appelle le modèle via la passerelle, puis écrit son résultat dans output/."
+  "NyWorkflow charge l'ICM du workspace (arbre + CONTEXT.md) vers le modèle, et l'agent agit avec ses outils — read, write, ls, glob, mkdir, shell, websearch."
 
-// Scénario outils (M5) : le sujet porte le marqueur APPROVE2E → la maquette
-// demande un write (pause approbation) ; le tour suivant (résultat d'outil,
-// commence par {"ok") reçoit l'artefact final. Le JSON doit être nu : le
-// protocole du moteur exige un objet une-ligne exact.
-const E2E_WRITE_REQUEST = JSON.stringify({
-  tool: 'write',
-  args: { path: '01-recherche/output/notes-e2e.md', content: 'DES NOTES E2E OUTILS' },
-})
+// Scénarios agentiques (M11) : le DERNIER message utilisateur porte un
+// marqueur ; la maquette émet un tool_call standard (SSE delta.tool_calls +
+// finish_reason "tool_calls"). Au tour suivant (un rôle tool dans
+// l'historique), elle répond par le texte final.
+const TOOL_SCENARIOS = {
+  AGENTLIT: {
+    name: 'read',
+    arguments: { path: 'CONTEXT.md' },
+    final: 'LIVRABLE FINAL AGENT — la carte est lue.',
+  },
+  AGENTECRIT: {
+    name: 'write',
+    arguments: { path: 'outputs/agent-e2e.md', content: 'CONTENU AGENT E2E' },
+    final: 'ECRITURE FAITE — outputs/agent-e2e.md.',
+  },
+  AGENTDOSSIER: {
+    name: 'mkdir',
+    arguments: { path: 'research/e2e-dossier' },
+    final: 'DOSSIER CRÉÉ — research/e2e-dossier.',
+  },
+}
 
-function toolRequestFor(lastUser) {
-  const t = String(lastUser ?? '')
-  if (t.includes('APPROVE2E')) return E2E_WRITE_REQUEST
-  if (t.startsWith('{"ok"')) return 'FICHE FINALE E2E'
+function scenarioFor(messages) {
+  const lastUser = [...(messages ?? [])].reverse().find((m) => m?.role === 'user')?.content
+  const text = typeof lastUser === 'string' ? lastUser : ''
+  for (const [marker, sc] of Object.entries(TOOL_SCENARIOS)) {
+    if (text.includes(marker)) return { marker, ...sc }
+  }
   return null
 }
 
@@ -39,8 +57,9 @@ let chatCount = 0
 
 /**
  * Starts the mock gateway on 127.0.0.1:<port>.
- * GET / (diagnostic M8), GET /v1/models, GET /v1beta/models,
- * POST /v1/chat/completions (SSE).
+ * GET / (diagnostic M8+M9), GET /v1/models (OpenAI), GET /v1beta/models
+ * (Google — comme la passerelle réelle), POST /v1/chat/completions et
+ * POST /v1beta/chat/completions (SSE, tools compris).
  */
 export function startMockGateway(port) {
   const server = createServer((req, res) => {
@@ -99,12 +118,23 @@ export function startMockGateway(port) {
       return
     }
 
-    if (req.method === 'GET' && (url === '/v1/models' || url === '/v1beta/models')) {
+    // Modèles — les DEUX formes, comme la passerelle réelle (M10/M11).
+    if (req.method === 'GET' && url === '/v1/models') {
       json(res, 200, { data: [{ id: 'gemini-2.5-flash' }, { id: 'gemini-2.5-pro' }] })
       return
     }
+    if (req.method === 'GET' && url === '/v1beta/models') {
+      json(res, 200, {
+        models: [
+          { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent', 'streamGenerateContent'] },
+          { name: 'models/gemini-2.5-pro', supportedGenerationMethods: ['generateContent', 'streamGenerateContent'] },
+        ],
+      })
+      return
+    }
 
-    if (req.method === 'POST' && url === '/v1/chat/completions') {
+    // Chat — les DEUX namespaces servent le même moteur (M11).
+    if (req.method === 'POST' && (url === '/v1/chat/completions' || url === '/v1beta/chat/completions')) {
       chatCount++
       let body = ''
       req.on('data', (c) => {
@@ -118,24 +148,60 @@ export function startMockGateway(port) {
           parsed = {}
         }
         const model = typeof parsed.model === 'string' ? parsed.model : 'unknown'
-        const lastUser = [...(parsed.messages ?? [])]
-          .reverse()
-          .find((m) => m?.role === 'user')?.content
-        const toolRequest = toolRequestFor(lastUser)
-        const text = toolRequest ?? `Réponse (maquette) [${model}] : ${replyBody(lastUser)}`
+        const messages = parsed.messages ?? []
+        let lastUserIdx = -1
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i]?.role === 'user') {
+            lastUserIdx = i
+            break
+          }
+        }
+        const lastUser = messages[lastUserIdx]?.content
+        // Un résultat d'outil ne compte que s'il suit LE dernier message
+        // utilisateur (le tour en cours) — pas ceux des tours passés.
+        const hasToolResult = messages.slice(lastUserIdx + 1).some((m) => m?.role === 'tool')
+        const toolsActive = Array.isArray(parsed.tools) && parsed.tools.length > 0
+        const scenario = toolsActive ? scenarioFor(messages) : null
 
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+        const write = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`)
+        const chunk = (delta, finish = null) =>
+          write({ id: 'mock', object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason: finish }] })
+
+        // Un appel d'outil : delta.tool_calls standard + finish "tool_calls".
+        if (scenario !== null && !hasToolResult) {
+          chunk({})
+          chunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: 'call-e2e',
+                type: 'function',
+                function: { name: scenario.name, arguments: JSON.stringify(scenario.arguments) },
+              },
+            ],
+          })
+          chunk({}, 'tool_calls')
+          res.write('data: [DONE]\n\n')
+          res.end()
+          return
+        }
+
+        // Réponse finale (texte) — le scénario conclut, sinon la réponse type.
+        const text = scenario !== null ? scenario.final : `Réponse (maquette) [${model}] : ${replyBody(lastUser)}`
+        chunk({})
         const third = Math.ceil(text.length / 3)
-        const chunks = [text.slice(0, third), text.slice(third, 2 * third), text.slice(2 * third)]
+        const parts = [text.slice(0, third), text.slice(third, 2 * third), text.slice(2 * third)]
         let i = 0
         const tick = () => {
           if (res.destroyed) return
-          if (i >= chunks.length) {
+          if (i >= parts.length) {
+            chunk({}, 'stop')
             res.write('data: [DONE]\n\n')
             res.end()
             return
           }
-          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: chunks[i++] } }] })}\n\n`)
+          chunk({ content: parts[i++] })
           setTimeout(tick, 30)
         }
         tick()

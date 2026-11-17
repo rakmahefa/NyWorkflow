@@ -1,25 +1,29 @@
 /**
- * The four tools the agent may call inside a workspace (M5): read, write,
- * ls, glob. `shell` is deliberately absent — out of scope for v0.1.0
- * (MILESTONES.md keeps it optional on purpose).
+ * The tools the agent may call inside a workspace (M5: read, write, ls,
+ * glob — M11: mkdir, shell, websearch). The workspace stays the perimeter:
+ * every file path is checked against its root (scope.ts). `write` and
+ * `shell` are dangerous — the engine pauses for a human approval before
+ * they run. `mkdir` is deliberately free: the pilot wants the model to
+ * shape its own tree. `websearch` is read-only on the web and returns
+ * cleaned content (websearch.ts).
  *
  * Caps keep a runaway model honest: read 32 KiB, write 128 KiB, ls/glob
- * 500 entries, glob depth 8, at most one pending call at a time. Every
- * path is checked against the workspace root (scope.ts); `write` is the
- * only dangerous tool and requires a human approval before it runs —
- * the engine pauses the stage until the UI decides.
+ * 500 entries, glob depth 8, shell 30 s + 16 KiB per stream, websearch
+ * 8 results / 64 KiB of cleaned page, at most one pending call at a time.
  *
  * Outcomes are plain data (French summaries, journaled as-is); the tools
  * never throw for expected refusals, only for programmer errors.
  */
+import { spawn } from 'node:child_process'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { resolveInScope } from './scope.ts'
 import type { ScopeResolution } from './scope.ts'
+import { runWebsearch } from './websearch.ts'
 
-export type ToolName = 'read' | 'write' | 'ls' | 'glob'
-export const TOOL_NAMES: readonly ToolName[] = ['read', 'write', 'ls', 'glob']
+export type ToolName = 'read' | 'write' | 'ls' | 'glob' | 'mkdir' | 'shell' | 'websearch'
+export const TOOL_NAMES: readonly ToolName[] = ['read', 'write', 'ls', 'glob', 'mkdir', 'shell', 'websearch']
 
 /** A tool call as the model expresses it (validated here, journaled verbatim). */
 export interface ToolCall {
@@ -65,6 +69,12 @@ const WRITE_MAX = 131_072
 const LIST_MAX = 500
 const GLOB_DEPTH = 8
 const PATTERN_MAX = 256
+const SHELL_CMD_MAX = 4_000
+export const SHELL_TIMEOUT_MS = 30_000
+const SHELL_STREAM_MAX = 16_384
+
+/** The shell used by the `shell` tool — overridable, bash by default (Linux). */
+export const SHELL_BIN = process.env.NYW_SHELL && process.env.NYW_SHELL.trim() !== '' ? process.env.NYW_SHELL.trim() : 'bash'
 
 const refusal = (code: ToolRefusalCode, summary: string): ToolRefusal => ({ ok: false, code, summary })
 
@@ -77,12 +87,16 @@ export function displayPath(call: ToolCall): string {
   if (p !== undefined) return p
   const pattern = argString(call.args, 'pattern')
   if (pattern !== undefined) return pattern
+  const command = argString(call.args, 'command')
+  if (command !== undefined) return command.slice(0, 80)
+  const query = argString(call.args, 'query') ?? argString(call.args, 'url')
+  if (query !== undefined) return query
   return JSON.stringify(call.args)
 }
 
-/** The only dangerous tool (M5): writing needs a human approval. */
+/** The dangerous tools (M11): writing files and running commands need a human approval. */
 export function isDangerous(tool: string): boolean {
-  return tool === 'write'
+  return tool === 'write' || tool === 'shell'
 }
 
 function outOfScope(tool: ToolName, raw: string, scope: ScopeResolution): ToolRefusal {
@@ -105,10 +119,35 @@ export async function checkToolCall(root: string, call: ToolCall): Promise<ToolC
   }
 
   // Args validation per tool (glob's pattern is syntax-checked here too).
-  if (call.tool === 'read' || call.tool === 'write' || call.tool === 'ls') {
+  if (call.tool === 'read' || call.tool === 'write' || call.tool === 'ls' || call.tool === 'mkdir') {
     const path = argString(args, 'path') ?? (call.tool === 'ls' ? '.' : undefined)
     if (path === undefined || path.trim() === '') {
       return { ok: false, approval: false, refusal: refusal('invalid_args', `« ${call.tool} » attend un chemin (path) non vide`) }
+    }
+  }
+  if (call.tool === 'mkdir') {
+    const path = (argString(args, 'path') ?? '').trim()
+    if (path === '' || path === '.') {
+      return { ok: false, approval: false, refusal: refusal('invalid_args', '« mkdir » attend un chemin (path) non vide') }
+    }
+  }
+  if (call.tool === 'shell') {
+    const command = argString(args, 'command')
+    if (command === undefined || command.trim() === '') {
+      return { ok: false, approval: false, refusal: refusal('invalid_args', '« shell » attend une commande (command) non vide') }
+    }
+    if (command.length > SHELL_CMD_MAX) {
+      return { ok: false, approval: false, refusal: refusal('invalid_args', `commande trop longue pour « shell » (max ${SHELL_CMD_MAX} caractères)`) }
+    }
+  }
+  if (call.tool === 'websearch') {
+    const query = argString(args, 'query')
+    const url = argString(args, 'url')
+    if (query === undefined && url === undefined) {
+      return { ok: false, approval: false, refusal: refusal('invalid_args', '« websearch » attend query (recherche) ou url (page à lire)') }
+    }
+    if (query !== undefined && url !== undefined) {
+      return { ok: false, approval: false, refusal: refusal('invalid_args', '« websearch » : query OU url, pas les deux') }
     }
   }
   if (call.tool === 'write') {
@@ -137,8 +176,10 @@ export async function checkToolCall(root: string, call: ToolCall): Promise<ToolC
     }
   }
 
-  // Scope: read/write/ls carry a path; glob walks the root itself.
-  if (call.tool !== 'glob') {
+  // Scope: read/write/ls/mkdir carry a path; glob walks the root itself;
+  // shell runs with the root as cwd (approval is its leash); websearch
+  // touches no workspace path at all.
+  if (call.tool === 'read' || call.tool === 'write' || call.tool === 'ls' || call.tool === 'mkdir') {
     const raw = argString(args, 'path') ?? '.'
     const scope = await resolveInScope(root, raw)
     if (!scope.ok) return { ok: false, approval: false, refusal: outOfScope(call.tool, raw, scope) }
@@ -147,7 +188,7 @@ export async function checkToolCall(root: string, call: ToolCall): Promise<ToolC
   return { ok: true, approval: isDangerous(call.tool) }
 }
 
-/** Executes a checked, non-dangerous call (or an approved write). */
+/** Executes a checked, non-dangerous call (or an approved write/shell). */
 async function runTool(root: string, call: ToolCall): Promise<ToolOutcome> {
   switch (call.tool) {
     case 'read':
@@ -158,7 +199,81 @@ async function runTool(root: string, call: ToolCall): Promise<ToolOutcome> {
       return runLs(root, call.args)
     case 'glob':
       return runGlob(root, call.args)
+    case 'mkdir':
+      return runMkdir(root, call.args)
+    case 'shell':
+      return runShell(root, call.args)
+    case 'websearch':
+      return runWebsearch(call.args)
   }
+}
+
+/** mkdir (M11) — the model shapes its own tree; recursive, low risk. */
+async function runMkdir(root: string, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const raw = (argString(args, 'path') ?? '').trim()
+  const scope = await resolveInScope(root, raw)
+  if (!scope.ok) return outOfScope('mkdir', raw, scope)
+  try {
+    await mkdir(scope.target as string, { recursive: true })
+  } catch {
+    return refusal('io_error', `mkdir refusé — création impossible : ${scope.rel}`)
+  }
+  return {
+    ok: true,
+    summary: `mkdir « ${scope.rel} » — dossier créé`,
+    data: { path: scope.rel },
+  }
+}
+
+/**
+ * shell (M11) — runs a command with the workspace root as cwd. The leash
+ * is the human approval (isDangerous) plus hard caps: 30 s wall clock,
+ * 16 KiB per stream, command ≤ 4000 chars. A timeout kills the child; the
+ * outcome says so — the model learns to be shorter.
+ */
+function runShell(root: string, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const command = (argString(args, 'command') ?? '').trim()
+  if (command === '') return Promise.resolve(refusal('invalid_args', 'shell attend une commande (command) non vide'))
+  return new Promise<ToolOutcome>((resolve) => {
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(SHELL_BIN, ['-c', command], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch (err) {
+      resolve(refusal('io_error', `shell refusé — lancement impossible (${err instanceof Error ? err.message : String(err)})`))
+      return
+    }
+    let stdout = ''
+    let stderr = ''
+    let timedOut = false
+    const collect = (into: 'out' | 'err') => (chunk: Buffer): void => {
+      if (into === 'out') stdout = (stdout + chunk.toString('utf8')).slice(0, SHELL_STREAM_MAX)
+      else stderr = (stderr + chunk.toString('utf8')).slice(0, SHELL_STREAM_MAX)
+    }
+    child.stdout?.on('data', collect('out'))
+    child.stderr?.on('data', collect('err'))
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGKILL')
+    }, SHELL_TIMEOUT_MS)
+    const finish = (fn: () => ToolOutcome): void => {
+      clearTimeout(timer)
+      resolve(fn())
+    }
+    child.on('error', (err) => {
+      finish(() => refusal('io_error', `shell refusé — ${err instanceof Error ? err.message : String(err)}`))
+    })
+    child.on('close', (code) => {
+      const truncated = stdout.length >= SHELL_STREAM_MAX || stderr.length >= SHELL_STREAM_MAX
+      const exitCode = code === null ? null : code
+      finish(() => ({
+        ok: true,
+        summary:
+          `shell « ${command.slice(0, 80)}${command.length > 80 ? '…' : ''} » — code ${exitCode ?? 'signal'}` +
+          `${timedOut ? ' (délai 30 s dépassé, processus tué)' : ''}`,
+        data: { command, exitCode, timedOut, truncated, stdout, stderr },
+      }))
+    })
+  })
 }
 
 async function runRead(root: string, args: Record<string, unknown>): Promise<ToolOutcome> {
@@ -300,7 +415,7 @@ export async function executeToolCall(root: string, call: ToolCall, approved: bo
   const check = await checkToolCall(root, call)
   if (!check.ok) return check.refusal as ToolRefusal
   if (check.approval && !approved) {
-    return refusal('approval_required', `write « ${displayPath(call)} » en attente d'approbation`)
+    return refusal('approval_required', `${call.tool} « ${displayPath(call)} » en attente d'approbation`)
   }
   return runTool(root, call)
 }

@@ -50,6 +50,7 @@ export interface Session {
 // extensionless ESM imports do not resolve.
 export {
   appendEvent,
+  deleteJournal,
   forkJournal,
   isSessionId,
   journalPath,

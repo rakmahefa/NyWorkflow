@@ -1,14 +1,10 @@
-# packages/core — moteur ICM
+# packages/core — l'ICM
 
-Rôle : lire un workspace (carte racine + contrats `CONTEXT.md`), exécuter les étapes dans l'ordre des numéros, écrire les sorties. Le système de fichiers est l'orchestrateur — ce package se contente de lire, appeler le LLM (injecté, jamais importé), écrire.
+Rôle : ce que « charger l'ICM vers le modèle » veut dire. Marche l'arbre du workspace (bornée : profondeur 6, 500 entrées, dossiers cachés/poubelles ignorés), lit tous les `CONTEXT.md` (racine d'abord, 8 fichiers, 32 Kio chacun), assemble le prompt système de la session agentique (`buildIcmSystemPrompt` : méthode ICM, arbre, chartes, conventions) et pose le **scaffold du workspace agentique par défaut** (`CONTEXT.md` charter + `inbox/ notes/ research/ outputs/`, jamais d'écrasement).
 
-Entrées : un dossier workspace (voir `examples/workspaces/`), un client LLM conforme à `StageLlm`, le sujet de la requête.
-Sorties : fichiers `output/` par étape, événements `stage.started` / `stage.output` / `run.completed` vers le journal de session, états `RunState` (idle, running, checkpoint, done, error).
+Entrées : un dossier workspace quelconque (arbre libre — l'exemple vit dans `examples/workspaces/exemple-agentique/`).
+Sorties : `IcmWorkspace` (arbre rendu + chartes), prompt système assemblé, arbre scaffoldé sur disque.
 
-Ne fait pas : HTTP direct vers Gemini, UI, persistance autre que fichiers plats.
+Ne fait pas : HTTP, exécution d'outils, journalisation — zéro dépendance, pur Node.
 
-Tâches : M4 livré (2026-11-17) — `parse.ts` (carte + contrats, format v1 figé), `prompt.ts` (assemblage pur du contexte), `engine.ts` (`runStage` une étape, `createRun` checkpoints + reprise manuelle, `runStateFromEvents` reprise après redémarrage depuis le journal). Deux champs additifs ont rejoint le contrat gelé sur `InputRef` : `origin` et `why` ; le format des contrats CONTEXT.md est figé en v1 jusqu'à v0.2.0 (point de décision fin M4, PLAN.md).
-
-M5 livré (2026-11-17) — `protocol.ts` (protocole JSON une-ligne strict : toute réponse non-outil est l'artefact), la boucle d'agent dans `runStage` (`tools: true` : read/ls/glob auto via `@nyworkflow/tools`, 8 appels max par tentative), la pause d'approbation (`ToolApprovalPause` → état `RunState` `approval`), `resumeStage` + `createRun.resolve(decision)` — la conversation est rejouée depuis le journal, donc la reprise après redémarrage est identique. `pendingToolCall` / `stageModelFromEvents` servent la dérivation d'état et l'endpoint d'approbation.
-
-Le chaînage est déclaratif : la sortie de l'étape N est l'entrée de l'étape N+1 parce que le contrat la déclare ; les entrées sont relues sur disque à chaque exécution — un humain peut éditer un fichier entre deux étapes, l'étape suivante lit la version éditée.
+Tâches : pivot M11 (2026-11-17) — le moteur de workflows de phase 1 (`engine.ts`, `parse.ts`, `prompt.ts`, `protocol.ts` : étapes numérotées, contrats figés, runs/checkpoints, protocole JSON une-ligne) est **retiré** : les sessions sont la seule surface et le modèle s'orchestre avec ses outils guidé par l'ICM. Restent `icm.ts` (walkTree, renderTree, loadIcm, buildIcmSystemPrompt) et `scaffold.ts` (scaffoldAgenticWorkspace, scaffoldContext). M4–M6 : archivés dans MILESTONES-old/ MILESTONES.md.

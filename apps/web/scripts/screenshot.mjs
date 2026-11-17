@@ -1,9 +1,12 @@
 // Capture README : build déjà fait (dist), maquette passerelle sur 9801,
 // serveur preview sur 4173, scène jouée dans un vrai Chromium, PNG écrit
 // dans docs/assets/screenshot.png.
-// Scène M6 : la vue workflow — un run créé depuis l'UI, la première étape
-// exécutée (checkpoint), la progression visible et la sortie prévisualisée.
-import { mkdtemp, mkdir } from 'node:fs/promises'
+// Scène M11 : une session ICM agentique — dialogue de création (titre +
+// workspace), un tour avec read auto-exécuté (ligne d'outil dans le flux),
+// puis un write qui met la carte d'approbation en scène : la capture
+// montre le cœur du produit — l'ICM vers le modèle, les tools standards,
+// l'humain aux commandes.
+import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,9 +20,8 @@ const outDir = path.resolve(here, '../../../docs/assets')
 const outFile = path.join(outDir, 'screenshot.png')
 
 process.env.W2A_URL ??= 'http://127.0.0.1:9801'
-// Journal vierge pour la scène : les journaux des runs précédents survivent
-// sur le disque (leçon M3) — ici, un home jetable garantit une liste de runs
-// propre et un sujet lisible dans la capture, sans marqueur technique.
+// Journal vierge pour la scène : un home jetable garantit une session
+// unique et lisible dans la capture, sans marqueur technique.
 const sceneHome = await mkdtemp(path.join(tmpdir(), 'nyw-capture-'))
 process.env.NYW_HOME = sceneHome
 
@@ -37,31 +39,31 @@ try {
   // La passerelle (maquette) doit être détectée — elle pilote l'exécution.
   await page.waitForSelector('[data-test="gateway-status"][data-state="up"]')
 
-  // Onglet Workflows, workspace d'exemple, sujet du run. Home jetable : le
-  // run créé est le seul de la liste, sélectionné d'office.
-  await page.locator('[data-test="tab-workflows"]').click()
-  await page.locator('[data-test="workspace-item"]', { hasText: 'exemple-rapport' }).click()
-  await page.locator('[data-test="subject-input"]').fill('Les loutres de Madagascar — rapport court')
-  await page.locator('[data-test="create-run-btn"]').click()
+  // Nouvelle session ICM via le dialogue : titre + workspace d'exemple.
+  const box = page.getByLabel('Message')
+  await box.fill('/new Les loutres de Madagascar — rapport documenté')
+  await page.keyboard.press('Enter')
+  await page.locator('[data-test="new-session-dialog"]').waitFor({ state: 'visible' })
+  await page.locator('[data-test="session-title-input"]').fill('Les loutres de Madagascar — rapport')
+  await page.locator('[data-test="create-session-btn"]').click()
+  await page.locator('[data-test="ws-banner"]').waitFor({ state: 'visible' })
 
-  // Le run créé doit être là ET sélectionné avant d'avancer (leçon e2e :
-  // créer d'abord, assumer les statuts ensuite).
-  await page.locator('[data-test="run-row"]').first().waitFor({ state: 'visible' })
-  await page.waitForFunction(() => {
-    const first = document.querySelector('[data-test="stage-card"]')
-    return first?.getAttribute('data-status') === 'pending'
-  })
+  // Premier tour : la lecture de la carte (read auto-exécuté) + réponse.
+  await box.fill('AGENTLIT commence par lire la carte du workspace')
+  await page.keyboard.press('Enter')
+  await page
+    .locator('[data-test="tool-row"]', { hasText: 'read' })
+    .first()
+    .waitFor({ state: 'visible' })
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('.msg.assistant')].some((m) => m.textContent?.includes('LIVRABLE FINAL')),
+  )
 
-  // Étape 1 exécutée : checkpoint, carte Fait, sortie prévisualisée.
-  await page.locator('[data-test="advance-btn"]').click()
-  await page.waitForFunction(() => {
-    const first = document.querySelector('[data-test="stage-card"]')
-    return first?.getAttribute('data-status') === 'done'
-  })
-  const faits = page.locator('[data-test="output-file"]', { hasText: '01-recherche/output/faits.md' })
-  await faits.waitFor({ state: 'visible' })
-  await faits.locator('[data-test="output-toggle"]').click()
-  await page.waitForSelector('[data-test="output-preview"]')
+  // Deuxième tour : un write proposé — la carte d'approbation reste à
+  // l'écran, l'humain aux commandes : c'est la capture.
+  await box.fill('AGENTECRIT écris maintenant le brouillon du rapport')
+  await page.keyboard.press('Enter')
+  await page.locator('[data-test="approval-card"]').waitFor({ state: 'visible' })
 
   await mkdir(outDir, { recursive: true })
   await page.screenshot({ path: outFile })
@@ -70,4 +72,5 @@ try {
   await browser.close()
   await server.close()
   await mock.close()
+  await rm(sceneHome, { recursive: true, force: true })
 }

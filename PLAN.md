@@ -33,11 +33,14 @@ La passerelle qui parle à Gemini vit **dans ce repo** : `packages/webapi` (`@ny
 M7 webapi cœur (client Gemini + serveur OpenAI-compatible) ──► M8 durcissement ✅
         │                                                   (intégration au démarrage, paramètres,
         ▼                                                    multi-comptes, proxy, journal, USERGUIDE)
-   M9 stabilité & auth multi-sessions ✅ ──► M10 API élargie ✅ ──► M11 v0.2.0
-        (/u/N par compte, expiration          (/v1beta Google-style,       (dégel du contrat, shell optionnel,
-         vue d'avance, stats par compte)       tools OpenAI, splitter        multi-workspaces, tag et release)
-                                             jamais perdant)
+   M9 stabilité & auth multi-sessions ✅ ──► M10 API élargie ✅ ──► M11 sessions ICM agentiques ✅
+        (/u/N par compte, expiration          (/v1beta Google-style,        (PILOTÉ : workflows retirés, workspace
+         vue d'avance, stats par compte)       tools OpenAI, splitter        à arbre libre par session, 7 outils
+                                             jamais perdant)                avec tool_calls standards, v1beta
+                                                                            de base, suppression, v0.2.0)
 ```
+
+M12 (confort du pilotage) et M13 (v0.2.x, usages réels) sont écrits en fin de MILESTONES.md — réévalués avant chaque démarrage.
 
 ## Points de décision
 
@@ -45,7 +48,8 @@ M7 webapi cœur (client Gemini + serveur OpenAI-compatible) ──► M8 durciss
 - **Fin M8** : dégeler `/v1beta` et les outils dans l'API, ou garder le socle minimal ? ✔ Décision : **reporté** (M10) — aucun besoin réel exprimé ; M9 privilégie la stabilité des comptes (expiration visible, `/u/N` par compte), la douleur la plus fréquente à l'usage.
 - **Fin M9** : le socle multi-comptes est-il assez stable pour servir de base à v0.2.0 ? ✔ Décision : **oui** (sessions par compte, expiration vue d'avance, stats — prouvés bout en bout contre la maquette, 322 tests) ; l'API élargie reste conditionnelle (M10) et v0.2.0 garde son périmètre d'origine (M11). Leçon actée : tout futur ajout sur `GET /` et `/v1/*` reste **additif** — les champs M8/M9 ne seront jamais renommés.
 - **Fin M10** : le besoin d'API élargie a-t-il été exprimé, et la livraison a-t-elle déplacé les frontières ? ✔ Décision : le pilote a lancé M10 — livré (deux surfaces : `/v1beta` Google-style + `tools` OpenAI, 386 tests, vérifié bout en bout sur CLI réel). Les frontières n'ont pas bougé : Gemini reste confiné dans `packages/webapi`, les outils du client passent par le prompt (l'interface web ne sait pas faire autrement) et le décodage en flux ne perd jamais de texte. L'additivité est testée (chemins sans outils inchangés octet pour octet).
-- Le format de contrat ICM v1 reste figé jusqu'à v0.2.0 (décision M4, inchangée).
+- **Fin M11** : le pivot piloté (sessions ICM agentiques) tient-il ses promesses à l'usage, et le retrait du moteur de workflows a-t-il laissé des orphelins ? ✔ Décision : livré (19 e2e, 375 tests, capture rejouée). Le format de contrat étapes/`## Entrées` est **obsolète** — le workspace est un arbre libre dont les `CONTEXT.md` sont de la prose lue par le modèle (plus de format figé) ; les journaux anciens restent lisibles (dérivation tolérante). La boucle agentique vit dans le navigateur : le serveur n'a plus de client LLM — si un jour l'exécution doit devenir serveur (agents longs), ce sera un M12+ explicite, jamais une improvisation.
+- Le format de contrat ICM v1 (décision M4) est **caduc** depuis M11 : remplacé par l'ICM libre (arbre + CONTEXT.md prose) — pas de rétromigration prévue, les journaux anciens restent dérivables.
 
 ## Risques
 

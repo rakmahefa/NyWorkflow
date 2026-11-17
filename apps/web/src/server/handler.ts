@@ -2,13 +2,18 @@
  * /sessions HTTP API — thin adapter over @nyworkflow/session.
  *
  * Mounted by the Vite plugin (dev and preview), same origin as the UI:
- *   GET  /sessions              → { sessions: SessionDto[] }  (oldest first)
- *   POST /sessions              → create (body: { title? })
- *   POST /sessions/:id/events   → append a chat event (user|assistant message)
- *   POST /sessions/:id/fork     → fork the journal
+ *   GET    /sessions              → { sessions: SessionDto[] }  (oldest first)
+ *   POST   /sessions              → create (body: { title?, workspace? })
+ *   DELETE /sessions/:id          → delete the journal (M11)
+ *   POST   /sessions/:id/events   → append a chat event (user|assistant message)
+ *   POST   /sessions/:id/fork     → fork the journal
  *
- * Chat events only — tool and stage events arrive through /workspaces
- * (M4), which journals them as the engine runs.
+ * Chat events here — tool.call / tool.result events land in the SAME
+ * journal through /workspaces (M11): the agent's tools are journaled by
+ * the server that executes them, so a session's journal stays the single
+ * source of truth for chat AND tool activity. The DTO therefore carries
+ * the raw events, in order — the browser derives messages, tool rows and
+ * model history from them (the journal IS the protocol).
  */
 import { existsSync } from 'node:fs'
 import { access, readdir } from 'node:fs/promises'
@@ -16,6 +21,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import {
   appendEvent,
+  deleteJournal,
   deriveSession,
   forkJournal,
   isSessionId,
@@ -25,15 +31,25 @@ import {
 } from '@nyworkflow/session'
 import type { DerivedSession, SessionEvent } from '@nyworkflow/session'
 
-/** What the UI consumes (numbers, ready for the store). */
+/** Workspace folder names, same rule as the /workspaces API. */
+const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+/** What the UI consumes: the derived header + the raw, ordered events. */
 export interface SessionDto {
   id: string
   title: string
   createdAt: number
   forkedFrom?: string
-  /** ICM workspace name, when this session runs a workflow. (M4) */
+  /** ICM workspace the session is bound to (M11: every session has one). */
   workspace?: string
+  /** Raw journal events, in order — messages, tool calls, everything. */
+  events: SessionEvent[]
   messages: { role: 'user' | 'assistant'; text: string; at: number }[]
+}
+
+export interface SessionsHandlerOptions {
+  /** Workspaces folder — validates the workspace at creation time. */
+  workspacesDir?: string
 }
 
 const BODY_LIMIT = 1_000_000
@@ -92,8 +108,12 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   return parsed as Record<string, unknown>
 }
 
-export function createSessionsHandler(home: string): (req: IncomingMessage, res: ServerResponse) => void {
+export function createSessionsHandler(
+  home: string,
+  options: SessionsHandlerOptions = {},
+): (req: IncomingMessage, res: ServerResponse) => void {
   const sessionsDir = join(home, 'sessions')
+  const workspacesDir = options.workspacesDir ?? ''
 
   /** A free journal id (retries on the unlikely collision). */
   function freshId(): string {
@@ -113,13 +133,14 @@ export function createSessionsHandler(home: string): (req: IncomingMessage, res:
     }
   }
 
-  function toDto(id: string, d: DerivedSession): SessionDto {
+  function toDto(id: string, d: DerivedSession, events: SessionEvent[]): SessionDto {
     return {
       id,
       title: d.title,
       createdAt: toMs(d.createdAt),
       forkedFrom: d.forkedFrom,
       workspace: d.workspace,
+      events,
       messages: d.messages.map((m) => ({ role: m.role, text: m.text, at: toMs(m.at) })),
     }
   }
@@ -131,7 +152,8 @@ export function createSessionsHandler(home: string): (req: IncomingMessage, res:
       const id = name.slice(0, -6)
       if (!isSessionId(id)) continue
       try {
-        out.push(toDto(id, deriveSession(await readEvents(journalPath(home, id)))))
+        const events = await readEvents(journalPath(home, id))
+        out.push(toDto(id, deriveSession(events), events))
       } catch (err) {
         console.warn(`[sessions] journal illisible, ignoré : ${id}`, err instanceof Error ? err.message : err)
       }
@@ -140,15 +162,28 @@ export function createSessionsHandler(home: string): (req: IncomingMessage, res:
     return out
   }
 
+  /** Validates a workspace name against the registry (M11). */
+  async function checkWorkspace(name: unknown): Promise<string | undefined> {
+    if (name === undefined || name === null) return undefined
+    if (typeof name !== 'string' || !NAME_RE.test(name) || name === '.' || name === '..') {
+      throw badRequest('nom de workspace invalide')
+    }
+    if (workspacesDir !== '' && !existsSync(join(workspacesDir, name))) {
+      throw badRequest(`workspace inconnu : ${name}`)
+    }
+    return name
+  }
+
   async function create(req: IncomingMessage): Promise<SessionDto> {
     const body = await readJson(req)
     const given = typeof body.title === 'string' ? body.title.trim().slice(0, 60) : ''
+    const workspace = await checkWorkspace(body.workspace)
     const fallback = `Session ${(await journalNames()).length + 1}`
     const title = given || fallback
     const id = freshId()
     const at = nowIso()
-    await appendEvent(journalPath(home, id), { type: 'session.created', at, title })
-    return { id, title, createdAt: toMs(at), messages: [] }
+    await appendEvent(journalPath(home, id), { type: 'session.created', at, title, ...(workspace !== undefined ? { workspace } : {}) })
+    return { id, title, createdAt: toMs(at), events: [], messages: [] , ...(workspace !== undefined ? { workspace } : {}) }
   }
 
   async function appendChatEvent(req: IncomingMessage, id: string): Promise<void> {
@@ -177,8 +212,19 @@ export function createSessionsHandler(home: string): (req: IncomingMessage, res:
     }
     const forkId = freshId()
     await forkJournal(home, id, forkId)
-    const d = deriveSession(await readEvents(journalPath(home, forkId)))
-    return { id: forkId, title: d.title, createdAt: toMs(d.createdAt), forkedFrom: id, messages: [] }
+    const events = await readEvents(journalPath(home, forkId))
+    const d = deriveSession(events)
+    return { id: forkId, title: d.title, createdAt: toMs(d.createdAt), forkedFrom: id, workspace: d.workspace, events, messages: [] }
+  }
+
+  /** M11 — deletes a journal (its messages and tool history with it). */
+  async function remove(id: string): Promise<void> {
+    try {
+      await access(journalPath(home, id))
+    } catch {
+      throw notFound('session inconnue')
+    }
+    await deleteJournal(home, id)
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -192,6 +238,17 @@ export function createSessionsHandler(home: string): (req: IncomingMessage, res:
     }
 
     const parts = url.replace(/^\//, '').split('/')
+    // NB: mounted under /sessions — the prefix is already stripped here, so
+    // "/sessions/:id" arrives as "/:id" (1 segment), "/sessions/:id/events"
+    // as "/:id/events" (2 segments).
+    if (parts.length === 1 && isSessionId(parts[0] ?? '')) {
+      const id = parts[0] as string
+      if (method === 'DELETE') {
+        await remove(id)
+        return send(res, 200, { ok: true })
+      }
+      throw notFound('route inconnue')
+    }
     if (parts.length === 2 && isSessionId(parts[0] ?? '')) {
       const id = parts[0] as string
       if (parts[1] === 'events' && method === 'POST') {
@@ -200,6 +257,14 @@ export function createSessionsHandler(home: string): (req: IncomingMessage, res:
       }
       if (parts[1] === 'fork' && method === 'POST') {
         return send(res, 201, await fork(id))
+      }
+      if (parts[1] === 'delete' && method === 'POST') {
+        await remove(id)
+        return send(res, 200, { ok: true })
+      }
+      if (method === 'DELETE') {
+        await remove(id)
+        return send(res, 200, { ok: true })
       }
     }
     throw notFound('route inconnue')

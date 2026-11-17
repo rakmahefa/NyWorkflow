@@ -1,9 +1,11 @@
 /**
- * Browser client for the /sessions API (same origin — the dev and preview
- * servers both mount it). Failures bubble up: the app decides whether to
- * fall back to in-memory sessions (never a silent loss).
+ * Browser client for the same-origin APIs: /sessions (journals) and
+ * /workspaces (agentic ICM surface, M11). Failures bubble up: the app
+ * decides whether to fall back to in-memory sessions (never a silent
+ * loss).
  */
-import type { SessionDto } from '../server/handler'
+import type { SessionEvent } from '@nyworkflow/session'
+import type { ToolOutcome } from '@nyworkflow/tools'
 
 const jsonHeaders = { 'content-type': 'application/json', accept: 'application/json' }
 
@@ -21,18 +23,36 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
+// --- /sessions : journaux -----------------------------------------------------
+
+/** A session: derived header + raw journal events, in order. */
+export interface SessionDto {
+  id: string
+  title: string
+  createdAt: number
+  forkedFrom?: string
+  workspace?: string
+  events: SessionEvent[]
+  messages: { role: 'user' | 'assistant'; text: string; at: number }[]
+}
+
 /** All sessions derived from their journals, oldest first. */
 export function listSessions(): Promise<SessionDto[]> {
   return jsonFetch<{ sessions: SessionDto[] }>('/sessions').then((b) => b.sessions)
 }
 
-/** Creates a session journal (title optional — server numbers the fallback). */
-export function createSession(title?: string): Promise<SessionDto> {
+/** Creates a session journal (title optional, workspace required for agents). */
+export function createSession(title?: string, workspace?: string): Promise<SessionDto> {
   return jsonFetch<SessionDto>('/sessions', {
     method: 'POST',
     headers: jsonHeaders,
-    body: JSON.stringify({ title }),
+    body: JSON.stringify({ title, workspace }),
   })
+}
+
+/** M11 — deletes a session journal (its chat and tool history with it). */
+export function deleteSession(id: string): Promise<void> {
+  return jsonFetch<{ ok: boolean }>(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(() => undefined)
 }
 
 /** Appends one chat event to a journal. */
@@ -52,100 +72,60 @@ export function forkSession(id: string): Promise<SessionDto> {
   })
 }
 
-// --- Workspaces (M5): the run side of a session that executes a workflow. ---
+// --- /workspaces : surface ICM agentique (M11) ---------------------------------
 
-/** What /workspaces returns for one run (state + tool activity + outputs). */
-export interface RunStateDto {
-  id: string
-  title: string
-  createdAt: number
-  state:
-    | { status: 'idle' }
-    | { status: 'running'; stage: string }
-    | { status: 'checkpoint'; stage: string }
-    | { status: 'done'; stages: string[] }
-    | { status: 'error'; stage: string; message: string }
-    | { status: 'approval'; stage: string; tool: string; args: unknown }
-  tools: { tool: string; args: unknown; at: number; ok?: boolean; summary?: string }[]
-  /** Files written by each stage, in first-write order. (M6) */
-  outputs: { stage: string; files: string[] }[]
-}
-
-/** One workspace as listed — parsed, or the reason it is not. (M6) */
+/** One workspace as listed. */
 export interface WorkspaceSummaryDto {
   name: string
-  stages?: { stage: string; title: string }[]
-  error?: string
+  summary?: string
 }
 
-/** A stage contract, as the detail view consumes it. (M6) */
-export interface StageDto {
-  stage: string
-  title: string
-  inputs: { source: string; scope: string; origin?: string; why?: string }[]
-  process: string[]
-  outputs: string[]
-}
-
-/** The detail view: the map, the contracts, this workspace's runs. (M6) */
-export interface WorkspaceDetailDto {
+/** The ICM of a workspace, system prompt pre-assembled server-side. */
+export interface IcmDto {
   name: string
-  map: string
-  stages: StageDto[]
-  runs: RunStateDto[]
+  tree: string
+  contexts: { path: string; content: string }[]
+  system: string
 }
 
-/** All workspaces, parsed or with their parse error. (M6) */
+/** What POST /tool answers. */
+export type ToolRunDto =
+  | { status: 'executed'; outcome: ToolOutcome }
+  | { status: 'pending'; call: { tool: string; args: unknown } }
+
+/** All workspaces. */
 export function listWorkspaces(): Promise<WorkspaceSummaryDto[]> {
   return jsonFetch<{ workspaces: WorkspaceSummaryDto[] }>('/workspaces').then((b) => b.workspaces)
 }
 
-/** The detail view of one workspace. (M6) */
-export function getWorkspace(name: string): Promise<WorkspaceDetailDto> {
-  return jsonFetch<WorkspaceDetailDto>(`/workspaces/${encodeURIComponent(name)}`)
-}
-
-/** Creates a run: the subject becomes a journaled session. (M6) */
-export function createRun(name: string, subject: string): Promise<RunStateDto> {
-  return jsonFetch<RunStateDto>(`/workspaces/${encodeURIComponent(name)}/runs`, {
+/** Scaffolds a fresh agentic workspace (charter + inbox/notes/research/outputs). */
+export function createWorkspace(name: string): Promise<{ name: string; tree: string }> {
+  return jsonFetch<{ name: string; tree: string }>('/workspaces', {
     method: 'POST',
     headers: jsonHeaders,
-    body: JSON.stringify({ subject }),
+    body: JSON.stringify({ name }),
   })
 }
 
-/** Executes the next stage server-side, then pauses at the checkpoint. (M6) */
-export function advanceRun(
-  name: string,
-  id: string,
-  body: { model: string; tools?: boolean },
-): Promise<{ state: RunStateDto['state']; outputs: string[] }> {
-  return jsonFetch(`/workspaces/${encodeURIComponent(name)}/runs/${encodeURIComponent(id)}/advance`, {
+/** The ICM toward the model: tree, CONTEXT.md files, assembled system prompt. */
+export function getIcm(name: string): Promise<IcmDto> {
+  return jsonFetch<IcmDto>(`/workspaces/${encodeURIComponent(name)}/icm`)
+}
+
+/** Runs one agent tool call server-side (journaled); dangerous ones pause. */
+export function runTool(name: string, sessionId: string, tool: string, args: unknown): Promise<ToolRunDto> {
+  return jsonFetch<ToolRunDto>(`/workspaces/${encodeURIComponent(name)}/tool`, {
     method: 'POST',
     headers: jsonHeaders,
-    body: JSON.stringify(body),
+    body: JSON.stringify({ sessionId, tool, args }),
   })
 }
 
-/** Read-only preview of a workspace file (scope-guarded server-side). (M6) */
-export function readWorkspaceFile(name: string, path: string): Promise<{ path: string; content: string; bytes: number }> {
-  return jsonFetch(`/workspaces/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`)
-}
-
-/** Fetches a run's state and tool activity (for the active run session). */
-export function getRun(workspace: string, id: string): Promise<RunStateDto> {
-  return jsonFetch<RunStateDto>(`/workspaces/${encodeURIComponent(workspace)}/runs/${encodeURIComponent(id)}`)
-}
-
-/** Resolves a paused tool call — approve executes it, refuse journals the refusal. */
-export function resolveApproval(
-  workspace: string,
-  id: string,
-  decision: 'approve' | 'refuse',
-): Promise<{ state: RunStateDto['state']; outputs: string[] }> {
-  return jsonFetch(`/workspaces/${encodeURIComponent(workspace)}/runs/${encodeURIComponent(id)}/approval`, {
+/** Resolves a paused (dangerous) tool call — approve executes it, refuse journals the refusal. */
+export function decideTool(name: string, sessionId: string, decision: 'approve' | 'refuse'): Promise<ToolRunDto> {
+  return jsonFetch<ToolRunDto>(`/workspaces/${encodeURIComponent(name)}/tool/decision`, {
     method: 'POST',
     headers: jsonHeaders,
-    body: JSON.stringify({ decision }),
+    body: JSON.stringify({ sessionId, decision }),
   })
 }

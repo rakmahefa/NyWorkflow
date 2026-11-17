@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { newSessionViaDialog } from './helpers.mjs'
 
 // Menu Paramètres (M8) : modale en trois sections — Apparence (thème
 // persisté), Passerelle (diagnostic GET /api/), À propos. La maquette
@@ -58,14 +59,12 @@ test('paramètres : journal amont peuplé après un tour réel', async ({ page }
   // qui peut être celle d'un autre test (leçon M3).
   const marker = `Journal ${Date.now()}`
   const box = page.getByLabel('Message')
-  await box.fill(`/new ${marker}`)
-  await box.press('Enter')
-  await expect(page.locator('[data-test="session-item"]').filter({ hasText: marker })).toBeVisible()
+  await newSessionViaDialog(page, marker)
 
   // Un tour réel via la maquette (streaming).
   await box.fill('Présente NyWorkflow')
   await box.press('Enter')
-  await expect(page.locator('.msg.assistant').last()).toContainText('NyWorkflow orchestre', { timeout: 10_000 })
+  await expect(page.locator('.msg.assistant').last()).toContainText("NyWorkflow charge l'ICM", { timeout: 10_000 })
 
   // Le journal affiche le tour réussi (et l'échec ancien typé de la maquette).
   await page.getByRole('button', { name: 'Paramètres' }).click()

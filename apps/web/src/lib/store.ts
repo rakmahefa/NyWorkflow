@@ -1,11 +1,15 @@
 import type { ChatMsg, Role, SessionInfo } from './types'
 
 /**
- * In-memory session store — the UI's single state (M3).
- * Hydrated from the /sessions journal at boot (server mode), or grown
- * locally (memory fallback when the API is unreachable).
- * Snapshot-based: every mutation rebuilds an immutable snapshot, so
- * React's useSyncExternalStore re-renders exactly once per change.
+ * In-memory session store — the UI's single state (M3, agentic M11).
+ * Hydrated from the /sessions journals at boot (server mode), or grown
+ * locally (memory fallback when the API is unreachable). Snapshot-based:
+ * every mutation rebuilds an immutable snapshot, so React's
+ * useSyncExternalStore re-renders exactly once per change.
+ *
+ * Rows are chat messages AND tool rows (role 'tool'): the agent's calls
+ * live in the same stream as the conversation — journaled server-side as
+ * tool.call / tool.result, replayed here in order.
  */
 export interface StoreSnapshot {
   sessions: readonly SessionInfo[]
@@ -40,10 +44,10 @@ export class SessionStore {
     return this.snapshot.sessions.find((s) => s.id === id)
   }
 
-  createSession(title?: string): SessionInfo {
+  createSession(title?: string, workspace?: string): SessionInfo {
     const fallback = `Session ${this.sessions.length + 1}`
     const clean = title?.trim().slice(0, 60)
-    const session: SessionInfo = { id: uid(), title: clean || fallback, createdAt: Date.now() }
+    const session: SessionInfo = { id: uid(), title: clean || fallback, createdAt: Date.now(), ...(workspace !== undefined ? { workspace } : {}) }
     this.sessions.push(session)
     this.commit()
     return session
@@ -54,6 +58,16 @@ export class SessionStore {
     this.sessions.push({ ...session })
     this.commit()
     return session
+  }
+
+  /** M11 — removes a session and its rows (the journal dies server-side). */
+  removeSession(id: string): boolean {
+    const before = this.sessions.length
+    this.sessions = this.sessions.filter((s) => s.id !== id)
+    this.messages = this.messages.filter((m) => m.sessionId !== id)
+    const hit = before !== this.sessions.length
+    if (hit) this.commit()
+    return hit
   }
 
   /** Replaces the whole state — boot hydration from the journals. */
@@ -68,6 +82,26 @@ export class SessionStore {
     this.messages.push(msg)
     this.commit()
     return msg
+  }
+
+  /** M11 — one agent tool call, journaled server-side; ok undefined until resolved. */
+  appendToolCall(sessionId: string, tool: string, args: unknown): ChatMsg {
+    const msg: ChatMsg = { id: uid(), sessionId, role: 'tool', text: '', at: Date.now(), tool, args }
+    this.messages.push(msg)
+    this.commit()
+    return msg
+  }
+
+  /** M11 — settles a tool row with its outcome (execution or refusal). */
+  resolveToolCall(rowId: string, outcome: { ok: boolean; summary: string; data?: unknown }): boolean {
+    let hit = false
+    this.messages = this.messages.map((m) => {
+      if (m.id !== rowId) return m
+      hit = true
+      return { ...m, ok: outcome.ok, summary: outcome.summary, ...(outcome.ok && outcome.data !== undefined ? { data: outcome.data } : {}) }
+    })
+    if (hit) this.commit()
+    return hit
   }
 
   /** Grows a message's text (used while streaming). No-op if the id is gone. */
@@ -100,17 +134,15 @@ export class SessionStore {
     return removed
   }
 
-  /** Copies a session's settled chat (user/assistant) into another — fork. */
+  /** Copies a session's settled rows (chat + tool history) into another — fork. */
   copyMessages(fromId: string, toId: string): number {
     const source = this.messages.filter(
-      (m) =>
-        m.sessionId === fromId &&
-        (m.role === 'user' || m.role === 'assistant') &&
-        !m.streaming &&
-        m.text.trim() !== '',
+      (m) => m.sessionId === fromId && !m.streaming && ((m.role === 'user' || m.role === 'assistant') ? m.text.trim() !== '' : m.ok !== undefined),
     )
     if (source.length === 0) return 0
-    this.messages.push(...source.map((m) => ({ id: uid(), sessionId: toId, role: m.role, text: m.text, at: m.at })))
+    this.messages.push(
+      ...source.map((m) => ({ ...m, id: uid(), sessionId: toId })),
+    )
     this.commit()
     return source.length
   }

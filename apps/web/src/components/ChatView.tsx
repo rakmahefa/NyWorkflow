@@ -1,6 +1,35 @@
 import type { ChatMsg } from '../lib/types'
 
-/** Message list of the active session. The caret marks an ongoing stream. */
+/** Compact display of a tool call's target. */
+function targetOf(args: unknown): string {
+  if (args !== null && typeof args === 'object' && !Array.isArray(args)) {
+    const a = args as Record<string, unknown>
+    for (const key of ['path', 'pattern', 'command', 'query', 'url']) {
+      const v = a[key]
+      if (typeof v === 'string' && v !== '') return v
+    }
+  }
+  return JSON.stringify(args)
+}
+
+/** One tool row of the agent's activity (M11). */
+function ToolRow({ m }: { m: ChatMsg }) {
+  const state = m.ok === undefined ? 'pending' : m.ok ? 'ok' : 'err'
+  const label =
+    m.ok === undefined
+      ? `${m.tool} « ${targetOf(m.args)} » — en attente d'approbation`
+      : (m.summary ?? `${m.tool} — fait`)
+  return (
+    <div className="msg tool" data-test="tool-row" data-state={state}>
+      <span aria-hidden="true">{state === 'pending' ? '⏳' : state === 'ok' ? '✓' : '✗'}</span> {label}
+    </div>
+  )
+}
+
+/**
+ * The session stream (M11): chat messages and the agent's tool activity,
+ * interleaved in journal order. The caret marks an ongoing stream.
+ */
 export function ChatView({ messages }: { messages: readonly ChatMsg[] }) {
   if (messages.length === 0) {
     return (
@@ -28,12 +57,16 @@ export function ChatView({ messages }: { messages: readonly ChatMsg[] }) {
   }
   return (
     <div className="chat">
-      {messages.map((m) => (
-        <div key={m.id} className={`msg ${m.role}`}>
-          {m.text}
-          {m.role === 'assistant' && m.streaming ? <span className="caret">▍</span> : null}
-        </div>
-      ))}
+      {messages.map((m) =>
+        m.role === 'tool' ? (
+          <ToolRow key={m.id} m={m} />
+        ) : (
+          <div key={m.id} className={`msg ${m.role}`}>
+            {m.text}
+            {m.role === 'assistant' && m.streaming ? <span className="caret">▍</span> : null}
+          </div>
+        ),
+      )}
     </div>
   )
 }

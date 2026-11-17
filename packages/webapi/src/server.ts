@@ -10,12 +10,17 @@
  *   GET  /v1beta/models/{name}            — un modèle (Google)
  *   POST /v1beta/models/{model}:generateContent        — chat (Google)
  *   POST /v1beta/models/{model}:streamGenerateContent  — stream : ?alt=sse → SSE, sinon tableau JSON
+ *   POST /v1beta/chat/completions         — M11 : le dialecte OpenAI servi sous le
+ *                                            namespace v1beta (l'app parle v1beta de base)
  *
- * Boucle 127.0.0.1 par défaut ; pas de clé API ni CORS tant que ce n'est pas
- * un milestone (l'UI passe par le proxy same-origin /api du serveur web).
- * Un échec amont en streaming = chunk `finish_reason: "error"` + [DONE] —
- * jamais un « stop » déguisé (le consommateur doit voir l'échec). En v1beta,
- * l’équivalent est un événement `error` Google en fin de flux.
+ * Le dialecte OpenAI est donc disponible sous les DEUX namespaces — la liste
+ * est une donnée (OPENAI_CHAT_PATHS), le jour du v2 s'ajoute un chemin sans
+ * toucher au moteur. Boucle 127.0.0.1 par défaut ; pas de clé API ni CORS
+ * tant que ce n'est pas un milestone (l'UI passe par le proxy same-origin
+ * /api du serveur web). Un échec amont en streaming = chunk `finish_reason:
+ * "error"` + [DONE] — jamais un « stop » déguisé (le consommateur doit voir
+ * l'échec). En v1beta, l’équivalent est un événement `error` Google en fin de
+ * flux.
  */
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
@@ -38,6 +43,12 @@ import { WEBAPI_VERSION } from './version.ts'
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024
 const SSE_PING_MS = 15_000
+/**
+ * Chemins servant le dialecte OpenAI — le namespace est une DONNÉE (M11) :
+ * v1beta rejoint v1 (l'app consomme v1beta par défaut), v2 s'ajoutera ici
+ * le jour venu, sans toucher au moteur.
+ */
+const OPENAI_CHAT_PATHS = new Set(['/v1/chat/completions', '/v1beta/chat/completions'])
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
@@ -129,8 +140,11 @@ export function createWebApiServer(config: WebApiConfig, provider: Provider = we
     const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
     const method = req.method ?? 'GET'
 
-    if (path === '/' || path === '/v1/models' || path === '/v1/chat/completions') {
-      const ok = (path === '/' && method === 'GET') || (path === '/v1/models' && method === 'GET') || (path === '/v1/chat/completions' && method === 'POST')
+    if (path === '/' || path === '/v1/models' || OPENAI_CHAT_PATHS.has(path)) {
+      const ok =
+        (path === '/' && method === 'GET') ||
+        (path === '/v1/models' && method === 'GET') ||
+        (OPENAI_CHAT_PATHS.has(path) && method === 'POST')
       if (!ok) return json(res, 405, { error: 'method not allowed' })
       if (path === '/') return root(res)
       if (path === '/v1/models') return models(res)

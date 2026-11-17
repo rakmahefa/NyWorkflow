@@ -6,7 +6,7 @@
  * byte-exact copies plus one session.forked event.
  */
 import { randomUUID } from 'node:crypto'
-import { appendFile, copyFile, mkdir, readFile } from 'node:fs/promises'
+import { appendFile, copyFile, mkdir, readFile, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { SessionEvent } from './index'
 
@@ -79,4 +79,13 @@ export async function forkJournal(home: string, fromId: string, newId: string): 
   const target = journalPath(home, newId)
   await copyFile(source, target) // ENOENT propagates (unknown source id)
   await appendEvent(target, { type: 'session.forked', at: new Date().toISOString(), from: fromId })
+}
+
+/**
+ * Deletes a journal file (M11 — session deletion). ENOENT propagates so
+ * the HTTP layer can answer 404. The journal is never rewritten, only
+ * removed whole — a deletion is a decision, not an edit.
+ */
+export async function deleteJournal(home: string, id: string): Promise<void> {
+  await unlink(journalPath(home, id))
 }

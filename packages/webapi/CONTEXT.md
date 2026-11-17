@@ -42,3 +42,6 @@ pnpm dev             # intégré : le serveur web démarre la passerelle (apps/w
 Leçons Node (consignées) : avec `agent: false`, `https.request` IGNORE `createConnection` et contourne le tunnel — laisser `agent` indéfini ; un tunnel CONNECT se détruit à la main sur `end`/`close` de la réponse, la propagation de `close_notify` à travers les pipes n'est pas garantie.
 
 Tâches : M7 ✅, M8 ✅ (multi-comptes, proxy, journal amont, diagnostic étendu), M9 ✅ (auth multi-sessions `/u/N`, expiration vue d'avance, stats par compte — 2026-11-17), M10 ✅ (API élargie : `/v1beta` Google-style + `tools` OpenAI, splitter jamais perdant — 2026-11-17) — voir MILESTONES.md.
+
+
+M11 (2026-11-17) : le dialecte OpenAI est aussi servi sous **`/v1beta/chat/completions`** — l'app consomme v1beta par défaut. La liste des namespaces est une donnée (`OPENAI_CHAT_PATHS` dans `server.ts`) : le futur `v2` s'ajoutera sans toucher au moteur. Les chemins sans outils restent inchangés octet pour octet.

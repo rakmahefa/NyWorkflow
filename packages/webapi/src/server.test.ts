@@ -664,3 +664,64 @@ describe('POST /v1beta/models/{model}:generateContent (M10)', () => {
     })
   })
 })
+
+// --------------------------------------------------- M11 : dialecte OpenAI sous v1beta
+
+describe('POST /v1beta/chat/completions — alias namespace (M11)', () => {
+  it('streaming texte : même moteur que /v1, chunks identiques', async () => {
+    await withServer({ streamPlan: [{ kind: 'ok', snapshots: ['Bon', 'Bonjour'] }] }, async ({ base }) => {
+      const res = await fetch(base + '/v1beta/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+        body: JSON.stringify({ model: 'gemini-3.6-flash', messages: [{ role: 'user', content: 'salut' }], stream: true }),
+      })
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toContain('text/event-stream')
+      const data = (await readSse(res)).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim())
+      expect(data.at(-1)).toBe('[DONE]')
+      const text = data
+        .slice(0, -1)
+        .map((d) => JSON.parse(d))
+        .map((c: any) => c.choices[0]?.delta?.content ?? '')
+        .join('')
+      expect(text).toBe('Bonjour')
+    })
+  })
+
+  it('complétion avec tools : tool_calls décodés sous v1beta aussi', async () => {
+    await withServer({ streamPlan: [{ kind: 'ok', snapshots: TOOL_SNAPSHOTS }] }, async ({ base }) => {
+      const { status, body } = await postJson(base, '/v1beta/chat/completions', { ...TOOLS_BODY, stream: false })
+      expect(status).toBe(200)
+      expect(body.choices[0].message.tool_calls[0].function).toEqual({ name: 'get_weather', arguments: '{"city":"Paris"}' })
+      expect(body.choices[0].finish_reason).toBe('tool_calls')
+    })
+  })
+
+  it('les messages role:"tool" font le round-trip sous v1beta', async () => {
+    await withServer(undefined, async ({ base, mock }) => {
+      await postJson(base, '/v1beta/chat/completions', {
+        model: 'gemini-3.6-flash',
+        stream: false,
+        messages: [
+          { role: 'user', content: 'Météo ?' },
+          { role: 'assistant', content: '', tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Paris"}' } }] },
+          { role: 'tool', tool_call_id: 'call-1', content: '{"ok":true,"result":{"temp":12}}' },
+        ],
+        tools: TOOLS_BODY.tools,
+      })
+      const { inner } = parseStreamBody(mock.streamPosts()[0]!.body)
+      const prompt = String((inner[0] as unknown[])[0])
+      expect(prompt).toContain('[Tool result]: {"ok":true,"result":{"temp":12}}')
+      expect(prompt).toContain('{{tool {"name":"get_weather","arguments":{"city":"Paris"}} }}')
+    })
+  })
+
+  it('405 : GET sur /v1beta/chat/completions ; 404 : chemin v2 non encore servi', async () => {
+    await withServer(undefined, async ({ base }) => {
+      const res = await fetch(base + '/v1beta/chat/completions')
+      expect(res.status).toBe(405)
+      const v2 = await postJson(base, '/v2/chat/completions', chatBody)
+      expect(v2.status).toBe(404)
+    })
+  })
+})
