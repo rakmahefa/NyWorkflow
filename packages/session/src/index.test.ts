@@ -199,3 +199,36 @@ describe('deriveSession', () => {
     expect(chat.workspace).toBeUndefined()
   })
 })
+
+describe('deriveSession — activité d’outils (M5)', () => {
+  const readCall: SessionEvent = { type: 'tool.call', at: T1, tool: 'read', args: { path: 'CONTEXT.md' } }
+  const readOk: SessionEvent = {
+    type: 'tool.result',
+    at: T2,
+    ok: true,
+    summary: 'read « CONTEXT.md » — 42 caractères',
+    data: { path: 'CONTEXT.md', content: '# Carte' },
+  }
+
+  it('appels appariés à leur résultat, dans l’ordre', () => {
+    const d = deriveSession([readCall, readOk, { type: 'tool.call', at: T2, tool: 'ls', args: {} }])
+    expect(d.tools).toEqual([
+      { tool: 'read', args: { path: 'CONTEXT.md' }, at: T1, ok: true, summary: 'read « CONTEXT.md » — 42 caractères' },
+      { tool: 'ls', args: {}, at: T2 },
+    ])
+  })
+
+  it('appel sans résultat : en attente (ok indéfini) — le champ data reste interne au journal', () => {
+    const d = deriveSession([readCall])
+    expect(d.tools).toEqual([{ tool: 'read', args: { path: 'CONTEXT.md' }, at: T1 }])
+    expect(d.tools[0]?.ok).toBeUndefined()
+  })
+
+  it('refus : ok false avec son résumé', () => {
+    const d = deriveSession([
+      { type: 'tool.call', at: T1, tool: 'read', args: { path: '../../etc/passwd' } },
+      { type: 'tool.result', at: T2, ok: false, summary: 'refusé (hors périmètre) : ../../etc/passwd' },
+    ])
+    expect(d.tools[0]).toMatchObject({ tool: 'read', ok: false, summary: 'refusé (hors périmètre) : ../../etc/passwd' })
+  })
+})

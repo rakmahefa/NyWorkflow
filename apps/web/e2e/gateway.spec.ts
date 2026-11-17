@@ -1,17 +1,8 @@
 import { expect, test } from '@playwright/test'
-import { startMockGateway } from './mock-gateway.mjs'
 
-// Ces tests supposent la maquette SSE (mock-gateway.mjs) sur 9801 ;
-// playwright.config.ts oriente le serveur web vers elle via W2A_URL.
-let mock = null
-
-test.beforeAll(async () => {
-  mock = await startMockGateway(9801)
-})
-
-test.afterAll(async () => {
-  await mock?.close()
-})
+// La maquette SSE (mock-gateway.mjs) est démarrée pour toute la session
+// par e2e/global-setup.mjs (port 9801) ; playwright.config.ts oriente le
+// serveur web vers elle via W2A_URL.
 
 test('affiche l’app', async ({ page }) => {
   await page.goto('/')

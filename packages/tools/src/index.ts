@@ -1,30 +1,33 @@
 /**
- * @nyworkflow/tools — tools the agent may call, plus guards.
+ * @nyworkflow/tools — the agent's hands, and their leash.
  *
- * Scope rule: every path stays inside the workspace root; anything outside
- * is refused and logged. Implementation lands in M5 — these types are the
- * frozen contract.
+ * Four tools (read, write, ls, glob), one permission that matters: every
+ * path stays inside the workspace root (lexical + realpath guard). `write`
+ * is dangerous: the engine pauses the stage until a human approves through
+ * the UI. Every call and outcome is journaled by the caller (core) as
+ * tool.call / tool.result events — refusals included, never silent.
+ *
+ * Pure Node, no core import (core depends on this package, never the
+ * other way around). Re-exports carry explicit .ts extensions: the
+ * package is loaded by plain Node (type stripping) through the bundled
+ * vite config, where extensionless ESM imports do not resolve.
  */
-
-/** How a tool call is allowed to proceed. */
-export type Permission = 'auto' | 'ask' | 'deny'
-
-/** A tool exposed to the model. */
-export interface Tool {
-  /** "read" | "write" | "ls" | "glob" | "shell". */
-  name: string
-  description: string
-  permission: Permission
-}
-
-/** One call requested by the model. */
-export interface ToolCall {
-  tool: string
-  args: Record<string, unknown>
-}
-
-/** Outcome of a call — the summary goes into the session journal. */
-export interface ToolResult {
-  ok: boolean
-  summary: string
-}
+export { resolveInScope } from './scope.ts'
+export type { ScopeRefusal, ScopeResolution } from './scope.ts'
+export {
+  TOOL_NAMES,
+  checkToolCall,
+  displayPath,
+  executeToolCall,
+  isDangerous,
+  refusedByUser,
+} from './tools.ts'
+export type {
+  ToolCall,
+  ToolCheck,
+  ToolName,
+  ToolOk,
+  ToolOutcome,
+  ToolRefusal,
+  ToolRefusalCode,
+} from './tools.ts'

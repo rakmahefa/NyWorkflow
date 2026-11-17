@@ -6,6 +6,22 @@ import { createServer } from 'node:http'
 const FIXED_REPLY =
   "NyWorkflow orchestre des workflows IA à partir de dossiers numérotés (méthode ICM). Chaque étape lit son CONTEXT.md, appelle le modèle via la passerelle, puis écrit son résultat dans output/."
 
+// Scénario outils (M5) : le sujet porte le marqueur APPROVE2E → la maquette
+// demande un write (pause approbation) ; le tour suivant (résultat d'outil,
+// commence par {"ok") reçoit l'artefact final. Le JSON doit être nu : le
+// protocole du moteur exige un objet une-ligne exact.
+const E2E_WRITE_REQUEST = JSON.stringify({
+  tool: 'write',
+  args: { path: '01-recherche/output/notes-e2e.md', content: 'DES NOTES E2E OUTILS' },
+})
+
+function toolRequestFor(lastUser) {
+  const t = String(lastUser ?? '')
+  if (t.includes('APPROVE2E')) return E2E_WRITE_REQUEST
+  if (t.startsWith('{"ok"')) return 'FICHE FINALE E2E'
+  return null
+}
+
 function replyBody(lastUser) {
   const t = String(lastUser ?? '').toLowerCase()
   if (t.includes('nyworkflow') || t.includes('présente') || t.includes('presente')) {
@@ -48,7 +64,8 @@ export function startMockGateway(port) {
         const lastUser = [...(parsed.messages ?? [])]
           .reverse()
           .find((m) => m?.role === 'user')?.content
-        const text = `Réponse (maquette) [${model}] : ${replyBody(lastUser)}`
+        const toolRequest = toolRequestFor(lastUser)
+        const text = toolRequest ?? `Réponse (maquette) [${model}] : ${replyBody(lastUser)}`
 
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
         const third = Math.ceil(text.length / 3)

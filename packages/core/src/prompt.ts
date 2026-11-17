@@ -4,6 +4,7 @@
  * goes to the model (and what the tests inspect).
  */
 import type { InputRef, StageContract } from './index'
+import { toolsPreamble } from './protocol.ts'
 
 /** Minimal chat-message shape — structurally compatible with adapter-llm. */
 export interface StageChatMessage {
@@ -49,13 +50,16 @@ function renderInput(input: LoadedInput): string {
  * Builds the messages of one stage call: a system preamble (role and rules)
  * plus a user message assembling the map, every declared input, the process
  * and the expected output. Stage replies are written verbatim to output/ —
- * the model is told so.
+ * the model is told so. With tools (M5), the system message also teaches
+ * the single-line JSON tool protocol; the loop then lives in the engine.
  */
 export function assembleStageMessages(args: {
   workspace: string
   contract: StageContract
   map: string
   loaded: LoadedInput[]
+  /** M5: append the tool protocol to the system message. */
+  tools?: boolean
 }): StageChatMessage[] {
   const { contract, map, loaded } = args
 
@@ -64,7 +68,8 @@ export function assembleStageMessages(args: {
     '(méthode ICM : le système de fichiers est l\'orchestrateur — dossiers numérotés, contrats CONTEXT.md, sorties dans output/). ' +
     'Suis le Process indiqué, dans l\'ordre, en t\'appuyant uniquement sur les Entrées fournies. ' +
     'Réponds exclusivement par le contenu final de l\'artefact demandé, en Markdown, ' +
-    'sans préambule ni explication ni clôture : ta réponse sera écrite telle quelle dans le fichier de sortie.'
+    'sans préambule ni explication ni clôture : ta réponse sera écrite telle quelle dans le fichier de sortie.' +
+    (args.tools === true ? `\n\n${toolsPreamble()}` : '')
 
   const user = [
     `# Étape ${contract.stage} — ${contract.title}`,

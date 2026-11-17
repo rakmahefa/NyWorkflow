@@ -6,6 +6,8 @@ export interface SessionInfo {
   id: string
   title: string
   createdAt: number
+  /** ICM workspace name, when this session runs a workflow. (M5) */
+  workspace?: string
 }
 
 /** One chat message, part of a session. */

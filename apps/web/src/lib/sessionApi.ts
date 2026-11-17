@@ -51,3 +51,38 @@ export function forkSession(id: string): Promise<SessionDto> {
     headers: jsonHeaders,
   })
 }
+
+// --- Workspaces (M5): the run side of a session that executes a workflow. ---
+
+/** What /workspaces returns for one run (state + tool activity). */
+export interface RunStateDto {
+  id: string
+  title: string
+  createdAt: number
+  state:
+    | { status: 'idle' }
+    | { status: 'running'; stage: string }
+    | { status: 'checkpoint'; stage: string }
+    | { status: 'done'; stages: string[] }
+    | { status: 'error'; stage: string; message: string }
+    | { status: 'approval'; stage: string; tool: string; args: unknown }
+  tools: { tool: string; args: unknown; at: number; ok?: boolean; summary?: string }[]
+}
+
+/** Fetches a run's state and tool activity (for the active run session). */
+export function getRun(workspace: string, id: string): Promise<RunStateDto> {
+  return jsonFetch<RunStateDto>(`/workspaces/${encodeURIComponent(workspace)}/runs/${encodeURIComponent(id)}`)
+}
+
+/** Resolves a paused tool call — approve executes it, refuse journals the refusal. */
+export function resolveApproval(
+  workspace: string,
+  id: string,
+  decision: 'approve' | 'refuse',
+): Promise<{ state: RunStateDto['state']; outputs: string[] }> {
+  return jsonFetch(`/workspaces/${encodeURIComponent(workspace)}/runs/${encodeURIComponent(id)}/approval`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify({ decision }),
+  })
+}

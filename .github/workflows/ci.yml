@@ -48,6 +48,7 @@ jobs:
             packages/adapter-llm/test-results
             packages/core/test-results
             packages/session/test-results
+            packages/tools/test-results
           if-no-files-found: warn
 
   e2e:

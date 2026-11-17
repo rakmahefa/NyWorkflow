@@ -13,6 +13,12 @@
  * from session.created, so /workspaces can list the runs of a workspace.
  * The stage.started / stage.output / run.completed events (declared since
  * the original contract) are now written by the core engine.
+ *
+ * M5 note: two additive fields join the frozen contract — `data` on
+ * tool.result (the exact payload fed back to the model, so a paused run
+ * replays its conversation byte-faithfully after a restart) and `model` on
+ * stage.started (the model that ran the stage, so an approval can resume
+ * without asking again). Old journals stay readable.
  */
 
 /** Every fact of a session, in order. */
@@ -22,8 +28,8 @@ export type SessionEvent =
   | { type: 'user.message'; at: string; text: string }
   | { type: 'assistant.message'; at: string; text: string }
   | { type: 'tool.call'; at: string; tool: string; args: unknown }
-  | { type: 'tool.result'; at: string; ok: boolean; summary: string }
-  | { type: 'stage.started'; at: string; stage: string }
+  | { type: 'tool.result'; at: string; ok: boolean; summary: string; data?: unknown }
+  | { type: 'stage.started'; at: string; stage: string; model?: string }
   | { type: 'stage.output'; at: string; stage: string; files: string[] }
   | { type: 'run.completed'; at: string; stages: string[] }
 
@@ -52,4 +58,4 @@ export {
   readEvents,
 } from './journal.ts'
 export { deriveSession } from './derive.ts'
-export type { DerivedMessage, DerivedSession } from './derive.ts'
+export type { DerivedMessage, DerivedSession, DerivedToolCall } from './derive.ts'

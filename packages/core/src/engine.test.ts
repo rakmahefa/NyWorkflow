@@ -1,9 +1,10 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { createRun, loadStageInputs, runStage, runStateFromEvents } from './engine.ts'
+import { createRun, loadStageInputs, runStage, runStateFromEvents, stageModelFromEvents } from './engine.ts'
 import { parseWorkspace } from './parse.ts'
+import { parseToolRequest } from './protocol.ts'
 import { assembleStageMessages } from './prompt.ts'
 import type { StageChatMessage, StageLlm } from './prompt.ts'
 import type { StageContract, Workspace } from './index'
@@ -22,12 +23,33 @@ afterAll(() => {
   for (const r of roots) rmSync(r, { recursive: true, force: true })
 })
 
+/**
+ * Vide les output/ du workspace copié (les e2e locaux y laissent des sorties
+ * de run — les tests unitaires partent d'un workspace vierge, .gitkeep seul
+ * reste).
+ */
+function stripStageOutputs(wsRoot: string): void {
+  for (const entry of readdirSync(wsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const outDir = join(wsRoot, entry.name, 'output')
+    try {
+      if (!statSync(outDir).isDirectory()) continue
+    } catch {
+      continue
+    }
+    for (const f of readdirSync(outDir)) {
+      if (f !== '.gitkeep') rmSync(join(outDir, f), { recursive: true, force: true })
+    }
+  }
+}
+
 /** Copie l'exemple dans un temp dir et renvoie le workspace parsé. */
 async function freshWorkspace(): Promise<Workspace> {
   const dir = mkdtempSync(join(tmpdir(), 'nyw-engine-'))
   roots.push(dir)
   const target = join(dir, 'exemple-rapport')
   cpSync(EXAMPLE, target, { recursive: true })
+  stripStageOutputs(target)
   return parseWorkspace(target)
 }
 
@@ -117,7 +139,7 @@ describe('runStage — une étape', () => {
     expect(existsSync(join(ws.root, '01-recherche/output/faits.md'))).toBe(true)
 
     expect(result.events).toEqual([
-      { type: 'stage.started', at: T1, stage: '01-recherche' },
+      { type: 'stage.started', at: T1, stage: '01-recherche', model: 'gemini-test' },
       { type: 'stage.output', at: T1, stage: '01-recherche', files: ['01-recherche/output/faits.md'] },
     ])
 
@@ -266,7 +288,7 @@ describe('runStateFromEvents — l’état dérivé du journal', () => {
   it('journal vide → idle ; étape interrompue → idle (elle sera rejouée)', async () => {
     const ws = await freshWorkspace()
     expect(runStateFromEvents([], ws)).toEqual({ status: 'idle' })
-    expect(runStateFromEvents([{ type: 'stage.started', at: T1, stage: '01-recherche' }], ws)).toEqual({
+    expect(runStateFromEvents([{ type: 'stage.started', at: T1, stage: '01-recherche', model: 'm' }], ws)).toEqual({
       status: 'idle',
     })
   })
@@ -306,6 +328,266 @@ describe('runStateFromEvents — l’état dérivé du journal', () => {
     const ws = await freshWorkspace()
     const events: SessionEvent[] = [{ type: 'stage.output', at: T1, stage: '09-ailleurs', files: ['x'] }]
     expect(runStateFromEvents(events, ws)).toEqual({ status: 'idle' })
+  })
+})
+
+// ==== M5 — outils, permissions, approbation ====
+
+const REQ = (tool: string, args: Record<string, unknown>): string => JSON.stringify({ tool, args })
+
+describe('parseToolRequest — protocole strict', () => {
+  it('accepte l’objet une-ligne exact {tool, args}', () => {
+    expect(parseToolRequest(REQ('read', { path: 'CONTEXT.md' }))).toEqual({
+      tool: 'read',
+      args: { path: 'CONTEXT.md' },
+    })
+  })
+
+  it('refuse multi-ligne, clés en trop, type inconnu, non-JSON — c’est l’artefact', () => {
+    const pretty = '{\n  "tool": "read",\n  "args": {}\n}'
+    expect(parseToolRequest(pretty)).toBeNull()
+    expect(parseToolRequest(REQ('read', {}).replace('}', ',"extra":1}'))).toBeNull()
+    expect(parseToolRequest(REQ('shell', {}))).toBeNull()
+    expect(parseToolRequest('# Un rapport Markdown')).toBeNull()
+    expect(parseToolRequest('{"tool":"read"}')).toBeNull()
+  })
+})
+
+describe('runStage avec outils — la boucle d’agent', () => {
+  it('read auto-exécuté : résultat renvoyé au modèle, événements journalisés avec data', async () => {
+    const ws = await freshWorkspace()
+    const { llm, calls } = fakeLlm([REQ('read', { path: 'CONTEXT.md' }), 'FICHE FINALE'])
+    const events: SessionEvent[] = []
+    const result = await runStage({
+      workspace: ws,
+      stage: '01-recherche',
+      subject: SUBJECT,
+      llm,
+      model: 'm',
+      tools: true,
+      now,
+      onEvent: (e) => void events.push(e),
+    })
+
+    expect(result.reply).toBe('FICHE FINALE')
+    expect(read(ws, '01-recherche/output/faits.md')).toBe('FICHE FINALE')
+
+    // Deux appels modèle : contexte, puis résultat d’outil en dernier tour.
+    expect(calls).toHaveLength(2)
+    const last = calls[1]?.messages.at(-1)
+    expect(last?.role).toBe('user')
+    expect(last?.content).toContain('"ok":true')
+    expect(last?.content).toContain('Carte du workspace')
+
+    // Le préambule outils n’apparaît que lorsque tools est actif.
+    expect(calls[0]?.messages[0]?.content).toContain('Outils disponibles')
+
+    expect(events.map((e) => e.type)).toEqual(['stage.started', 'tool.call', 'tool.result', 'stage.output'])
+    const toolResult = events[2]
+    expect(toolResult).toMatchObject({ type: 'tool.result', ok: true })
+    expect((toolResult as { data?: { path?: string } }).data).toMatchObject({ path: 'CONTEXT.md' })
+  })
+
+  it('LA PREUVE : un appel hors périmètre est refusé ET journalisé, l’étape continue', async () => {
+    const ws = await freshWorkspace()
+    const { llm, calls } = fakeLlm([REQ('read', { path: '../../secret.txt' }), 'FICHE'])
+    const events: SessionEvent[] = []
+    await runStage({
+      workspace: ws,
+      stage: '01-recherche',
+      subject: SUBJECT,
+      llm,
+      model: 'm',
+      tools: true,
+      now,
+      onEvent: (e) => void events.push(e),
+    })
+
+    // L’appel et son refus sont journalisés — jamais de silence.
+    expect(events.map((e) => e.type)).toEqual(['stage.started', 'tool.call', 'tool.result', 'stage.output'])
+    const refused = events[2]
+    expect(refused).toMatchObject({ type: 'tool.result', ok: false })
+    expect((refused as { summary?: string }).summary).toMatch(/hors périmètre/)
+
+    // Le modèle a été informé du refus et produit malgré tout sa sortie.
+    expect(calls[1]?.messages.at(-1)?.content).toContain('hors périmètre')
+    expect(read(ws, '01-recherche/output/faits.md')).toBe('FICHE')
+  })
+
+  it('sans tools : comportement M4 inchangé (un seul appel, pas de préambule)', async () => {
+    const ws = await freshWorkspace()
+    const { llm, calls } = fakeLlm(['FICHE'])
+    await runStage({ workspace: ws, stage: '01-recherche', subject: SUBJECT, llm, model: 'm', now })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.messages[0]?.content).not.toContain('Outils disponibles')
+  })
+
+  it('plafond d’appels d’outils : erreur claire, aucune sortie écrite', async () => {
+    const ws = await freshWorkspace()
+    const { llm } = fakeLlm([REQ('ls', {})]) // chaque tour redemande l’outil
+    await expect(
+      runStage({ workspace: ws, stage: '01-recherche', subject: SUBJECT, llm, model: 'm', tools: true, now }),
+    ).rejects.toThrow(/trop d'appels d'outils/)
+    expect(existsSync(join(ws.root, '01-recherche/output/faits.md'))).toBe(false)
+  })
+})
+
+describe('createRun + resolve — l’approbation humaine', () => {
+  const WRITE_REQ = REQ('write', { path: '01-recherche/output/notes.md', content: 'DES NOTES' })
+
+  it('write dans le périmètre : pause approbation, rien n’est écrit avant la décision', async () => {
+    const ws = await freshWorkspace()
+    const { llm } = fakeLlm([WRITE_REQ, 'FICHE'])
+    const events: SessionEvent[] = []
+    const run = createRun({
+      workspace: ws,
+      subject: SUBJECT,
+      llm,
+      model: 'm',
+      tools: true,
+      now,
+      onEvent: (e) => void events.push(e),
+    })
+
+    await expect(run.advance()).resolves.toEqual({
+      status: 'approval',
+      stage: '01-recherche',
+      tool: 'write',
+      args: { path: '01-recherche/output/notes.md', content: 'DES NOTES' },
+    })
+    expect(existsSync(join(ws.root, '01-recherche/output/notes.md'))).toBe(false)
+    expect(events.map((e) => e.type)).toEqual(['stage.started', 'tool.call'])
+
+    // Avancer pendant une approbation : refus explicite.
+    await expect(run.advance()).rejects.toThrow(/en attente/)
+  })
+
+  it('approbation acceptée : le write s’exécute, l’étape finit au checkpoint', async () => {
+    const ws = await freshWorkspace()
+    const { llm, calls } = fakeLlm([WRITE_REQ, 'FICHE'])
+    const events: SessionEvent[] = []
+    const run = createRun({
+      workspace: ws,
+      subject: SUBJECT,
+      llm,
+      model: 'm',
+      tools: true,
+      now,
+      onEvent: (e) => void events.push(e),
+    })
+    await run.advance()
+    await expect(run.resolve('approve')).resolves.toEqual({ status: 'checkpoint', stage: '01-recherche' })
+
+    expect(read(ws, '01-recherche/output/notes.md')).toBe('DES NOTES')
+    expect(read(ws, '01-recherche/output/faits.md')).toBe('FICHE')
+    expect(events.map((e) => e.type)).toEqual(['stage.started', 'tool.call', 'tool.result', 'stage.output'])
+    expect(events[2]).toMatchObject({ ok: true })
+    expect(calls[1]?.messages.at(-1)?.content).toContain('"ok":true')
+  })
+
+  it('approbation refusée : le modèle apprend le refus, rien n’est écrit', async () => {
+    const ws = await freshWorkspace()
+    const { llm, calls } = fakeLlm([WRITE_REQ, 'FICHE'])
+    const events: SessionEvent[] = []
+    const run = createRun({
+      workspace: ws,
+      subject: SUBJECT,
+      llm,
+      model: 'm',
+      tools: true,
+      now,
+      onEvent: (e) => void events.push(e),
+    })
+    await run.advance()
+    await expect(run.resolve('refuse')).resolves.toEqual({ status: 'checkpoint', stage: '01-recherche' })
+
+    expect(existsSync(join(ws.root, '01-recherche/output/notes.md'))).toBe(false)
+    expect(events[2]).toMatchObject({ ok: false })
+    expect((events[2] as { summary?: string }).summary).toMatch(/refusé par l'utilisateur/)
+    expect(calls[1]?.messages.at(-1)?.content).toContain('refusé par l\'utilisateur')
+    expect(read(ws, '01-recherche/output/faits.md')).toBe('FICHE')
+  })
+
+  it('reprise après « redémarrage » : le journal seul retrouve l’approbation et la résout', async () => {
+    const ws = await freshWorkspace()
+
+    // Premier serveur : pause sur le write (journal collecté).
+    const first = fakeLlm([WRITE_REQ, 'FICHE'])
+    const journal: SessionEvent[] = []
+    const run1 = createRun({
+      workspace: ws,
+      subject: SUBJECT,
+      llm: first.llm,
+      model: 'm',
+      tools: true,
+      now,
+      onEvent: (e) => void journal.push(e),
+    })
+    await run1.advance()
+
+    // L’état dérivé du journal : approbation, avec l’appel et le modèle.
+    expect(runStateFromEvents(journal, ws)).toEqual({
+      status: 'approval',
+      stage: '01-recherche',
+      tool: 'write',
+      args: { path: '01-recherche/output/notes.md', content: 'DES NOTES' },
+    })
+    expect(stageModelFromEvents(journal, '01-recherche')).toBe('m')
+
+    // Second serveur : nouveau run nourri du journal — la décision passe.
+    const second = fakeLlm(['FICHE'])
+    const more: SessionEvent[] = []
+    const run2 = createRun({
+      workspace: ws,
+      subject: SUBJECT,
+      llm: second.llm,
+      model: 'm',
+      tools: true,
+      initialEvents: journal,
+      now: () => T2,
+      onEvent: (e) => void more.push(e),
+    })
+    await expect(run2.resolve('approve')).resolves.toEqual({ status: 'checkpoint', stage: '01-recherche' })
+    expect(read(ws, '01-recherche/output/notes.md')).toBe('DES NOTES')
+    // Le second tour rejoue la conversation : le modèle revoit le résultat du write.
+    expect(second.calls[0]?.messages.at(-1)?.content).toContain('"ok":true')
+    expect(more.map((e) => e.type)).toEqual(['tool.result', 'stage.output'])
+  })
+
+  it('un deuxième write pendant la reprise : pause à nouveau, pas d’erreur', async () => {
+    const ws = await freshWorkspace()
+    const secondWrite = REQ('write', { path: '01-recherche/output/annexe.md', content: 'ANNEXE' })
+    const { llm } = fakeLlm([WRITE_REQ, secondWrite, 'FICHE'])
+    const events: SessionEvent[] = []
+    const run = createRun({
+      workspace: ws,
+      subject: SUBJECT,
+      llm,
+      model: 'm',
+      tools: true,
+      now,
+      onEvent: (e) => void events.push(e),
+    })
+    await run.advance() // write 1 → pause
+    await run.resolve('approve') // write 1 exécuté, le modèle redemande → write 2 → pause
+    expect(run.state()).toEqual({
+      status: 'approval',
+      stage: '01-recherche',
+      tool: 'write',
+      args: { path: '01-recherche/output/annexe.md', content: 'ANNEXE' },
+    })
+    expect(read(ws, '01-recherche/output/notes.md')).toBe('DES NOTES')
+    expect(existsSync(join(ws.root, '01-recherche/output/annexe.md'))).toBe(false)
+    await expect(run.resolve('refuse')).resolves.toEqual({ status: 'checkpoint', stage: '01-recherche' })
+    expect(existsSync(join(ws.root, '01-recherche/output/annexe.md'))).toBe(false)
+    expect(read(ws, '01-recherche/output/faits.md')).toBe('FICHE')
+  })
+
+  it('resolve sans approbation en attente : refus clair', async () => {
+    const ws = await freshWorkspace()
+    const { llm } = fakeLlm(['FICHE'])
+    const run = createRun({ workspace: ws, subject: SUBJECT, llm, model: 'm', tools: true, now })
+    await expect(run.resolve('approve')).rejects.toThrow(/aucun appel d'outil en attente/)
   })
 })
 

@@ -66,16 +66,24 @@ Détail de la livraison :
 - Le chaînage est déclaratif : les entrées sont relues sur disque à chaque exécution — un humain peut éditer une sortie au checkpoint, l'étape suivante lit la version éditée.
 - `apps/web` — API `/workspaces` (plugin Vite, dev et preview) : listing, détail + contrats + runs, création de run (le sujet devient une session journalisée), `advance` pour exécuter l'étape suivante côté serveur (garde anti-double-exécution 409). La vue workflow dans l'UI arrive en M6 ; l'API est pilotable aujourd'hui.
 
-## M5 — Outils + permissions · 10 %
+## M5 — Outils + permissions · 10 % · ✅ Terminé (2026-11-17)
 
 Objectif : laisser l'agent lire/écrire dans le workspace, sous contrôle.
 
-- [ ] Outils : `read`, `write`, `ls`, `glob` (`shell` en option)
-- [ ] Permissions : périmètre = racine du workspace, approbation via l'UI
-- [ ] Appels d'outils journalisés dans la session
-- [ ] Tests : exécution + refus hors périmètre
+- [x] Outils : `read`, `write`, `ls`, `glob` (`shell` reste optionnel — hors périmètre v0.1.0)
+- [x] Permissions : périmètre = racine du workspace, approbation via l'UI
+- [x] Appels d'outils journalisés dans la session
+- [x] Tests : exécution + refus hors périmètre
 
-**Livré quand :** un outil hors périmètre est refusé et journalisé.
+**Livré quand :** un outil hors périmètre est refusé et journalisé. ✔ (prouvé en unitaire dans `packages/tools` et `packages/core`, en intégration sur le vrai serveur Vite — journal JSONL relu ligne à ligne — et en e2e : la carte d'approbation s'affiche dans l'UI, l'humain décide, l'étape reprend)
+
+Détail de la livraison :
+
+- `packages/tools` — garde de périmètre lexicale **et** realpath (un symlink ne sort pas du workspace), `read`/`ls`/`glob` auto-exécutés, `write` seul outil dangereux. Bornes : read 32 Kio, write 128 Kio, ls/glob 500 entrées, glob profondeur 8. Tout refus est un résultat structuré avec résumé français — jamais une exception silencieuse.
+- `packages/core` — la boucle d'agent dans `runStage` (`tools: true`) : protocole JSON une-ligne strict (`{"tool":"…","args":{…}}`, toute autre réponse = l'artefact final, comportement M4 inchangé), 8 appels max par tentative. Un write valide et dans le périmètre **met l'étape en pause** (état `approval`), `resolve('approve'|'refuse')` exécute ou refuse puis poursuit la boucle ; `resumeStage` rejoue la conversation depuis le journal (`tool.result.data`, champ additif) — la reprise est identique après un redémarrage serveur.
+- `packages/session` — contrat gelé étendu de façon additive : `data` sur `tool.result`, `model` sur `stage.started` (l'approbation n'a pas à redemander le modèle). Les journaux antérieurs restent lisibles ; `deriveSession` expose l'activité d'outils (appel apparié à son résultat, en attente = sans résultat).
+- `apps/web` — API : `advance` accepte `tools`, nouvel endpoint `POST /workspaces/:name/runs/:id/approval` (garde 409 anti double-exécution partagée, `advance` pendant une approbation = 409 clair) ; `RunDto` porte l'activité d'outils. UI : carte d'approbation (Approuver / Refuser) et activité d'outils pour la session de run active — la décision se prend dans l'UI, plus besoin de curl.
+- Tests : 131 unitaires (21 session + 11 adapter + 16 tools + 43 core + 40 web dont 4 intégration outils) + 10 e2e (2 nouveaux : approbation et refus depuis l'UI).
 
 ## M6 — Vue workflow + v0.1.0 · 10 %
 

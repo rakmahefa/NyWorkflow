@@ -15,5 +15,10 @@ cookie.json
 # les utilisateurs peuvent choisir de le versionner, le repo de dev non.
 .nyworkflow/
 
+# Sorties d'exécution des workspaces (runs, e2e, démos locales) — le
+# contenu de output/ est régénéré, seuls les .gitkeep sont versionnés.
+examples/workspaces/**/output/*
+!examples/workspaces/**/output/.gitkeep
+
 # OS
 .DS_Store

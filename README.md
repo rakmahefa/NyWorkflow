@@ -64,9 +64,27 @@ curl -s -X POST http://127.0.0.1:3080/workspaces/exemple-rapport/runs/$RUN/advan
 
 Chaque étape relit ses entrées sur disque : éditez `faits.md` au checkpoint, l'étape suivante travaille votre version. L'état d'un run survit aux redémarrages (dérivé du journal). Le format de contrat `CONTEXT.md` est figé en v1 jusqu'à v0.2.0.
 
+### Les outils de l'agent, sous contrôle humain (M5)
+
+Ajoutez `"tools": true` à `advance` : l'étape devient une petite boucle d'agent. Le modèle peut `read` / `ls` / `glob` dans le workspace (exécution automatique, résultat renvoyé au modèle) et `write` — mais toute écriture **met le run en pause** et attend votre décision :
+
+```sh
+# étape avec outils — le modèle demande un write, l'étape se met en pause
+curl -s -X POST http://127.0.0.1:3080/workspaces/exemple-rapport/runs/$RUN/advance \
+  -H 'content-type: application/json' \
+  -d '{"model": "gemini-2.5-flash", "tools": true}'
+# → {"state":{"status":"approval","tool":"write","args":{"path":"…"}}}
+
+# la décision humaine (ou cliquez Approuver dans l'UI)
+curl -s -X POST http://127.0.0.1:3080/workspaces/exemple-rapport/runs/$RUN/approval \
+  -H 'content-type: application/json' -d '{"decision": "approve"}'
+```
+
+Dans l'UI, la session du run affiche la carte d'approbation et l'activité d'outils — approuver ou refuser se fait d'un clic, l'étape reprend toute seule. Tout appel et tout refus sont journalisés (`tool.call` / `tool.result`) : un chemin hors workspace est refusé et tracé, jamais silencieux. La garde est lexicale **et** realpath — un symlink ne s'échappe pas. `shell` reste volontairement hors périmètre en v0.1.0.
+
 CI à chaque push/PR : typecheck, build, Vitest, Playwright, puis artefacts (UI construite, rapports de tests, capture README). Voir l'onglet [Actions](https://github.com/rakmahefa/NyWorkflow/actions).
 
-## Avancement — 80 %
+## Avancement — 90 %
 
 | Milestone | Contenu | Poids | État |
 |---|---|---:|---|
@@ -75,7 +93,7 @@ CI à chaque push/PR : typecheck, build, Vitest, Playwright, puis artefacts (UI 
 | M2 | Adaptateur LLM (passerelle web2api) | 15 % | ✅ Terminé |
 | M3 | Sessions persistantes (JSONL, fork) | 15 % | ✅ Terminé |
 | M4 | Moteur ICM (étapes, CONTEXT.md) | 20 % | ✅ Terminé |
-| M5 | Outils + permissions | 10 % | ⬜ À faire |
+| M5 | Outils + permissions (approbation UI) | 10 % | ✅ Terminé |
 | M6 | Vue workflow + v0.1.0 | 10 % | ⬜ À faire |
 
 Détail et critères de livraison : [MILESTONES.md](MILESTONES.md) · Plan : [PLAN.md](PLAN.md)
@@ -84,10 +102,10 @@ Détail et critères de livraison : [MILESTONES.md](MILESTONES.md) · Plan : [PL
 
 ```
 apps/web              UI web (React + Vite, port 3080)
-packages/core         moteur ICM : étapes, contrats, exécution
+packages/core         moteur ICM : étapes, contrats, exécution, boucle d'agent
 packages/session      sessions = journal append-only JSONL
 packages/adapter-llm  client OpenAI-compatible (→ gemini-web2api)
-packages/tools        outils fichier/shell + permissions
+packages/tools        outils fichier + garde de périmètre + approbation
 examples/workspaces   workspace ICM d'exemple
 ```
 

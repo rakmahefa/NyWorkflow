@@ -5,21 +5,24 @@
  *   GET  /workspaces                        → { workspaces: WorkspaceSummaryDto[] }
  *   GET  /workspaces/:name                  → WorkspaceDetailDto (contracts + runs)
  *   POST /workspaces/:name/runs             → create a run (body: { subject })
- *   GET  /workspaces/:name/runs/:id         → { id, title, state }
+ *   GET  /workspaces/:name/runs/:id         → { id, title, state, tools }
  *   POST /workspaces/:name/runs/:id/advance → execute the next stage
- *                                             (body: { model }) → { state, outputs }
+ *                                             (body: { model, tools? }) → { state, outputs }
+ *   POST /workspaces/:name/runs/:id/approval → resolve a paused tool call
+ *                                             (body: { decision }) → { state, outputs } (M5)
  *
  * A run is a session journal: session.created carries the workspace name,
  * the subject is the first user.message, and stage events land in the same
  * append-only file — so run state survives restarts by derivation, like
- * everything else. The browser never touches the filesystem; the UI to
- * drive runs arrives in M6, the API is drivable by curl today.
+ * everything else. The browser never touches the filesystem. With tools
+ * (M5), advance may return state 'approval': the UI (or curl) decides via
+ * /approval, which resumes the stage server-side.
  */
 import { existsSync } from 'node:fs'
 import { access, readdir } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
-import { createRun, parseWorkspace, runStateFromEvents } from '@nyworkflow/core'
+import { createRun, parseWorkspace, runStateFromEvents, stageModelFromEvents } from '@nyworkflow/core'
 import type { RunState, StageLlm, Workspace } from '@nyworkflow/core'
 import {
   appendEvent,
@@ -29,7 +32,7 @@ import {
   newSessionId,
   readEvents,
 } from '@nyworkflow/session'
-import type { SessionEvent } from '@nyworkflow/session'
+import type { DerivedSession, SessionEvent } from '@nyworkflow/session'
 
 /** One workspace as listed — parsed, or the reason it is not. */
 export interface WorkspaceSummaryDto {
@@ -52,6 +55,8 @@ export interface RunDto {
   title: string
   createdAt: number
   state: RunState
+  /** Tool calls of the run, paired with their outcome (M5). */
+  tools: { tool: string; args: unknown; at: number; ok?: boolean; summary?: string }[]
 }
 
 export interface WorkspacesHandlerOptions {
@@ -203,10 +208,21 @@ export function createWorkspacesHandler(
     for (const { id, events } of await readJournals()) {
       const d = deriveSession(events)
       if (d.workspace !== name) continue
-      runs.push({ id, title: d.title, createdAt: toMs(d.createdAt), state: runStateFromEvents(events, ws) })
+      runs.push(toRunDto(id, d, runStateFromEvents(events, ws)))
     }
     runs.sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
     return { name, map: ws.map, stages: ws.stages, runs }
+  }
+
+  /** DerivedSession + state → the DTO the UI consumes. */
+  function toRunDto(id: string, d: DerivedSession, state: RunState): RunDto {
+    return {
+      id,
+      title: d.title,
+      createdAt: toMs(d.createdAt),
+      state,
+      tools: d.tools.map((t) => ({ tool: t.tool, args: t.args, at: toMs(t.at), ok: t.ok, summary: t.summary })),
+    }
   }
 
   async function createRunSession(req: IncomingMessage, name: string): Promise<RunDto> {
@@ -221,7 +237,7 @@ export function createWorkspacesHandler(
     const at = nowIso()
     await appendEvent(journalPath(home, id), { type: 'session.created', at, title, workspace: name })
     await appendEvent(journalPath(home, id), { type: 'user.message', at: nowIso(), text: subject })
-    return { id, title, createdAt: toMs(at), state: { status: 'idle' } }
+    return { id, title, createdAt: toMs(at), state: { status: 'idle' }, tools: [] }
   }
 
   async function runState(name: string, id: string): Promise<RunDto> {
@@ -233,8 +249,7 @@ export function createWorkspacesHandler(
       throw notFound('session inconnue')
     }
     const events = await readEvents(file)
-    const d = deriveSession(events)
-    return { id, title: d.title, createdAt: toMs(d.createdAt), state: runStateFromEvents(events, ws) }
+    return toRunDto(id, deriveSession(events), runStateFromEvents(events, ws))
   }
 
   async function advance(req: IncomingMessage, name: string, id: string): Promise<{ state: RunState; outputs: string[] }> {
@@ -247,6 +262,7 @@ export function createWorkspacesHandler(
       const model = typeof body.model === 'string' ? body.model.trim() : ''
       if (model === '') throw badRequest('model non vide attendu')
       if (model.length > MODEL_MAX) throw badRequest('model trop long')
+      const tools = body.tools === true
 
       const ws = await load(name)
       const file = journalPath(home, id)
@@ -256,6 +272,10 @@ export function createWorkspacesHandler(
         throw notFound('session inconnue')
       }
       const events = await readEvents(file)
+      const priorState = runStateFromEvents(events, ws)
+      if (priorState.status === 'approval') {
+        throw new HttpError(409, `un appel d'outil « ${priorState.tool} » est en attente — approuvez-le ou refusez-le (POST /approval) avant d'avancer`)
+      }
       const subject = events.find((e): e is Extract<SessionEvent, { type: 'user.message' }> => e.type === 'user.message')
       if (!subject) throw badRequest('run sans sujet — recréez-le avec un sujet')
 
@@ -265,6 +285,7 @@ export function createWorkspacesHandler(
         subject: subject.text,
         llm,
         model,
+        tools,
         initialEvents: events,
         onEvent: async (event) => {
           await appendEvent(file, event)
@@ -273,6 +294,55 @@ export function createWorkspacesHandler(
       })
       const state = await run.advance()
       return { state, outputs }
+    } catch (err) {
+      if (err instanceof HttpError) throw err
+      throw new HttpError(500, err instanceof Error ? err.message : String(err))
+    } finally {
+      busy.delete(id)
+    }
+  }
+
+  /** M5: resolves a paused tool call (approve executes it, refuse journals the refusal), then resumes the stage. */
+  async function approval(req: IncomingMessage, name: string, id: string): Promise<{ state: RunState; outputs: string[] }> {
+    if (busy.has(id)) throw new HttpError(409, 'une exécution est déjà en cours pour ce run')
+    busy.add(id)
+    try {
+      const body = await readJson(req)
+      const decision = body.decision === 'approve' ? 'approve' : body.decision === 'refuse' ? 'refuse' : ''
+      if (decision === '') throw badRequest('decision : "approve" ou "refuse" attendu')
+
+      const ws = await load(name)
+      const file = journalPath(home, id)
+      try {
+        await access(file)
+      } catch {
+        throw notFound('session inconnue')
+      }
+      const events = await readEvents(file)
+      const state = runStateFromEvents(events, ws)
+      if (state.status !== 'approval') {
+        throw new HttpError(409, 'aucun appel d\'outil en attente pour ce run — avancez d\'abord')
+      }
+      const subject = events.find((e): e is Extract<SessionEvent, { type: 'user.message' }> => e.type === 'user.message')
+      if (!subject) throw badRequest('run sans sujet — recréez-le avec un sujet')
+      const model = stageModelFromEvents(events, state.stage)
+      if (!model) throw badRequest('modèle absent du journal pour cette étape — relancez advance avec un modèle')
+
+      const outputs: string[] = []
+      const run = createRun({
+        workspace: ws,
+        subject: subject.text,
+        llm,
+        model,
+        tools: true,
+        initialEvents: events,
+        onEvent: async (event) => {
+          await appendEvent(file, event)
+          if (event.type === 'stage.output') outputs.push(...event.files)
+        },
+      })
+      const newState = await run.resolve(decision)
+      return { state: newState, outputs }
     } catch (err) {
       if (err instanceof HttpError) throw err
       throw new HttpError(500, err instanceof Error ? err.message : String(err))
@@ -310,6 +380,12 @@ export function createWorkspacesHandler(
       if (method === 'POST') {
         const id = parts[2] as string
         return send(res, 200, await advance(req, name, id))
+      }
+    }
+    if (parts.length === 4 && parts[1] === 'runs' && isSessionId(parts[2] ?? '') && parts[3] === 'approval') {
+      if (method === 'POST') {
+        const id = parts[2] as string
+        return send(res, 200, await approval(req, name, id))
       }
     }
     throw notFound('route inconnue')

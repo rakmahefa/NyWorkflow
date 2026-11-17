@@ -2,7 +2,7 @@
  * Derivation — the journal is the only source of truth, so everything the
  * UI shows (title, date, chat history) is re-derived from its events.
  * Chat history keeps user/assistant messages only: tool and stage events
- * will join the view in M4/M5, never the model history shape.
+ * join the view as tool activity (M5), never the model history shape.
  */
 import type { SessionEvent } from './index'
 
@@ -10,6 +10,15 @@ export interface DerivedMessage {
   role: 'user' | 'assistant'
   text: string
   at: string
+}
+
+/** One tool call as shown in the UI — ok undefined while pending approval. */
+export interface DerivedToolCall {
+  tool: string
+  args: unknown
+  at: string
+  ok?: boolean
+  summary?: string
 }
 
 export interface DerivedSession {
@@ -25,6 +34,8 @@ export interface DerivedSession {
   workspace?: string
   /** Chat messages in order. */
   messages: DerivedMessage[]
+  /** Tool calls in order, paired with their result when resolved. (M5) */
+  tools: DerivedToolCall[]
 }
 
 const TITLE_MAX = 60
@@ -52,6 +63,21 @@ export function deriveSession(events: SessionEvent[]): DerivedSession {
       : { role: 'assistant', text: e.text, at: e.at },
   )
 
+  // Tool calls pair with the tool.result that follows them in the journal;
+  // a call without a result is pending (waiting for a human approval).
+  const tools: DerivedToolCall[] = []
+  for (const e of events) {
+    if (e.type === 'tool.call') {
+      tools.push({ tool: e.tool, args: e.args, at: e.at })
+    } else if (e.type === 'tool.result') {
+      const open = [...tools].reverse().find((t) => t.ok === undefined)
+      if (open) {
+        open.ok = e.ok
+        open.summary = e.summary
+      }
+    }
+  }
+
   return {
     createdAt: created?.at ?? events[0]?.at ?? '',
     baseTitle,
@@ -59,5 +85,6 @@ export function deriveSession(events: SessionEvent[]): DerivedSession {
     forkedFrom: forked?.from,
     workspace: created?.workspace,
     messages,
+    tools,
   }
 }

@@ -9,6 +9,11 @@
  * joined InputRef — `origin` (raw Source label) and `why` (raw Pourquoi
  * column) — old parsers are unaffected. The CONTEXT.md contract format is
  * frozen as v1 until v0.2.0 (see PLAN.md, end-of-M4 decision point).
+ *
+ * M5 note: RunState gains an 'approval' status (a scoped write paused for
+ * a human — derived from the journal, so it survives restarts); runStage
+ * accepts tools (agent loop); resumeStage + resolve continue a paused
+ * stage. Additive on every account.
  */
 
 /** A file (or section) a stage must load before running. */
@@ -57,6 +62,7 @@ export type RunState =
   | { status: 'checkpoint'; stage: string }
   | { status: 'done'; stages: string[] }
   | { status: 'error'; stage: string; message: string }
+  | { status: 'approval'; stage: string; tool: string; args: unknown }
 
 // Engine (M4). Node-side only: the browser drives runs through the web
 // server's /workspaces API, never directly. Re-exports carry explicit .ts
@@ -69,12 +75,17 @@ export type { LoadedInput, StageChatMessage, StageLlm } from './prompt.ts'
 export {
   createRun,
   loadStageInputs,
+  pendingToolCall,
+  resumeStage,
   runStage,
   runStateFromEvents,
+  stageModelFromEvents,
 } from './engine.ts'
 export type {
   CreateRunOptions,
+  ResumeStageOptions,
   RunStageOptions,
   RunStageResult,
   WorkflowRun,
 } from './engine.ts'
+export { parseToolRequest, renderToolResult, serializeToolRequest, toolsPreamble } from './protocol.ts'

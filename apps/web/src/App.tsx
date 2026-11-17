@@ -3,18 +3,20 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { ChatView } from './components/ChatView'
 import { Composer } from './components/Composer'
 import { ModelPicker } from './components/ModelPicker'
+import { RunPanel } from './components/RunPanel'
 import { Sidebar } from './components/Sidebar'
 import { parseInput, runCommand } from './lib/commands'
 import { fakeReply, streamText } from './lib/fakeLLM'
 import { useGatewayStatus } from './lib/gateway'
 import { toLlmHistory } from './lib/history'
 import * as api from './lib/sessionApi'
+import type { RunStateDto } from './lib/sessionApi'
 import { SessionStore } from './lib/store'
 import type { ChatMsg, SessionInfo } from './lib/types'
 import { APP_VERSION } from './lib/version'
 
 const WELCOME =
-  'Bienvenue dans NyWorkflow (M4). Sessions journalisées sur disque — fermez et rouvrez, rien ne se perd. Le moteur ICM exécute les workspaces via l’API /workspaces (vue dédiée en M6). /help pour les commandes.'
+  'Bienvenue dans NyWorkflow (M5). Sessions journalisées sur disque, moteur ICM avec outils — les écritures du modèle attendent votre approbation. /help pour les commandes.'
 const GATEWAY_DOWN =
   'Passerelle gemini-web2api absente (127.0.0.1:8081) — réponses simulées. Lancez la passerelle du repo ny-gemini-acp pour le streaming réel.'
 const MEMORY_FALLBACK =
@@ -26,6 +28,9 @@ type Mode = 'booting' | 'server' | 'memory'
  * M3 shell: sessions persisted as JSONL journals through /sessions.
  * M4: the ICM engine runs workspaces server-side through /workspaces
  * (chat UI unchanged — the workflow view lands in M6).
+ * M5: a session that runs a workflow shows its tool activity and, when a
+ * write pauses for a human, an approval card — the one-click decision the
+ * engine resumes from.
  * Boot hydrates from the journals; chat messages are journaled as they
  * settle; forking copies a journal. When /sessions is unreachable the
  * app degrades to in-memory sessions with a clear notice — never a
@@ -36,6 +41,8 @@ export default function App() {
   const { store, client } = boot
   const [mode, setMode] = useState<Mode>('booting')
   const [activeId, setActiveId] = useState<string | null>(null)
+  /** Run side of the active session, when it executes a workflow (M5). */
+  const [run, setRun] = useState<RunStateDto | null>(null)
   const gw = useGatewayStatus(client)
 
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot)
@@ -57,7 +64,7 @@ export default function App() {
           store.appendMessage(first.id, 'system', WELCOME)
         } else {
           store.ingest(
-            sessions.map((d): SessionInfo => ({ id: d.id, title: d.title, createdAt: d.createdAt })),
+            sessions.map((d): SessionInfo => ({ id: d.id, title: d.title, createdAt: d.createdAt, workspace: d.workspace })),
             sessions.flatMap((d) =>
               d.messages.map(
                 (m, k): ChatMsg => ({ id: `${d.id}:${k}`, sessionId: d.id, role: m.role, text: m.text, at: m.at }),
@@ -90,6 +97,50 @@ export default function App() {
       store.appendMessage(downTargetId, 'system', GATEWAY_DOWN)
     }
   }, [gw.status, downTargetId, store])
+
+  // Session de run active → état du run + activité d'outils (M5).
+  const activeWorkspace = active?.workspace
+  const activeRunId = active?.id
+  const refreshRun = useCallback(() => {
+    if (mode !== 'server' || !activeWorkspace || !activeRunId) {
+      setRun(null)
+      return
+    }
+    let cancelled = false
+    void api
+      .getRun(activeWorkspace, activeRunId)
+      .then((r) => {
+        if (!cancelled) setRun(r)
+      })
+      .catch(() => {
+        // Un journal sans workspace valide ou une API absente : pas de panneau.
+        if (!cancelled) setRun(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeRunId, activeWorkspace, mode])
+  useEffect(() => {
+    setRun(null)
+    return refreshRun()
+  }, [refreshRun])
+
+  /** Décision humaine sur un appel d'outil en attente — puis rafraîchissement. */
+  const handleResolved = useCallback(
+    (decision: 'approve' | 'refuse', state: RunStateDto['state']) => {
+      if (active) {
+        store.appendMessage(
+          active.id,
+          'system',
+          decision === 'approve'
+            ? `Écriture approuvée — étape reprise (${state.status}).`
+            : `Appel refusé — étape reprise sans l'écriture (${state.status}).`,
+        )
+      }
+      refreshRun()
+    },
+    [active, refreshRun, store],
+  )
 
   /** Création de session — journal serveur, ou locale en mode mémoire. */
   const createSession = useCallback(
@@ -249,10 +300,18 @@ export default function App() {
               onSelect={gw.select}
               onRefresh={() => void gw.refresh()}
             />
-            <span className="tag">M4 · v{APP_VERSION}</span>
+            <span className="tag">M5 · v{APP_VERSION}</span>
           </div>
         </header>
         <ChatView messages={messages} />
+        {mode === 'server' && active.workspace && run ? (
+          <RunPanel
+            workspace={active.workspace}
+            run={run}
+            onResolved={handleResolved}
+            onError={(why) => active && store.appendMessage(active.id, 'system', `Décision impossible : ${why}`)}
+          />
+        ) : null}
         <Composer onSend={handleSend} />
       </main>
     </div>

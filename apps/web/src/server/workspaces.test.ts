@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
@@ -75,10 +75,27 @@ function startLlmMock(delayMs: number): Promise<{ port: number; close: () => Pro
   })
 }
 
+/** Vide les output/ de la copie (les runs locaux laissent des sorties). */
+function stripStageOutputs(wsRoot: string): void {
+  for (const entry of readdirSync(wsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const outDir = join(wsRoot, entry.name, 'output')
+    try {
+      if (!statSync(outDir).isDirectory()) continue
+    } catch {
+      continue
+    }
+    for (const f of readdirSync(outDir)) {
+      if (f !== '.gitkeep') rmSync(join(outDir, f), { recursive: true, force: true })
+    }
+  }
+}
+
 beforeAll(() => {
   home = mkdtempSync(join(tmpdir(), 'nyw-ws-home-'))
   spacesDir = mkdtempSync(join(tmpdir(), 'nyw-ws-spaces-'))
   cpSync(EXAMPLE, join(spacesDir, 'exemple-rapport'), { recursive: true })
+  stripStageOutputs(join(spacesDir, 'exemple-rapport'))
   // Un workspace cassé : présent dans le listing, avec sa raison.
   mkdirSync(join(spacesDir, 'casse'), { recursive: true })
   return startLlmMock(0).then((m) => {

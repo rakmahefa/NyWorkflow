@@ -20,7 +20,7 @@
 └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Le serveur web embarque aussi deux API same-origin (plugin Vite, branchées en dev comme en preview) : `/sessions` (journaux — le navigateur y lit et écrit les échanges, il ne touche jamais les fichiers) et `/workspaces` (moteur ICM — exécution des étapes côté serveur, l'état des runs dérivé des journaux). Les journaux vivent sous `.nyworkflow/` à la racine du repo, les workspaces sous `examples/workspaces/` — deux emplacements surchargeables par `NYW_HOME` et `NYW_WORKSPACES`.
+Le serveur web embarque aussi deux API same-origin (plugin Vite, branchées en dev comme en preview) : `/sessions` (journaux — le navigateur y lit et écrit les échanges, il ne touche jamais les fichiers) et `/workspaces` (moteur ICM — exécution des étapes côté serveur, état des runs et approbations d'outils dérivés des journaux). Les journaux vivent sous `.nyworkflow/` à la racine du repo, les workspaces sous `examples/workspaces/` — deux emplacements surchargeables par `NYW_HOME` et `NYW_WORKSPACES`.
 
 ## Les 5 règles
 
@@ -34,11 +34,11 @@ Le serveur web embarque aussi deux API same-origin (plugin Vite, branchées en d
 
 | Package | Responsabilité | Ne fait pas |
 |---|---|---|
-| `apps/web` | UI : sessions, chat, vue étapes ; serveur de sessions `/sessions` (plugin Vite, dev et preview) | logique métier |
-| `packages/core` | parsing workspace ICM, exécution des étapes | appels réseau |
-| `packages/session` | journalisation append-only, relecture, fork, dérivation | transformations |
+| `apps/web` | UI : sessions, chat, carte d'approbation des outils ; serveurs `/sessions` + `/workspaces` (plugin Vite, dev et preview) | logique métier |
+| `packages/core` | parsing workspace ICM, exécution des étapes, boucle d'agent (outils) | appels réseau |
+| `packages/session` | journalisation append-only, relecture, fork, dérivation (messages + activité d'outils) | transformations |
 | `packages/adapter-llm` | client OpenAI-compatible, streaming SSE (appelé same-origin via le proxy `/api` du serveur web) | parsing Gemini |
-| `packages/tools` | read / write / ls / glob / shell + permissions | politique d'exécution |
+| `packages/tools` | read / write / ls / glob, garde de périmètre (racine du workspace) | politique d'exécution |
 
 ## Workspace ICM (ce que le moteur exécute)
 
@@ -62,7 +62,25 @@ Exemple complet : `examples/workspaces/exemple-rapport/`.
 3. `core` assemble le contexte et l'envoie via le client LLM injecté (server-side, vers la passerelle).
 4. La réponse est écrite telle quelle dans `output/` — vérifiable, éditable, versionnable — et chaque événement (`stage.started`, `stage.output`, `run.completed`) est journalisé par `session` (JSONL).
 5. Pause au checkpoint : l'humain relit, édite, puis relance `advance`. L'état du run se dérive du journal — il survit aux redémarrages.
-6. Les appels d'outils passeront par `tools` (M5) avec approbation dans l'UI.
+
+## Outils et permissions (M5)
+
+Avec `"tools": true` dans `advance`, l'étape devient une petite boucle d'agent :
+
+```
+modèle ──► {"tool":"read","args":{…}}   (JSON une-ligne strict)
+   ▲                │
+   │                ▼
+   │      tools : garde de périmètre (racine du workspace)
+   │        ├─ read / ls / glob : exécution auto, résultat renvoyé au modèle
+   │        ├─ write : PAUSE — l'UI montre la carte d'approbation
+   │        └─ hors périmètre : REFUS — journalisé (tool.call + tool.result ok:false)
+   └── résultat ou refus, en JSON {"ok":true,"result":…} / {"ok":false,"error":…}
+```
+
+- **La décision humaine** passe par `POST /workspaces/:name/runs/:id/approval` (`{"decision":"approve"|"refuse"}`) : approuvé, le write s'exécute et l'étape reprend ; refusé, le modèle est informé et continue sans l'écriture.
+- **Le journal est la vérité** : `tool.call` / `tool.result` à chaque tour, l'appel en attente = `tool.call` sans `tool.result`. L'état `approval` se dérive du journal (redémarrage inclus), et `tool.result.data` permet de rejouer la conversation à l'identique lors de la reprise.
+- **Garde-fous** : périmètre lexical + realpath (un symlink ne sort pas du workspace), 8 appels d'outils max par tentative, read borné à 32 Kio, write à 128 Kio, ls/glob à 500 entrées. `shell` reste hors périmètre en v0.1.0.
 
 ## Frontières de maintenance
 
