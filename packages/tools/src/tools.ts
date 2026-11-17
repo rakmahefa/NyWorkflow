@@ -1,15 +1,20 @@
 /**
  * The tools the agent may call inside a workspace (M5: read, write, ls,
- * glob — M11: mkdir, shell, websearch). The workspace stays the perimeter:
- * every file path is checked against its root (scope.ts). `write` and
- * `shell` are dangerous — the engine pauses for a human approval before
- * they run. `mkdir` is deliberately free: the pilot wants the model to
- * shape its own tree. `websearch` is read-only on the web and returns
- * cleaned content (websearch.ts).
+ * glob — M11: mkdir, shell, websearch — M12: shell_output, shell_kill and
+ * the background flag on shell). The workspace stays the perimeter: every
+ * file path is checked against its root (scope.ts). `write` and `shell` are
+ * dangerous — the engine pauses for a human approval before they run.
+ * `mkdir` is deliberately free: the pilot wants the model to shape its own
+ * tree. `websearch` is read-only on the web and returns cleaned content
+ * (websearch.ts). A background shell (M12) runs detached after approval —
+ * followed with shell_output, stopped with shell_kill (both free: they
+ * only touch jobs the agent itself started).
  *
  * Caps keep a runaway model honest: read 32 KiB, write 128 KiB, ls/glob
- * 500 entries, glob depth 8, shell 30 s + 16 KiB per stream, websearch
- * 8 results / 64 KiB of cleaned page, at most one pending call at a time.
+ * 500 entries, glob depth 8, shell 30 s + 16 KiB per stream (foreground),
+ * background shell 10 min + 64 KiB per stream + 16 jobs per workspace,
+ * websearch 8 results / 64 KiB of cleaned page, at most one PENDING
+ * DANGEROUS call at a time (parallel safe calls are fine, M12).
  *
  * Outcomes are plain data (French summaries, journaled as-is); the tools
  * never throw for expected refusals, only for programmer errors.
@@ -21,9 +26,10 @@ import { dirname, join, relative, sep } from 'node:path'
 import { resolveInScope } from './scope.ts'
 import type { ScopeResolution } from './scope.ts'
 import { runWebsearch } from './websearch.ts'
+import type { ShellJobRegistry } from './shelljobs.ts'
 
-export type ToolName = 'read' | 'write' | 'ls' | 'glob' | 'mkdir' | 'shell' | 'websearch'
-export const TOOL_NAMES: readonly ToolName[] = ['read', 'write', 'ls', 'glob', 'mkdir', 'shell', 'websearch']
+export type ToolName = 'read' | 'write' | 'ls' | 'glob' | 'mkdir' | 'shell' | 'websearch' | 'shell_output' | 'shell_kill'
+export const TOOL_NAMES: readonly ToolName[] = ['read', 'write', 'ls', 'glob', 'mkdir', 'shell', 'websearch', 'shell_output', 'shell_kill']
 
 /** A tool call as the model expresses it (validated here, journaled verbatim). */
 export interface ToolCall {
@@ -103,8 +109,16 @@ function outOfScope(tool: ToolName, raw: string, scope: ScopeResolution): ToolRe
   return refusal('out_of_scope', `refusé (hors périmètre) : ${tool} « ${raw} » — ${scope.reason ?? 'chemin refusé'}`)
 }
 
-/**
- * Validates a call WITHOUT executing it: known tool, well-formed args,
+/** Runtime context of an execution (M12): the background job registry of
+ * the running server, when there is one. */
+export interface ToolRuntime {
+  /** Workspace name the call runs for (job labels). */
+  workspace?: string
+  /** Background shell jobs — omit and background shell/shell_output refuse honestly. */
+  jobs?: ShellJobRegistry
+}
+
+/** Validates a call WITHOUT executing it: known tool, well-formed args,
  * path inside the workspace. `approval` says whether a human must sign
  * before runTool may run.
  */
@@ -138,6 +152,15 @@ export async function checkToolCall(root: string, call: ToolCall): Promise<ToolC
     }
     if (command.length > SHELL_CMD_MAX) {
       return { ok: false, approval: false, refusal: refusal('invalid_args', `commande trop longue pour « shell » (max ${SHELL_CMD_MAX} caractères)`) }
+    }
+    if (args.background !== undefined && typeof args.background !== 'boolean') {
+      return { ok: false, approval: false, refusal: refusal('invalid_args', '« shell » : background attend un booléen (true = détaché)') }
+    }
+  }
+  if (call.tool === 'shell_output' || call.tool === 'shell_kill') {
+    const jobId = argString(args, 'jobId')
+    if (jobId === undefined || jobId.trim() === '') {
+      return { ok: false, approval: false, refusal: refusal('invalid_args', `« ${call.tool} » attend un identifiant de processus (jobId) non vide`) }
     }
   }
   if (call.tool === 'websearch') {
@@ -189,7 +212,7 @@ export async function checkToolCall(root: string, call: ToolCall): Promise<ToolC
 }
 
 /** Executes a checked, non-dangerous call (or an approved write/shell). */
-async function runTool(root: string, call: ToolCall): Promise<ToolOutcome> {
+async function runTool(root: string, call: ToolCall, runtime?: ToolRuntime): Promise<ToolOutcome> {
   switch (call.tool) {
     case 'read':
       return runRead(root, call.args)
@@ -202,10 +225,30 @@ async function runTool(root: string, call: ToolCall): Promise<ToolOutcome> {
     case 'mkdir':
       return runMkdir(root, call.args)
     case 'shell':
-      return runShell(root, call.args)
+      return runShell(root, call.args, runtime)
     case 'websearch':
       return runWebsearch(call.args)
+    case 'shell_output':
+    case 'shell_kill':
+      return runJobTool(call, runtime)
   }
+}
+
+/** shell_output / shell_kill — free tools over the agent's own jobs (M12). */
+function runJobTool(call: ToolCall, runtime?: ToolRuntime): Promise<ToolOutcome> {
+  const jobId = (argString(call.args, 'jobId') ?? '').trim()
+  if (runtime?.jobs === undefined || runtime.workspace === undefined) {
+    return Promise.resolve(refusal('io_error', `« ${call.tool} » indisponible ici — aucun registre de processus d'arrière-plan`))
+  }
+  const res = call.tool === 'shell_output' ? runtime.jobs.output(runtime.workspace, jobId) : runtime.jobs.kill(runtime.workspace, jobId)
+  if (!res.ok) return Promise.resolve(refusal('io_error', res.summary))
+  const j = res.job
+  const state = j.running ? 'en cours' : j.killed ? 'tué' : j.timedOut ? 'délai 10 min dépassé' : `code ${j.exitCode ?? 'signal'}`
+  return Promise.resolve({
+    ok: true,
+    summary: `${call.tool} « ${jobId} » — ${state}, stdout ${j.stdout.length} caractères`,
+    data: j,
+  })
 }
 
 /** mkdir (M11) — the model shapes its own tree; recursive, low risk. */
@@ -226,14 +269,27 @@ async function runMkdir(root: string, args: Record<string, unknown>): Promise<To
 }
 
 /**
- * shell (M11) — runs a command with the workspace root as cwd. The leash
- * is the human approval (isDangerous) plus hard caps: 30 s wall clock,
- * 16 KiB per stream, command ≤ 4000 chars. A timeout kills the child; the
- * outcome says so — the model learns to be shorter.
+ * shell (M11, M12) — foreground: a command with the workspace root as
+ * cwd, 30 s wall clock, 16 KiB per stream, command ≤ 4000 chars. A
+ * timeout kills the child; the outcome says so. Background (M12):
+ * `"background": true` spawns detached and returns the jobId at once —
+ * the human approval happens BEFORE the spawn, like any shell call.
  */
-function runShell(root: string, args: Record<string, unknown>): Promise<ToolOutcome> {
+function runShell(root: string, args: Record<string, unknown>, runtime?: ToolRuntime): Promise<ToolOutcome> {
   const command = (argString(args, 'command') ?? '').trim()
   if (command === '') return Promise.resolve(refusal('invalid_args', 'shell attend une commande (command) non vide'))
+  if (args.background === true) {
+    if (runtime?.jobs === undefined || runtime.workspace === undefined) {
+      return Promise.resolve(refusal('io_error', 'shell en arrière-plan indisponible ici — aucun registre de processus'))
+    }
+    const spawned = runtime.jobs.spawn(runtime.workspace, root, command)
+    if (!spawned.ok) return Promise.resolve(refusal('io_error', spawned.summary))
+    return Promise.resolve({
+      ok: true,
+      summary: `shell (arrière-plan) « ${command.slice(0, 80)} » — démarré, jobId ${spawned.job.jobId} (shell_output pour suivre, shell_kill pour arrêter)`,
+      data: { jobId: spawned.job.jobId, command, background: true, startedAt: spawned.job.startedAt },
+    })
+  }
   return new Promise<ToolOutcome>((resolve) => {
     let child: ReturnType<typeof spawn>
     try {
@@ -409,15 +465,15 @@ async function runGlob(root: string, args: Record<string, unknown>): Promise<Too
  * run. The engine calls this for non-dangerous tools (approved=true after
  * its own pause decision) and for approved writes; a direct call with
  * approved=false on a write returns the approval_required refusal instead
- * of writing.
+ * of writing. The runtime (M12) carries the background job registry.
  */
-export async function executeToolCall(root: string, call: ToolCall, approved: boolean): Promise<ToolOutcome> {
+export async function executeToolCall(root: string, call: ToolCall, approved: boolean, runtime?: ToolRuntime): Promise<ToolOutcome> {
   const check = await checkToolCall(root, call)
   if (!check.ok) return check.refusal as ToolRefusal
   if (check.approval && !approved) {
     return refusal('approval_required', `${call.tool} « ${displayPath(call)} » en attente d'approbation`)
   }
-  return runTool(root, call)
+  return runTool(root, call, runtime)
 }
 
 /** The outcome the engine journals when the human refuses a pending call. */

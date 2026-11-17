@@ -18,7 +18,7 @@ test('sessions : bouton → dialogue, /new, /help, /clear', async ({ page }) => 
   await expect(items.first()).toBeVisible()
 
   // Bouton : la boîte de dialogue s'ouvre (titre + workspace ICM).
-  await page.getByRole('button', { name: 'Nouvelle session' }).click()
+  await page.locator('[data-test="new-session-btn"]').click()
   const dialog = page.locator('[data-test="new-session-dialog"]')
   await expect(dialog).toBeVisible()
   await page.locator('[data-test="dialog-cancel-btn"]').click()

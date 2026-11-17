@@ -11,6 +11,7 @@ import {
   journalPath,
   newSessionId,
   parseJournal,
+  pendingToolCalls,
   readEvents,
 } from './index'
 import type { SessionEvent } from './index'
@@ -252,5 +253,55 @@ describe('deriveSession — activité d’outils (M5)', () => {
       { type: 'tool.result', at: T2, ok: false, summary: 'refusé (hors périmètre) : ../../etc/passwd' },
     ])
     expect(d.tools[0]).toMatchObject({ tool: 'read', ok: false, summary: 'refusé (hors périmètre) : ../../etc/passwd' })
+  })
+})
+
+describe('deriveSession — callId & renommage (M12)', () => {
+  it('appels parallèles entrelacés : chaque résultat rejoint SON appel par callId', () => {
+    const events: SessionEvent[] = [
+      { type: 'tool.call', at: T1, tool: 'read', args: { path: 'a.md' }, callId: 'aaa' },
+      { type: 'tool.call', at: T1, tool: 'ls', args: { path: '.' }, callId: 'bbb' },
+      { type: 'tool.result', at: T2, ok: true, summary: 'ls « . » — 3 entrées', callId: 'bbb' },
+      { type: 'tool.result', at: T2, ok: true, summary: 'read « a.md » — 10 caractères', callId: 'aaa' },
+    ]
+    const d = deriveSession(events)
+    expect(d.tools[0]).toMatchObject({ tool: 'read', callId: 'aaa', ok: true, summary: 'read « a.md » — 10 caractères' })
+    expect(d.tools[1]).toMatchObject({ tool: 'ls', callId: 'bbb', ok: true, summary: 'ls « . » — 3 entrées' })
+  })
+
+  it('callId absent du résultat : repli positionnel (journaux anciens)', () => {
+    const d = deriveSession([
+      { type: 'tool.call', at: T1, tool: 'read', args: {}, callId: 'aaa' },
+      { type: 'tool.result', at: T2, ok: false, summary: 'refusé' },
+    ])
+    expect(d.tools[0]).toMatchObject({ ok: false, summary: 'refusé' })
+  })
+
+  it('pendingToolCalls : les appels ouverts, callId compris', () => {
+    const events: SessionEvent[] = [
+      { type: 'tool.call', at: T1, tool: 'write', args: {}, callId: 'www' },
+      { type: 'tool.call', at: T1, tool: 'read', args: {}, callId: 'rrr' },
+      { type: 'tool.result', at: T2, ok: true, summary: 'lu', callId: 'rrr' },
+    ]
+    const open = pendingToolCalls(events)
+    expect(open).toHaveLength(1)
+    expect(open[0]).toMatchObject({ tool: 'write', callId: 'www' })
+  })
+
+  it('renommage : le dernier session.renamed gagne, fork conserve le suffixe', () => {
+    const d = deriveSession([
+      { type: 'session.created', at: T1, title: 'Ancien titre' },
+      { type: 'session.renamed', at: T2, title: '  Nouveau nom  ' },
+      userEvent,
+    ])
+    expect(d.title).toBe('Nouveau nom')
+    expect(d.baseTitle).toBe('Nouveau nom')
+
+    const forked = deriveSession([
+      { type: 'session.created', at: T1, title: 'Ancien titre' },
+      { type: 'session.forked', at: T2, from: '2026-11-17-0000' },
+      { type: 'session.renamed', at: T2, title: 'Rennomé' },
+    ])
+    expect(forked.title).toBe('Rennomé (fork)')
   })
 })

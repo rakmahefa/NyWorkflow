@@ -83,8 +83,10 @@ try {
   await page.locator('.main-head h2').filter({ hasText: 'Les loutres de Madagascar — rapport' }).waitFor({ timeout: 20_000 })
   await page.locator('[data-test="ws-banner"]').waitFor({ state: 'visible' })
 
-  // Premier tour : la lecture de la carte (read auto-exécuté) + réponse.
-  await box.fill('AGENTLIT commence par lire la carte du workspace')
+  // Premier tour : réflexion + lecture de la carte (read auto-exécuté).
+  // La maquette diffuse du reasoning_content (PENSE) avant la réponse —
+  // le bloc Réflexion de l'UI M12, ouvert ici pour la capture.
+  await box.fill('PENSE et AGENTLIT commence par lire la carte du workspace')
   await page.keyboard.press('Enter')
   try {
     await page.locator('[data-test="tool-row"]', { hasText: 'read' }).first().waitFor({ state: 'visible', timeout: 30_000 })
@@ -93,8 +95,15 @@ try {
       undefined,
       { timeout: 30_000 },
     )
+    const thinking = page.locator('[data-test="thinking-block"]')
+    await thinking.waitFor({ state: 'visible', timeout: 10_000 })
+    // Le flux doit être terminé (caret parti) : le clic ouvre alors un bloc
+    // que l'auto-repliement ne refermera pas.
+    await page.waitForFunction(() => document.querySelector('.caret') === null, undefined, { timeout: 15_000 })
+    await thinking.locator('.thinking-head').click() // déplié pour la capture
+    await thinking.locator('.thinking-body').waitFor({ state: 'visible', timeout: 10_000 })
   } catch (err) {
-    await dumpOnFailure(page, 'premier tour agentique (AGENTLIT)')
+    await dumpOnFailure(page, 'premier tour agentique (PENSE + AGENTLIT)')
     throw err
   }
 

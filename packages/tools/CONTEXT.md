@@ -12,3 +12,5 @@ Bornes : read 32 Kio, write 128 Kio, ls/glob 500 entrées, glob profondeur 8 (mo
 Ne fait pas : HTTP vers Gemini, journalisation (c'est `session` via le serveur web), politique de pause (le serveur décide).
 
 Tâches : M5 livré (quatre outils + garde). M11 (2026-11-17) : +`mkdir`, +`shell`, +`websearch`, `isDangerous` = write/shell. Pure Node, aucune dépendance aux autres packages — voir MILESTONES.md.
+
+**M12** (2026-11-17) : deux outils libres + un drapeau — `shell_output {"jobId"}` / `shell_kill {"jobId"}` (suivi/arrêt des processus d'arrière-plan de l'agent) et `background: true` sur `shell` (détaché : jobId immédiat après la même approbation). `shelljobs.ts` : `ShellJobRegistry` en mémoire (16 jobs vivants/workspace, 10 min puis SIGKILL, 64 Kio/flux, enfants unref, eviction des finis) ; `executeToolCall(root, call, approved, runtime?)` reçoit le registre via `ToolRuntime` — sans registre, l'arrière-plan et son suivi refusent honnêtement. `TOOL_NAMES` passe à 9.

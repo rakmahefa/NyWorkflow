@@ -362,3 +362,47 @@ describe('createWeb2ApiClient — tool_calls (M11)', () => {
     expect(sent.messages?.[2]?.tool_call_id).toBe('call-1')
   })
 })
+
+describe('createWeb2ApiClient — thinking (M12)', () => {
+  it('delta.reasoning_content → événements thinking, avant le texte', async () => {
+    const server = track(
+      await startServer((_req, res) => {
+        sse(res)
+        res.write(sseChunk({ reasoning_content: 'Je pense' }))
+        res.write(sseChunk({ reasoning_content: ' donc je réponds.' }))
+        res.write(sseChunk({ content: 'Réponse' }))
+        res.write(sseChunk({}, 'stop'))
+        res.write('data: [DONE]\n\n')
+        res.end()
+      }),
+    )
+    const client = createWeb2ApiClient({ baseUrl: server.baseUrl })
+    const events = await collectEvents(client.chatStream({ model: 'gemini-3.6-flash', messages: [{ role: 'user', content: 'q' }] }))
+    const thinking = events.filter((e): e is Extract<ChatStreamEvent, { type: 'thinking' }> => e.type === 'thinking').map((e) => e.delta).join('')
+    expect(thinking).toBe('Je pense donc je réponds.')
+    expect(textOf(events)).toBe('Réponse')
+    expect(events[0]?.type).toBe('thinking') // la réflexion précède le texte
+  })
+
+  it('thinking + tool_calls ensemble : les deux canaux préservés', async () => {
+    const server = track(
+      await startServer((_req, res) => {
+        sse(res)
+        res.write(sseChunk({ reasoning_content: 'Voyons.' }))
+        res.write(
+          sseChunk({
+            tool_calls: [{ index: 0, id: 'call-1', type: 'function', function: { name: 'read', arguments: '{"path":"CONTEXT.md"}' } }],
+          }),
+        )
+        res.write(sseChunk({}, 'tool_calls'))
+        res.write('data: [DONE]\n\n')
+        res.end()
+      }),
+    )
+    const client = createWeb2ApiClient({ baseUrl: server.baseUrl })
+    const events = await collectEvents(client.chatStream({ model: 'gemini-3.6-flash', messages: [{ role: 'user', content: 'q' }] }))
+    expect(events.some((e) => e.type === 'thinking')).toBe(true)
+    const calls = events.find((e) => e.type === 'tool_calls')
+    expect(calls).toMatchObject({ type: 'tool_calls', calls: [{ function: { name: 'read' } }] })
+  })
+})

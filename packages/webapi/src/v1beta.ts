@@ -163,9 +163,11 @@ export function callToText(call: ParsedToolCall): string {
   return `${TOOLS_OPEN} ${JSON.stringify({ name: call.name, arguments: call.args })} ${TOOLS_CLOSE}`
 }
 
-/** Réponse complète `:generateContent` — parts texte et/ou functionCall. */
-export function buildGenerateResponse(model: string, text: string, calls: ParsedToolCall[], prompt: string): Record<string, unknown> {
+/** Réponse complète `:generateContent` — parts texte et/ou functionCall,
+ * réflexion en tête quand il y en a (part `thought: true`, M12). */
+export function buildGenerateResponse(model: string, text: string, calls: ParsedToolCall[], prompt: string, thought = ''): Record<string, unknown> {
   const parts: Record<string, unknown>[] = []
+  if (thought.length > 0) parts.push({ text: thought, thought: true })
   if (text.length > 0) parts.push({ text })
   for (const call of calls) parts.push({ functionCall: { name: call.name, args: call.args } })
   const completion = text + calls.map(callToText).join('')
@@ -179,6 +181,11 @@ export function buildGenerateResponse(model: string, text: string, calls: Parsed
 /** Chunk de stream : un delta de texte. */
 export function generateTextChunk(text: string): Record<string, unknown> {
   return { candidates: [{ content: { role: 'model', parts: [{ text }] }, index: 0 }] }
+}
+
+/** Chunk de stream : un delta de réflexion (part `thought: true`, M12). */
+export function generateThoughtChunk(text: string): Record<string, unknown> {
+  return { candidates: [{ content: { role: 'model', parts: [{ text, thought: true }] }, index: 0 }] }
 }
 
 /** Chunk de stream : un appel d'outil décodé. */

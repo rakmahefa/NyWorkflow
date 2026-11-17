@@ -72,12 +72,23 @@ export function forkSession(id: string): Promise<SessionDto> {
   })
 }
 
+/** M12 — renames a session (append-only: session.renamed wins in derivation). */
+export function renameSession(id: string, title: string): Promise<SessionDto> {
+  return jsonFetch<SessionDto>(`/sessions/${encodeURIComponent(id)}/rename`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify({ title }),
+  })
+}
+
 // --- /workspaces : surface ICM agentique (M11) ---------------------------------
 
 /** One workspace as listed. */
 export interface WorkspaceSummaryDto {
   name: string
   summary?: string
+  /** M12 — external registration: the folder lives outside the registry. */
+  folder?: boolean
 }
 
 /** The ICM of a workspace, system prompt pre-assembled server-side. */
@@ -90,12 +101,35 @@ export interface IcmDto {
 
 /** What POST /tool answers. */
 export type ToolRunDto =
-  | { status: 'executed'; outcome: ToolOutcome }
-  | { status: 'pending'; call: { tool: string; args: unknown } }
+  | { status: 'executed'; callId: string; outcome: ToolOutcome }
+  | { status: 'pending'; callId: string; call: { tool: string; args: unknown } }
+
+// --- M12 : dossiers du disque + navigateur --------------------------------
+
+/** One directory of the folder browser. */
+export interface BrowseDirDto {
+  name: string
+  path: string
+}
+
+/** GET /workspaces/browse — the dialog's folder picker. */
+export interface BrowseDto {
+  path: string
+  parent: string | null
+  dirs: BrowseDirDto[]
+  truncated: boolean
+  home: string
+}
 
 /** All workspaces. */
 export function listWorkspaces(): Promise<WorkspaceSummaryDto[]> {
   return jsonFetch<{ workspaces: WorkspaceSummaryDto[] }>('/workspaces').then((b) => b.workspaces)
+}
+
+/** M12 — lists the sub-directories of a disk folder (home by default). */
+export function browseFolders(path?: string): Promise<BrowseDto> {
+  const q = path !== undefined && path !== '' ? `?path=${encodeURIComponent(path)}` : ''
+  return jsonFetch<BrowseDto>(`/workspaces/browse${q}`)
 }
 
 /** Scaffolds a fresh agentic workspace (charter + inbox/notes/research/outputs). */
@@ -104,6 +138,15 @@ export function createWorkspace(name: string): Promise<{ name: string; tree: str
     method: 'POST',
     headers: jsonHeaders,
     body: JSON.stringify({ name }),
+  })
+}
+
+/** M12 — registers an EXISTING disk folder as a workspace (no scaffold, as-is). */
+export function registerWorkspace(name: string, path: string): Promise<{ name: string; tree: string; folder?: boolean }> {
+  return jsonFetch<{ name: string; tree: string; folder?: boolean }>('/workspaces', {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify({ name, path }),
   })
 }
 

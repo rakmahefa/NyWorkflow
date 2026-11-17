@@ -13,6 +13,9 @@ const FIXED_REPLY =
 // marqueur ; la maquette émet un tool_call standard (SSE delta.tool_calls +
 // finish_reason "tool_calls"). Au tour suivant (un rôle tool dans
 // l'historique), elle répond par le texte final.
+// M12 : PARALLÈLE (deux appels en un tour), ARRIÈRE-PLAN (shell background),
+// SUIVIJOB (shell_output avec le jobId lu dans les résultats d'outils)
+// et la réflexion (PENSE → delta.reasoning_content avant le texte).
 const TOOL_SCENARIOS = {
   AGENTLIT: {
     name: 'read',
@@ -29,6 +32,18 @@ const TOOL_SCENARIOS = {
     arguments: { path: 'research/e2e-dossier' },
     final: 'DOSSIER CRÉÉ — research/e2e-dossier.',
   },
+  AGENTPARALLELE: {
+    twoCalls: [
+      { name: 'read', arguments: { path: 'CONTEXT.md' } },
+      { name: 'ls', arguments: { path: '.' } },
+    ],
+    final: 'PARALLÈLE FAIT — deux lectures en un tour.',
+  },
+  AGENTARRIEREPLAN: {
+    name: 'shell',
+    arguments: { command: 'sleep 3 && echo bg-e2e', background: true },
+    final: 'ARRIERE-PLAN LANCE — suis-le.',
+  },
 }
 
 function scenarioFor(messages) {
@@ -36,6 +51,14 @@ function scenarioFor(messages) {
   const text = typeof lastUser === 'string' ? lastUser : ''
   for (const [marker, sc] of Object.entries(TOOL_SCENARIOS)) {
     if (text.includes(marker)) return { marker, ...sc }
+  }
+  // SUIVIJOB : shell_output sur le jobId rendu par un arrière-plan précédent
+  // — le jobId vit dans les résultats d'outils de TOUT l'historique (le
+  // lancement appartient au tour précédent, avant le dernier message).
+  if (text.includes('SUIVIJOB')) {
+    const jobJson = JSON.stringify((messages ?? []).filter((m) => m?.role === 'tool').map((m) => m?.content ?? ''))
+    const m = jobJson.match(/job-[a-z0-9-]+/)
+    if (m) return { marker: 'SUIVIJOB', name: 'shell_output', arguments: { jobId: m[0] }, final: 'SUIVI FAIT — le job est visible.' }
   }
   return null
 }
@@ -171,20 +194,31 @@ export function startMockGateway(port) {
         // Un appel d'outil : delta.tool_calls standard + finish "tool_calls".
         if (scenario !== null && !hasToolResult) {
           chunk({})
-          chunk({
-            tool_calls: [
-              {
-                index: 0,
-                id: 'call-e2e',
-                type: 'function',
-                function: { name: scenario.name, arguments: JSON.stringify(scenario.arguments) },
-              },
-            ],
+          const calls = scenario.twoCalls ?? (scenario.name ? [scenario] : [])
+          calls.forEach((c, i) => {
+            chunk({
+              tool_calls: [
+                {
+                  index: i,
+                  id: `call-e2e-${i}`,
+                  type: 'function',
+                  function: { name: c.name, arguments: JSON.stringify(c.arguments) },
+                },
+              ],
+            })
           })
           chunk({}, 'tool_calls')
           res.write('data: [DONE]\n\n')
           res.end()
           return
+        }
+
+        // Réflexion (M12) : le marqueur PENSE diffuse un raisonnement avant
+        // le texte — dialecte DeepSeek (delta.reasoning_content).
+        const userText = typeof lastUser === 'string' ? lastUser : ''
+        if (userText.includes('PENSE')) {
+          chunk({ reasoning_content: 'D\u00e9composons la demande… ' })
+          chunk({ reasoning_content: 'la r\u00e9ponse s\u2019impose.' })
         }
 
         // Réponse finale (texte) — le scénario conclut, sinon la réponse type.

@@ -24,7 +24,7 @@
  */
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
-import { createGeminiProvider, type Provider } from './provider.ts'
+import { createGeminiProvider, type Provider, type ProviderChatEvent } from './provider.ts'
 import { GeminiError } from './gemini.ts'
 import { TurnJournal, DEFAULT_JOURNAL_CAPACITY } from './journal.ts'
 import { messagesToPrompt, usage, type ChatMessage } from './convert.ts'
@@ -34,10 +34,12 @@ import {
   parseGenerateRequest,
   buildGenerateResponse,
   generateTextChunk,
+  generateThoughtChunk,
   generateCallChunk,
   generateFinalChunk,
   callToText,
 } from './v1beta.ts'
+import { listModelInfo } from './models.ts'
 import type { WebApiConfig } from './config.ts'
 import { WEBAPI_VERSION } from './version.ts'
 
@@ -164,6 +166,8 @@ export function createWebApiServer(config: WebApiConfig, provider: Provider = we
       provider: provider.id,
       defaultModel: d.defaultModel,
       models: d.models,
+      /** M12 — métadonnées d'affichage des modèles (libellé, famille, réflexion). */
+      modelInfo: listModelInfo(d.modelTable),
       gateway: {
         cookies: d.cookies,
         bl: d.bl,
@@ -275,13 +279,17 @@ export function createWebApiServer(config: WebApiConfig, provider: Provider = we
       if (writable()) res.write(chunk({}, null))
       let finishReason: 'stop' | 'tool_calls' = 'stop'
       if (!ctx.toolsActive) {
-        // Chemin historique — inchangé octet pour octet.
-        for await (const delta of provider.chatStream({ model: ctx.model, messages: ctx.messages as ProviderChatMessages, signal: controller.signal })) {
+        // Chemin historique — le raisonnement (M12) passe en
+        // delta.reasoning_content avant le texte, dialecte DeepSeek.
+        for await (const ev of provider.chatStream({ model: ctx.model, messages: ctx.messages as ProviderChatMessages, signal: controller.signal })) {
           if (!writable() || controller.signal.aborted) break
-          res.write(chunk({ content: delta }, null))
+          if (ev.kind === 'thought') res.write(chunk({ reasoning_content: ev.delta }, null))
+          else res.write(chunk({ content: ev.delta }, null))
         }
       } else {
         // M10 — le texte traverse le splitter : blocs d'appel → delta.tool_calls.
+        // M12 — la réflexion ne traverse JAMAIS le splitter (ce n'est pas du
+        // texte d'appel) : elle part directement en reasoning_content.
         const splitter = new ToolStreamSplitter()
         let callIndex = 0
         let sawCall = false
@@ -302,9 +310,13 @@ export function createWebApiServer(config: WebApiConfig, provider: Provider = we
             )
           }
         }
-        for await (const delta of provider.chatStream({ model: ctx.model, messages: ctx.messages as ProviderChatMessages, signal: controller.signal })) {
+        for await (const ev of provider.chatStream({ model: ctx.model, messages: ctx.messages as ProviderChatMessages, signal: controller.signal })) {
           if (!writable() || controller.signal.aborted) break
-          emit(splitter.push(delta))
+          if (ev.kind === 'thought') {
+            res.write(chunk({ reasoning_content: ev.delta }, null))
+            continue
+          }
+          emit(splitter.push(ev.delta))
         }
         if (controller.signal.aborted || !writable()) return
         emit(splitter.finish())
@@ -336,14 +348,21 @@ export function createWebApiServer(config: WebApiConfig, provider: Provider = we
   async function completeChat(res: ServerResponse, ctx: ChatCtx): Promise<void> {
     try {
       if (!ctx.toolsActive) {
-        // Chemin historique — inchangé octet pour octet.
-        const content = await provider.chatComplete({ model: ctx.model, messages: ctx.messages as ProviderChatMessages })
+        // Chemin historique — M12 : le raisonnement rejoint la réponse en
+        // message.reasoning_content quand il existe (additif).
+        const { text: content, reasoning } = await provider.chatComplete({ model: ctx.model, messages: ctx.messages as ProviderChatMessages })
         return json(res, 200, {
           id: ctx.id,
           object: 'chat.completion',
           created: ctx.created,
           model: ctx.model,
-          choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+          choices: [
+            {
+              index: 0,
+              message: { role: 'assistant', content, ...(reasoning.length > 0 ? { reasoning_content: reasoning } : {}) },
+              finish_reason: 'stop',
+            },
+          ],
           usage: usage(ctx.prompt ?? '', content),
         })
       }
@@ -389,20 +408,26 @@ export function createWebApiServer(config: WebApiConfig, provider: Provider = we
     }
   }
 
-  /** Un tour complet collecté à travers le splitter — texte, appels, événements bruts. */
+  /** Un tour complet collecté à travers le splitter — texte, appels, réflexion (M12). */
   interface TurnCollect {
     text: string
     calls: ParsedToolCall[]
     events: ToolStreamEvent[]
+    thought: string
   }
 
   async function collectTurn(model: string, messages: ChatMessage[]): Promise<TurnCollect> {
     const splitter = new ToolStreamSplitter()
     const events: ToolStreamEvent[] = []
     let text = ''
+    let thought = ''
     const calls: ParsedToolCall[] = []
-    for await (const delta of provider.chatStream({ model, messages })) {
-      const out = splitter.push(delta)
+    for await (const ev of provider.chatStream({ model, messages })) {
+      if (ev.kind === 'thought') {
+        thought += ev.delta
+        continue
+      }
+      const out = splitter.push(ev.delta)
       if (out.text.length > 0 || out.toolCalls.length > 0) {
         events.push(out)
         text += out.text
@@ -415,7 +440,7 @@ export function createWebApiServer(config: WebApiConfig, provider: Provider = we
       text += tail.text
       calls.push(...tail.toolCalls)
     }
-    return { text, calls, events }
+    return { text, calls, events, thought }
   }
 
   // ------------------------------------------------------------------ v1beta (M10)
@@ -489,7 +514,7 @@ export function createWebApiServer(config: WebApiConfig, provider: Provider = we
     if (!streaming) {
       try {
         const turn = await collectTurn(model, messages)
-        return json(res, 200, buildGenerateResponse(model, turn.text, turn.calls, normalized.prompt))
+        return json(res, 200, buildGenerateResponse(model, turn.text, turn.calls, normalized.prompt, turn.thought))
       } catch (err) {
         const e = upstreamError(err)
         return gerr(res, e.code, e.message, e.status)
@@ -501,6 +526,7 @@ export function createWebApiServer(config: WebApiConfig, provider: Provider = we
       try {
         const turn = await collectTurn(model, messages)
         const chunks: unknown[] = []
+        if (turn.thought.length > 0) chunks.push(generateThoughtChunk(turn.thought))
         for (const ev of turn.events) {
           if (ev.text.length > 0) chunks.push(generateTextChunk(ev.text))
           for (const call of ev.toolCalls) chunks.push(generateCallChunk(call))
@@ -534,9 +560,13 @@ export function createWebApiServer(config: WebApiConfig, provider: Provider = we
     try {
       const splitter = new ToolStreamSplitter()
       let completion = ''
-      for await (const delta of provider.chatStream({ model, messages, signal: controller.signal })) {
+      for await (const ev of provider.chatStream({ model, messages, signal: controller.signal })) {
         if (!writable() || controller.signal.aborted) break
-        const out = splitter.push(delta)
+        if (ev.kind === 'thought') {
+          send(generateThoughtChunk(ev.delta))
+          continue
+        }
+        const out = splitter.push(ev.delta)
         if (out.text.length > 0) {
           completion += out.text
           send(generateTextChunk(out.text))

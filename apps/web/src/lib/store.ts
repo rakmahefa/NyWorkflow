@@ -1,25 +1,30 @@
-import type { ChatMsg, Role, SessionInfo } from './types'
+import type { ChatMsg, RequestTrace, Role, SessionInfo } from './types'
 
 /**
- * In-memory session store — the UI's single state (M3, agentic M11).
- * Hydrated from the /sessions journals at boot (server mode), or grown
- * locally (memory fallback when the API is unreachable). Snapshot-based:
- * every mutation rebuilds an immutable snapshot, so React's
- * useSyncExternalStore re-renders exactly once per change.
+ * In-memory session store — the UI's single state (M3, agentic M11, M12:
+ * thinking streams, request traces, rename). Hydrated from the /sessions
+ * journals at boot (server mode), or grown locally (memory fallback when
+ * the API is unreachable). Snapshot-based: every mutation rebuilds an
+ * immutable snapshot, so React's useSyncExternalStore re-renders exactly
+ * once per change.
  *
  * Rows are chat messages AND tool rows (role 'tool'): the agent's calls
  * live in the same stream as the conversation — journaled server-side as
- * tool.call / tool.result, replayed here in order.
+ * tool.call / tool.result, replayed here in order. Request traces (M12)
+ * are browser-side only: the panel states it after a reload.
  */
 export interface StoreSnapshot {
   sessions: readonly SessionInfo[]
   messages: readonly ChatMsg[]
+  /** M12 — model requests of the live agent loops, per session. */
+  traces: readonly RequestTrace[]
 }
 
 export class SessionStore {
   private sessions: SessionInfo[] = []
   private messages: ChatMsg[] = []
-  private snapshot: StoreSnapshot = { sessions: [], messages: [] }
+  private traces: RequestTrace[] = []
+  private snapshot: StoreSnapshot = { sessions: [], messages: [], traces: [] }
   private listeners = new Set<() => void>()
 
   subscribe = (fn: () => void): (() => void) => {
@@ -32,7 +37,7 @@ export class SessionStore {
   getSnapshot = (): StoreSnapshot => this.snapshot
 
   private commit(): void {
-    this.snapshot = { sessions: [...this.sessions], messages: [...this.messages] }
+    this.snapshot = { sessions: [...this.sessions], messages: [...this.messages], traces: [...this.traces] }
     for (const fn of this.listeners) fn()
   }
 
@@ -65,7 +70,20 @@ export class SessionStore {
     const before = this.sessions.length
     this.sessions = this.sessions.filter((s) => s.id !== id)
     this.messages = this.messages.filter((m) => m.sessionId !== id)
+    this.traces = this.traces.filter((t) => t.sessionId !== id)
     const hit = before !== this.sessions.length
+    if (hit) this.commit()
+    return hit
+  }
+
+  /** M12 — renames a session (the journal has the server-side truth). */
+  renameSession(id: string, title: string): boolean {
+    let hit = false
+    this.sessions = this.sessions.map((s) => {
+      if (s.id !== id) return s
+      hit = true
+      return { ...s, title }
+    })
     if (hit) this.commit()
     return hit
   }
@@ -76,7 +94,6 @@ export class SessionStore {
     this.messages = [...messages]
     this.commit()
   }
-
   appendMessage(sessionId: string, role: Role, text: string): ChatMsg {
     const msg: ChatMsg = { id: uid(), sessionId, role, text, at: Date.now() }
     this.messages.push(msg)
@@ -114,6 +131,40 @@ export class SessionStore {
     })
     if (hit) this.commit()
     return hit
+  }
+
+  /** M12 — grows a message's thinking (live reasoning, display-only). */
+  appendThinking(id: string, delta: string): boolean {
+    let hit = false
+    this.messages = this.messages.map((m) => {
+      if (m.id !== id) return m
+      hit = true
+      return { ...m, thinking: (m.thinking ?? '') + delta }
+    })
+    if (hit) this.commit()
+    return hit
+  }
+
+  /** M12 — records one model request of the live agent loop. */
+  appendTrace(trace: RequestTrace): void {
+    this.traces.push(trace)
+    this.commit()
+  }
+
+  /** M12 — settles a trace (duration, outcome, received chars). */
+  settleTrace(id: string, patch: Partial<Pick<RequestTrace, 'ms' | 'outcome' | 'error' | 'thinkingChars' | 'textChars'>>): boolean {
+    let hit = false
+    this.traces = this.traces.map((t) => {
+      if (t.id !== id) return t
+      hit = true
+      return { ...t, ...patch }
+    })
+    if (hit) this.commit()
+    return hit
+  }
+
+  listTraces(sessionId: string): readonly RequestTrace[] {
+    return this.snapshot.traces.filter((t) => t.sessionId === sessionId)
   }
 
   setStreaming(id: string, streaming: boolean): void {

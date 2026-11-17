@@ -59,32 +59,40 @@ mon-workspace/            ← créé par le scaffold (dialogue « nouvelle sessi
 
 À chaque tour, `core.loadIcm` remonte l'arbre (profondeur 6, 500 entrées, poubelles ignorées) et tous les `CONTEXT.md` (racine d'abord, 8 fichiers, 32 Kio chacun) ; `buildIcmSystemPrompt` assemble le prompt système — méthode ICM, arbre, chartes, conventions. L'arbre est **libre** : le modèle le fait grandir (`mkdir`), un sous-dossier qui acquiert un rôle mérite son propre `CONTEXT.md`.
 
-## Flux d'un tour agentique (M11)
+## Flux d'un tour agentique (M11, élargi M12)
 
 ```
 pilote ──message──► navigateur (boucle agentique, max 12 tours)
    ▲                     │ 1. GET /workspaces/:ws/icm — l'ICM fraîche (l'arbre a pu grandir)
+   │                     │    + la méthode agentique : paralléliser, détacher, explorer sans demander
    │                     │ 2. messages = [system ICM] + historique (chat + tours d'outils)
-   │                     │ 3. POST /api/v1beta/chat/completions { tools: 7 déclarations }
+   │                     │ 3. POST /api/v1beta/chat/completions { model[+@think=N], tools: 9 déclarations }
    │                     ▼
    │             passerelle webapi (outils → convention de blocs amont, décodage en flux)
-   │                     │
-   │      ┌── texte ─────┤── tool_calls (standard) ──┐
-   │      ▼              ▼                           │
-   │   streaming      fin du tour            pour chaque appel :
-   │   (placeholder)  (journalisé)             POST /workspaces/:ws/tool { sessionId, tool, args }
-   │                                              ├─ read/ls/glob/mkdir/websearch : AUTO → résultat journalisé
-   │                                              ├─ write/shell : PAUSE — tool.call sans résultat
-   │                                              │    (carte d'approbation dans l'UI ; la décision
-   │                                              │     POST /tool/decision exécute ou refuse, journalise)
+   │                     │ thoughts (candidate[37][0][0]) → delta.reasoning_content — jamais dans le splitter
+   │      ┌── texte ─────┤── réflexion (thinking) ──┤── tool_calls (standard) ──┐
+   │      ▼              ▼                        │                          │
+   │   streaming      bloc « Réflexion »     bloc « Réflexion »     pour chaque appel :
+   │   (placeholder)  repliable (UI)        repliable (UI)          POST /workspaces/:ws/tool { sessionId, tool, args, → callId }
+   │                                              ├─ read/ls/glob/mkdir/websearch/shell_output/shell_kill : AUTO
+   │                                              │    → les SÛRS d'un tour partent EN PARALLÈLE (Promise.all)
+   │                                              ├─ write/shell (background compris) : PAUSE — tool.call ouvert
+   │                                              │    (carte d'approbation avec aperçu ; /tool/decision)
+   │                                              ├─ shell {background:true} approuvé → jobId immédiat
+   │                                              │    (registre mémoire : 16 jobs/ws, 10 min, 64 Kio/flux)
    │                                              └─ refus (hors périmètre, bornes) : journalisé, le modèle ajuste
-   │                     │ résultat au format {"ok":true,"result":…} / {"ok":false,"error":…}
-   └─────────────────────┘ retour au modèle → … jusqu'à la réponse finale
+   │                     │ résultat {"ok":true,"result":…} / {"ok":false,"error":…} — apparié par callId
+   └─────────────────────┘ retour au modèle → … jusqu'à la réponse finale (Stop = annulation propre)
 ```
 
-- **La décision humaine survit aux redémarrages** : un `tool.call` sans `tool.result` au journal = approbation en attente — dérivée au rechargement, la carte se réaffiche.
-- **Garde-fous** : périmètre lexical + realpath (un symlink ne sort pas du workspace), read 32 Kio, write 128 Kio, ls/glob 500 entrées, shell 30 s + 16 Kio/flux + commande ≤ 4 000 caractères, websearch 8 résultats / page nettoyée 64 Kio / URL http(s) ≤ 2 048.
+- **La décision humaine survit aux redémarrages** : un `tool.call` **dangereux** sans `tool.result` au journal = approbation en attente — dérivée au rechargement, la carte se réaffiche. Un appel **sûr** orphelin (tour coupé en plein parallèle) est réglé « interrompu » à l'hydratation — pas de fausse carte.
+- **Le 409 « un appel déjà en attente » ne porte que sur les appels dangereux ouverts** : deux POST d'outils sûrs concurrents sont légaux (M12). `callId` sur `tool.call`/`tool.result` (additif) apparie chaque résultat à SON appel — les journaux M4–M11 restent lisibles par repli positionnel.
+- **Garde-fous** : périmètre lexical + realpath (un symlink ne sort pas du workspace), read 32 Kio, write 128 Kio, ls/glob 500 entrées, shell avant-plan 30 s + 16 Kio/flux + commande ≤ 4 000 caractères, shell arrière-plan 10 min + 64 Kio/flux + 16 jobs vivants par workspace, websearch 8 résultats / page nettoyée 64 Kio / URL http(s) ≤ 2 048.
 - **websearch nettoie pour le modèle** : blocs `script/style/nav/header/footer/aside/form/…` et commentaires supprimés, attributs réduits à `href`/`src`/`alt` (URI `data:` virées), balises sémantiques **gardées**, espaces rabotés, contenu plafonné.
+
+## Les workspaces : registre, manifeste, dossiers du disque (M12)
+
+Un workspace est un **nom** résolu en racine : un sous-dossier du registre (`examples/workspaces/`, surchargé par `NYW_WORKSPACES`) ou une inscription du **manifeste** `workspaces.json` au pied du registre — un dossier quelconque du disque, enregistré depuis l'UI (**Dossier du disque**, navigateur `GET /workspaces/browse`) ou l'API (`POST /workspaces {name, path}`). Le manifeste est relu par mtime (comme les cookies et `accounts.json`) : l'éditer à la main ne redémarre rien. Le dossier registre gagne en conflit de nom ; une inscription dont le dossier a disparu est ignorée sans erreur. `POST /sessions` valide son `workspace` par le même canal (`workspaceExists`). Aucun fichier n'est créé dans un dossier enregistré : l'ICM charge l'arbre et les `CONTEXT.md` existants tels quels.
 
 ## Frontières de maintenance
 
@@ -102,6 +110,6 @@ pilote ──message──► navigateur (boucle agentique, max 12 tours)
 - **D1 — Projet neuf en TypeScript**, pas un fork de deepseek-harness : ses 45 packages Cordis sont exactement la dette que NyWorkflow veut éviter. On garde l'UX, pas le moteur.
 - **D2 — Passerelle, pas portage** (phase 1) : réutiliser `gemini-web2api` (ny-gemini-acp) plutôt que réécrire auth/stream en TS. **Révisée en phase 2 (M7)** : la passerelle est **réimplémentée dans le repo** (`packages/webapi`), en inversant chaque cause de casse (`bl` auto-découvert, modèles data-driven, jetons rafraîchis avant retry). **Révisée en M8** : la passerelle est **intégrée au serveur web** (`apps/web/src/server/embed.ts`) — `pnpm dev` démarre tout. **Révisée en M9** : l'adresse de session devient **une donnée par compte** (manifeste `accounts.json`). **Révisée en M10** : la passerelle parle les **deux dialectes de clients** (OpenAI `/v1` avec `tools`, Google `/v1beta`) via une convention de blocs décodée en flux. **Révisée en M11** : le dialecte OpenAI est aussi servi **sous `/v1beta/chat/completions`** — la liste des namespaces est une donnée (`OPENAI_CHAT_PATHS`), l'app consomme v1beta par défaut.
 - **D2bis — Zéro dépendance runtime** pour la passerelle : `node:http`, `node:crypto`, `fetch` natif — la chaîne de test ne dépend d'aucun serveur externe (maquette HTTP de l'interface Gemini).
-- **D3 — ICM pur** : un agent, un workspace, des fichiers. **Révisée en M11 (pivot piloté)** : phase 1 disait « pas de chat libre » avec des workflows en étapes numérotées — le pilotage a inversé : **les sessions sont la seule surface**, chacune liée à un workspace **à arbre libre**, et le modèle orchestre lui-même avec ses outils guidé par l'ICM. Le moteur d'étapes (runs/advance/checkpoints) a été retiré avec ses endpoints ; ce qui reste de l'ICM (arbre, CONTEXT.md, journal) est le cœur.
+- **D3 — ICM pur** : un agent, un workspace, des fichiers. **Révisée en M11 (pivot piloté)** : phase 1 disait « pas de chat libre » avec des workflows en étapes numérotées — le pilotage a inversé : **les sessions sont la seule surface**, chacune liée à un workspace **à arbre libre**, et le modèle orchestre lui-même avec ses outils guidé par l'ICM. Le moteur d'étapes (runs/advance/checkpoints) a été retiré avec ses endpoints ; ce qui reste de l'ICM (arbre, CONTEXT.md, journal) est le cœur. **Révisée en M12** : un workspace peut être **n'importe quel dossier du disque** (manifeste `workspaces.json`) — le dossier de l'utilisateur EST le contexte, et l'ICM enseigne la méthode agentique (parallélisme, arrière-plan) au-delà de la seule charte.
 - **D4 — Sessions en JSONL append-only** : l'historique envoyé au modèle est toujours re-dérivé du journal — messages **et** tours d'outils.
-- **D5 — Outils enfermés dans le workspace** : tout chemin sortant de la racine est refusé ; `write` et `shell` attendent une approbation humaine, tout est journalisé.
+- **D5 — Outils enfermés dans le workspace** : tout chemin sortant de la racine est refusé ; `write` et `shell` attendent une approbation humaine, tout est journalisé. **Précisée en M12** : les appels **sûrs** d'un même tour s'exécutent en parallèle (appariement journal par `callId`) — la porte d'approbation reste **une à la fois** ; un shell arrière-plan suit le même rite (approbation PUIS détachement), suivi et arrêt libres (`shell_output`/`shell_kill` ne touchent que les jobs de l'agent).

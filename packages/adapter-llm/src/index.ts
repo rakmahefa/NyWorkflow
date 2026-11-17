@@ -50,8 +50,11 @@ export interface ChatOptions {
   signal?: AbortSignal
 }
 
-/** What chatStream yields: text deltas, reassembled tool calls, the finish. */
+/** What chatStream yields: thinking deltas, text deltas, reassembled tool
+ * calls, the finish. Thinking (M12) is display-only: never sent back to
+ * the model. */
 export type ChatStreamEvent =
+  | { type: 'thinking'; delta: string }
   | { type: 'text'; delta: string }
   | { type: 'tool_calls'; calls: ToolCallRequest[] }
   | { type: 'finish'; reason: string }

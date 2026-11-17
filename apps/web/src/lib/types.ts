@@ -6,7 +6,7 @@ export interface SessionInfo {
   id: string
   title: string
   createdAt: number
-  /** ICM workspace the session is bound to (M11: every new session has one). */
+  /** ICM workspace the session is bound to (M11: every session has one). */
   workspace?: string
 }
 
@@ -19,6 +19,8 @@ export interface ChatMsg {
   at: number
   /** True while the assistant reply is still streaming. */
   streaming?: boolean
+  /** M12 — the model's thinking, streamed live; display-only, never journaled. */
+  thinking?: string
   /** Tool rows (role === 'tool'): the call and, once resolved, its outcome. */
   tool?: string
   args?: unknown
@@ -38,4 +40,30 @@ export interface TurnRecordDto {
   ms: number
   account?: number
   error?: { kind: string; message: string; status?: number }
+}
+
+/** M12 — one model request of the agent loop, tracked live (not journaled:
+ * these live in the browser; tool history survives via the journal). */
+export interface RequestTrace {
+  id: string
+  sessionId: string
+  at: number
+  /** Model id actually requested (think suffix included). */
+  model: string
+  /** 0–4, or null when the model's default applies. */
+  thinkLevel: number | null
+  /** Round within the turn (1 = the first request). */
+  round: number
+  /** Messages sent, tool declarations sent. */
+  messages: number
+  tools: number
+  /** ms until the stream produced its last event. */
+  ms: number
+  /** 'ok' | 'tool_calls' | 'error' | 'stopped'. */
+  outcome: 'ok' | 'tool_calls' | 'error' | 'stopped'
+  /** Error message, when outcome = 'error'. */
+  error?: string
+  /** Characters of thinking and text received. */
+  thinkingChars: number
+  textChars: number
 }

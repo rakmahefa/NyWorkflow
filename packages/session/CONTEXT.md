@@ -11,3 +11,5 @@ M5 (2026-11-17) : deux champs additifs de plus — `data` sur `tool.result` (la 
 
 
 M11 (2026-11-17) : `deleteJournal` — la suppression de session (le journal disparaît entier : une suppression est une décision, pas une édition) ; les événements `tool.call` / `tool.result` sont désormais écrits par le serveur web (l'API des outils de `/workspaces`), et le DTO `/sessions` expose les événements bruts ordonnés — le navigateur en dérive messages, lignes d'outils et historique modèle. Les événements `stage.*` / `run.completed` ne sont plus écrits (moteur retiré) mais restent déclarés : les journaux M4–M10 se lisent toujours.
+
+**M12** (2026-11-17) : champs additifs — `callId?` sur `tool.call` et `tool.result` (appariement parallèle-sûr : `deriveSession` apparie par id quand présent, repli positionnel pour M4–M11 ; `pendingToolCalls` exporté — la détection d'attente côté serveur ne bloque plus que sur les appels dangereux ouverts) ; événement `session.renamed` (le dernier gagne dans la dérivation, le fork conserve son suffixe).

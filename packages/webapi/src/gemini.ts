@@ -95,6 +95,7 @@ export interface GeminiTurnOptions {
 
 export type GeminiStreamItem =
   | { type: 'text'; delta: string }
+  | { type: 'thought'; delta: string }
   | { type: 'toolCall'; id: string; name: string; arguments: unknown }
   | { type: 'metadata'; kind: string; value: unknown }
 
@@ -104,6 +105,8 @@ export interface GeminiDescribe {
   bl: string | null
   defaultModel: string
   models: string[]
+  /** M12 — la table effective (métadonnées d'affichage côté serveur HTTP). */
+  modelTable: Record<string, { mode: number; think: number; extra?: Record<string, number> }>
   cookieFile: string
   rawCookies: boolean
   accounts: AccountStatus[]
@@ -127,6 +130,8 @@ interface PageState {
 interface TurnState {
   decoder: FrameDecoder
   emitted: string
+  /** M12 — thought snapshots already emitted (own divergence tolerance). */
+  emittedThought: string
   emittedTools: Set<string>
   diverged: boolean
   rawAcc: string
@@ -195,6 +200,7 @@ export class GeminiWebClient {
       bl: this.forcedBl ?? this.page?.bl ?? null,
       defaultModel: this.defaultModel,
       models: Object.keys(table),
+      modelTable: table,
       cookieFile: store.cookieFile,
       rawCookies: store.rawCookies,
       accounts: store.accounts,
@@ -231,7 +237,7 @@ export class GeminiWebClient {
 
     try {
       while (true) {
-        const state: TurnState = { decoder: new FrameDecoder(), emitted: '', emittedTools: new Set(), diverged: false, rawAcc: '' }
+        const state: TurnState = { decoder: new FrameDecoder(), emitted: '', emittedThought: '', emittedTools: new Set(), diverged: false, rawAcc: '' }
         try {
           yield* this.turnWithRetries(options, resolved, state, signal, record)
           record.ok = true
@@ -248,6 +254,7 @@ export class GeminiWebClient {
           if (
             error.kind === 'authentication' &&
             state.emitted.length === 0 &&
+            state.emittedThought.length === 0 &&
             state.emittedTools.size === 0 &&
             this.cookies.rotate(triedAccounts)
           ) {
@@ -313,7 +320,8 @@ export class GeminiWebClient {
         if (fatal) throw error
         // On ne réessaie que si rien n'a été consommé : réémettre un texte déjà
         // livré dupliquerait la réponse chez le consommateur.
-        const canRetry = attempt < this.retryAttempts && state.emitted.length === 0 && state.emittedTools.size === 0
+        const canRetry =
+          attempt < this.retryAttempts && state.emitted.length === 0 && state.emittedThought.length === 0 && state.emittedTools.size === 0
         if (!canRetry) {
           if (error.kind === 'http' && (error.status === 401 || error.status === 403)) {
             throw new GeminiError('authentication', `Cookies Gemini expirés ou refusés (HTTP ${error.status}) — rechargez-les puis réessayez.`, error.status)
@@ -401,6 +409,21 @@ export class GeminiWebClient {
       if (state.emittedTools.has(event.id)) return
       state.emittedTools.add(event.id)
       yield { type: 'toolCall', id: event.id, name: event.name, arguments: event.arguments }
+      return
+    }
+    // Thought snapshot (M12): same delta-by-snapshot logic as text, but
+    // tolerant — a thought that shrinks or resets (mid-stream rewriting)
+    // re-bases silently instead of poisoning the text divergence flag.
+    if (event.type === 'thought') {
+      if (event.text === state.emittedThought) return
+      if (!event.text.startsWith(state.emittedThought)) {
+        state.emittedThought = event.text
+        yield { type: 'thought', delta: event.text }
+        return
+      }
+      const delta = cleanText(event.text.slice(state.emittedThought.length), false)
+      state.emittedThought = event.text
+      if (delta.length > 0) yield { type: 'thought', delta }
       return
     }
     // Snapshot texte : delta = ce qui dépasse ce qui a déjà été émis.

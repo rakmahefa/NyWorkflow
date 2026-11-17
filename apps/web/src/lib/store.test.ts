@@ -152,3 +152,36 @@ describe('SessionStore — hydratation et fork (M3)', () => {
     expect(s.copyMessages(a.id, b.id)).toBe(0)
   })
 })
+
+describe('SessionStore — M12 (thinking, traces, renommage)', () => {
+  it('appendThinking accumule la réflexion sans toucher au texte', () => {
+    const store = new SessionStore()
+    const s = store.createSession('S')
+    const msg = store.appendMessage(s.id, 'assistant', '')
+    store.appendThinking(msg.id, 'Je pense')
+    store.appendThinking(msg.id, ' donc je suis.')
+    const m = store.listMessages(s.id).find((x) => x.id === msg.id)
+    expect(m?.thinking).toBe('Je pense donc je suis.')
+    expect(m?.text).toBe('')
+  })
+
+  it('renameSession change le titre en place', () => {
+    const store = new SessionStore()
+    const s = store.createSession('Ancien')
+    expect(store.renameSession(s.id, 'Nouveau')).toBe(true)
+    expect(store.findSessionById(s.id)?.title).toBe('Nouveau')
+    expect(store.renameSession('inconnu', 'x')).toBe(false)
+  })
+
+  it('appendTrace/settleTrace suivent les requêtes modèle, retirées avec la session', () => {
+    const store = new SessionStore()
+    const s = store.createSession('S')
+    store.appendTrace({ id: 't1', sessionId: s.id, at: 1, model: 'gemini-3.6-flash@think=2', thinkLevel: 2, round: 1, messages: 3, tools: 9, ms: 0, outcome: 'ok', thinkingChars: 0, textChars: 0 })
+    store.settleTrace('t1', { ms: 120, outcome: 'tool_calls', thinkingChars: 40, textChars: 10 })
+    const traces = store.listTraces(s.id)
+    expect(traces).toHaveLength(1)
+    expect(traces[0]).toMatchObject({ ms: 120, outcome: 'tool_calls', thinkingChars: 40 })
+    store.removeSession(s.id)
+    expect(store.listTraces(s.id)).toHaveLength(0)
+  })
+})

@@ -193,6 +193,17 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
 
   sections.push(
     [
+      '## Méthode agentique (M12)',
+      '- **Parallélise** : les appels indépendants (read, ls, glob, websearch…) se lancent ENSEMBLE dans une même réponse — un appel par lecture sérieuse, pas un par tour.',
+      '- **Arrière-plan** : une commande longue (build, veille, sleep) part avec `"background": true` — tu reçois un jobId immédiat, suis-la avec `shell_output {"jobId"}`, arrête-la avec `shell_kill {"jobId"}`.',
+      '- **Explore sans demander** : read/ls/glob/mkdir/websearch sont libres — agis. Seuls write et shell attendent le pilote, et c’est le flux normal : propose-les quand même.',
+      '- **Boucle honnête** : un outil refusé (hors périmètre, arguments invalides) est un signal — corrige l’appel, ne le répète pas à l’identique.',
+      '- **Conclus en donnant les chemins** des fichiers écrits et le résultat des commandes.',
+    ].join('\n'),
+  )
+
+  sections.push(
+    [
       '## Conventions',
       '- L’arbre est **libre** : crée les dossiers dont tu as besoin (mkdir) ; garde des noms courts et lisibles.',
       '- Tout chemin reste dans le workspace — les refus « hors périmètre » sont définitifs.',

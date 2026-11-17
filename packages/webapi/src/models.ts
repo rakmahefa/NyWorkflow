@@ -8,6 +8,10 @@
  *
  * Table par défaut = vérité connue au 2026-11-17 (portée depuis ny-gemini-acp).
  * Suffixe `@think=N` sur le nom demandé : surcharge le niveau de réflexion (0–4).
+ *
+ * M12 : MODEL_META ajoute les métadonnées d'AFFICHAGE (libellé, famille,
+ * réflexion native) pour l'UI — données, pas de code. Un modèle absent de
+ * META reste servi : l'UI replie sur l'id brut, famille « autre ».
  */
 import { readFileSync } from 'node:fs'
 
@@ -18,6 +22,19 @@ export interface ModelSpec {
 }
 
 export type ModelTable = Record<string, ModelSpec>
+
+/** Display metadata of one model (M12) — labels for a professional picker. */
+export interface ModelInfo {
+  id: string
+  /** Human label, e.g. "Gemini 3.6 Flash". */
+  label: string
+  /** flash | thinking | pro | auto | lite | autre. */
+  family: string
+  /** True when the model is a thinking mode (mode 2 or 5). */
+  thinking: boolean
+  /** Default think level of the table entry (0–4). */
+  defaultThink: number
+}
 
 export const DEFAULT_MODEL = 'gemini-3.6-flash'
 
@@ -30,6 +47,40 @@ export const DEFAULT_MODEL_TABLE: ModelTable = {
   'gemini-auto': { mode: 4, think: 4 },
   'gemini-3.5-flash-thinking-lite': { mode: 5, think: 0 },
   'gemini-flash-lite': { mode: 6, think: 4 },
+}
+
+/** Libellés d'affichage par id — la famille se déduit du mode (donnée). */
+const FAMILY_OF_MODE: Record<number, string> = { 1: 'flash', 2: 'thinking', 3: 'pro', 4: 'auto', 5: 'thinking', 6: 'lite' }
+const MODEL_LABELS: Record<string, string> = {
+  'gemini-3.6-flash': 'Gemini 3.6 Flash',
+  'gemini-3.5-flash': 'Gemini 3.5 Flash',
+  'gemini-3.5-flash-thinking': 'Gemini 3.5 Flash Thinking',
+  'gemini-3.1-pro': 'Gemini 3.1 Pro',
+  'gemini-3.1-pro-enhanced': 'Gemini 3.1 Pro Enhanced',
+  'gemini-auto': 'Gemini Auto',
+  'gemini-3.5-flash-thinking-lite': 'Gemini 3.5 Flash Thinking Lite',
+  'gemini-flash-lite': 'Gemini Flash Lite',
+}
+
+/** Slug id → label ("gemini-3.5-flash-thinking" → "Gemini 3.5 Flash Thinking"). */
+function fallbackLabel(id: string): string {
+  const spaced = id.replaceAll('-', ' ').replace(/\s+/g, ' ').trim()
+  const cased = spaced
+    .split(' ')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ')
+  return cased.toLowerCase().startsWith('gemini') ? cased : `Gemini ${cased}`.trim()
+}
+
+/** Display metadata of every table entry — order preserved (M12). */
+export function listModelInfo(table: ModelTable): ModelInfo[] {
+  return Object.entries(table).map(([id, spec]) => ({
+    id,
+    label: MODEL_LABELS[id] ?? fallbackLabel(id),
+    family: FAMILY_OF_MODE[spec.mode] ?? 'autre',
+    thinking: spec.mode === 2 || spec.mode === 5,
+    defaultThink: spec.think,
+  }))
 }
 
 /** Table effective : défaut, puis remplacement complet si un fichier JSON est fourni. */

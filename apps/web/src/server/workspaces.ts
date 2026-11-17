@@ -1,36 +1,48 @@
 /**
- * /workspaces HTTP API — the agentic ICM surface (M11 rewrite).
+ * /workspaces HTTP API — the agentic ICM surface (M11 rewrite, M12
+ * workspace-folders + parallel tools + background shells).
  *
  * Mounted by the Vite plugin (dev and preview), same origin as the UI:
- *   GET  /workspaces                        → { workspaces: [{ name, summary? }] }
- *   POST /workspaces                        → scaffold a fresh agentic workspace
- *                                             (body: { name }) → 201 { name, tree }
+ *   GET  /workspaces                        → { workspaces: [{ name, summary?, folder? }] }
+ *   POST /workspaces {name}                 → scaffold a fresh agentic workspace → 201
+ *   POST /workspaces {name, path}           → M12: register an EXISTING disk folder
+ *                                             (no scaffold — the user's tree as-is)
+ *   GET  /workspaces/browse?path=…          → M12: folder browser (dirs only, read-only)
  *   GET  /workspaces/:name/icm              → { name, tree, contexts, system } —
  *                                             the ICM loaded toward the model
  *   GET  /workspaces/:name/file?path=…      → { path, content, bytes } — read-only
  *                                             preview, same scope guard as the tools
- *   POST /workspaces/:name/tool             → execute one agent tool call for a
+ *   POST /workspaces/:name/tool             → execute agent tool call(s) for a
  *                                             session (body: { sessionId, tool, args })
  *   POST /workspaces/:name/tool/decision    → resolve a paused call (M5 pattern):
  *                                             { sessionId, decision: approve|refuse }
  *
- * The workflow engine of phase 1 (runs, stages, advance) is gone: sessions
- * are the only surface, and a session is agentic — the browser runs the
- * model loop (standard tool_calls through the gateway), and every tool
- * call lands HERE. The journal stays the truth: tool.call is journaled on
- * arrival, tool.result on completion, so a dangerous call paused for a
- * human survives restarts by derivation — exactly like the M5 runs did,
- * minus the engine.
+ * M12 ground rules:
+ *   - a workspace is a NAME resolved to a root: a sub-folder of the registry
+ *     (classic scaffold) OR an external folder registered in the manifest
+ *     `workspaces.json` at the registry root — reloaded by mtime, like the
+ *     cookies and accounts manifests of the gateway;
+ *   - parallel tool calls are legal: tool.call/tool.result events carry a
+ *     `callId`, a new call is refused (409) only while a DANGEROUS call
+ *     (write, shell) is still open — the approval gate stays one-at-a-time;
+ *   - background shells run detached in the handler's job registry, after
+ *     the same human approval as any shell call.
+ *
+ * The journal stays the truth: tool.call is journaled on arrival,
+ * tool.result on completion, so a dangerous call paused for a human
+ * survives restarts by derivation.
  */
-import { existsSync } from 'node:fs'
-import { access, readFile, readdir } from 'node:fs/promises'
+import { existsSync, statSync } from 'node:fs'
+import { access, readFile, readdir, writeFile, mkdir } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { join } from 'node:path'
+import { isAbsolute, join, dirname } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { buildIcmSystemPrompt, loadIcm, scaffoldAgenticWorkspace } from '@nyworkflow/core'
-import { checkToolCall, executeToolCall, isDangerous, refusedByUser } from '@nyworkflow/tools'
+import { checkToolCall, executeToolCall, isDangerous, refusedByUser, ShellJobRegistry } from '@nyworkflow/tools'
 import type { ToolCall, ToolOutcome } from '@nyworkflow/tools'
 import { resolveInScope } from '@nyworkflow/tools'
-import { appendEvent, deriveSession, isSessionId, journalPath, readEvents } from '@nyworkflow/session'
+import { appendEvent, deriveSession, isSessionId, journalPath, pendingToolCalls, readEvents } from '@nyworkflow/session'
 import type { SessionEvent } from '@nyworkflow/session'
 
 /** One workspace as listed. */
@@ -38,6 +50,8 @@ export interface WorkspaceSummaryDto {
   name: string
   /** First heading of the root CONTEXT.md, when there is one. */
   summary?: string
+  /** M12 — external registration: the folder is outside the registry. */
+  folder?: boolean
 }
 
 /** The ICM as the browser consumes it (system prompt pre-assembled server-side). */
@@ -51,9 +65,28 @@ export interface IcmDto {
 
 /** What POST /tool answers. */
 export type ToolRunDto =
-  | { status: 'executed'; outcome: ToolOutcome }
+  | { status: 'executed'; callId: string; outcome: ToolOutcome }
   /** A dangerous call (write, shell) is paused — decide via /tool/decision. */
-  | { status: 'pending'; call: { tool: string; args: unknown } }
+  | { status: 'pending'; callId: string; call: { tool: string; args: unknown } }
+
+/** One entry of the folder browser (M12). */
+export interface BrowseDir {
+  name: string
+  path: string
+}
+
+export interface BrowseDto {
+  /** The folder being listed. */
+  path: string
+  /** Parent folder, null at the filesystem root. */
+  parent: string | null
+  /** Sub-directories, alphabetical, bounded. */
+  dirs: BrowseDir[]
+  /** True when the listing was cut by the cap. */
+  truncated: boolean
+  /** The user's home (the browser's starting point). */
+  home: string
+}
 
 export interface WorkspacesHandlerOptions {
   /** Folder containing one sub-folder per workspace. */
@@ -66,6 +99,10 @@ const BODY_LIMIT = 2_000_000
 /** Preview bound — same figure as the write tool cap (chars). */
 const PREVIEW_MAX = 131_072
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+/** Folder browser caps (M12). */
+const BROWSE_MAX = 500
+/** Manifest file name, at the registry root. */
+const MANIFEST_FILE = 'workspaces.json'
 
 class HttpError extends Error {
   constructor(
@@ -80,6 +117,7 @@ const badRequest = (message: string) => new HttpError(400, message)
 const notFound = (message: string) => new HttpError(404, message)
 
 const nowIso = (): string => new Date().toISOString()
+const newCallId = (): string => randomUUID().slice(0, 8)
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   if (res.writableEnded) return
@@ -124,17 +162,78 @@ function isWorkspaceName(value: string): boolean {
   return NAME_RE.test(value) && value !== '.' && value !== '..'
 }
 
+/** The manifest of external registrations (M12) — data, reloaded by mtime. */
+interface Manifest {
+  workspaces: { name: string; path: string }[]
+}
+
+interface ManifestState {
+  mtimeMs: number
+  manifest: Manifest
+}
+
+/** Manifest cache, per registry folder (mtime-keyed, like the gateway's cookies). */
+const manifestCache = new Map<string, ManifestState>()
+
+/** Reads (and caches by mtime) the external-registrations manifest of a registry. */
+async function readManifest(dir: string): Promise<Manifest> {
+  const file = join(dir, MANIFEST_FILE)
+  let mtimeMs = 0
+  try {
+    mtimeMs = statSync(file).mtimeMs
+  } catch {
+    return { workspaces: [] } // no manifest yet — nothing registered
+  }
+  const cached = manifestCache.get(dir)
+  if (cached !== undefined && cached.mtimeMs === mtimeMs) return cached.manifest
+  let manifest: Manifest = { workspaces: [] }
+  try {
+    const parsed = JSON.parse(await readFile(file, 'utf8')) as Partial<Manifest>
+    const list = Array.isArray(parsed.workspaces) ? parsed.workspaces : []
+    manifest = {
+      workspaces: list.filter(
+        (e): e is { name: string; path: string } =>
+          e !== null && typeof e === 'object' && typeof e.name === 'string' && typeof e.path === 'string' && isWorkspaceName(e.name),
+      ),
+    }
+  } catch {
+    manifest = { workspaces: [] } // unreadable manifest: no external workspaces, never fatal
+  }
+  manifestCache.set(dir, { mtimeMs, manifest })
+  return manifest
+}
+
+/** Writes the manifest (creating the registry folder if needed). */
+async function writeManifest(dir: string, next: Manifest): Promise<void> {
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, MANIFEST_FILE), JSON.stringify(next, null, 2) + '\n', 'utf8')
+}
+
+/** True when the name resolves to a workspace — registry sub-folder or manifest
+ * entry (M12): how /sessions validates a session's workspace binding. */
+export async function workspaceExists(dir: string, name: string): Promise<boolean> {
+  if (!isWorkspaceName(name)) return false
+  if (existsSync(join(dir, name)) && statSync(join(dir, name)).isDirectory()) return true
+  return (await readManifest(dir)).workspaces.some((w) => w.name === name)
+}
+
 export function createWorkspacesHandler(
   options: WorkspacesHandlerOptions,
 ): (req: IncomingMessage, res: ServerResponse) => void {
   const { dir, home } = options
   /** Sessions with a tool decision in flight — a second decision gets a 409. */
   const busy = new Set<string>()
+  /** Background shell jobs of this server (M12). */
+  const jobs = new ShellJobRegistry()
 
-  /** The workspace root, or 404. */
-  function rootOf(name: string): string {
-    if (!isWorkspaceName(name) || !existsSync(join(dir, name))) throw notFound('workspace inconnu')
-    return join(dir, name)
+  /** The workspace root, or 404 — registry sub-folder first, then manifest. */
+  async function rootOf(name: string): Promise<string> {
+    if (!isWorkspaceName(name)) throw notFound('workspace inconnu')
+    const registryRoot = join(dir, name)
+    if (existsSync(registryRoot) && statSync(registryRoot).isDirectory()) return registryRoot
+    const entry = (await readManifest(dir)).workspaces.find((w) => w.name === name)
+    if (entry !== undefined && existsSync(entry.path) && statSync(entry.path).isDirectory()) return entry.path
+    throw notFound('workspace inconnu')
   }
 
   /** First heading of the root CONTEXT.md (≤ 100 chars), if any. */
@@ -160,19 +259,54 @@ export function createWorkspacesHandler(
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
     }
     const out: WorkspaceSummaryDto[] = []
+    const seen = new Set<string>()
     for (const name of names.sort()) {
       if (!isWorkspaceName(name)) continue
+      seen.add(name)
       const summary = await summaryOf(join(dir, name))
       out.push(summary === undefined ? { name } : { name, summary })
+    }
+    for (const entry of (await readManifest(dir)).workspaces) {
+      if (seen.has(entry.name)) continue // the registry folder wins on conflict
+      if (!existsSync(entry.path) || !statSync(entry.path).isDirectory()) continue // gone: not listed, never fatal
+      seen.add(entry.name)
+      const summary = await summaryOf(entry.path)
+      out.push(summary === undefined ? { name: entry.name, folder: true } : { name: entry.name, summary, folder: true })
     }
     return out
   }
 
-  /** POST /workspaces — scaffold a fresh agentic workspace (M11). */
-  async function createWorkspace(req: IncomingMessage): Promise<{ name: string; tree: string }> {
+  /** POST /workspaces — scaffold (name) or register an existing folder (name+path, M12). */
+  async function createWorkspace(req: IncomingMessage): Promise<{ name: string; tree: string; folder?: boolean }> {
     const body = await readJson(req)
     const name = typeof body.name === 'string' ? body.name.trim() : ''
+    const path = typeof body.path === 'string' ? body.path.trim() : ''
     if (name === '' || !isWorkspaceName(name)) throw badRequest('nom de workspace attendu (lettres, chiffres, . _ -, sans espace)')
+
+    if (path !== '') {
+      // M12 — register the user's own folder: no scaffold, no copy, as-is.
+      if (!isAbsolute(path)) throw badRequest('chemin absolu attendu pour enregistrer un dossier existant')
+      let stats
+      try {
+        stats = statSync(path)
+      } catch {
+        throw badRequest(`dossier introuvable : ${path}`)
+      }
+      if (!stats.isDirectory()) throw badRequest(`ce n'est pas un dossier : ${path}`)
+      try {
+        await access(path)
+      } catch {
+        throw badRequest(`dossier illisible : ${path}`)
+      }
+      if (existsSync(join(dir, name)) || (await readManifest(dir)).workspaces.some((w) => w.name === name)) {
+        throw badRequest(`le workspace « ${name} » existe déjà`)
+      }
+      const next = { workspaces: [...(await readManifest(dir)).workspaces, { name, path }] }
+      await writeManifest(dir, next)
+      const icm = await loadIcm(path)
+      return { name, tree: icm.tree, folder: true }
+    }
+
     try {
       await scaffoldAgenticWorkspace(join(dir, name))
     } catch (err) {
@@ -182,9 +316,34 @@ export function createWorkspacesHandler(
     return { name, tree: icm.tree }
   }
 
+  /**
+   * GET /workspaces/browse?path=… — the folder browser of the session
+   * dialog (M12). Read-only, directories only, bounded, starts at home.
+   */
+  async function browse(rawPath: string | null): Promise<BrowseDto> {
+    const target = rawPath !== null && rawPath.trim() !== '' ? rawPath.trim() : homedir()
+    if (!isAbsolute(target)) throw badRequest('chemin absolu attendu')
+    let entries
+    try {
+      entries = await readdir(target, { withFileTypes: true })
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'ENOENT') throw badRequest(`dossier introuvable : ${target}`)
+      if (code === 'ENOTDIR') throw badRequest(`ce n'est pas un dossier : ${target}`)
+      throw badRequest(`dossier illisible : ${target}`) // EACCES etc. — honnête, jamais 500
+    }
+    const dirs = entries
+      .filter((e) => e.isDirectory())
+      .map((e) => ({ name: e.name, path: join(target, e.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+    const truncated = dirs.length > BROWSE_MAX
+    const parent = dirname(target) === target ? null : dirname(target)
+    return { path: target, parent, dirs: truncated ? dirs.slice(0, BROWSE_MAX) : dirs, truncated, home: homedir() }
+  }
+
   /** GET /workspaces/:name/icm — the ICM toward the model. */
   async function icmOf(name: string): Promise<IcmDto> {
-    const root = rootOf(name)
+    const root = await rootOf(name)
     const icm = await loadIcm(root)
     return { name, tree: icm.tree, contexts: icm.contexts, system: buildIcmSystemPrompt(icm) }
   }
@@ -195,7 +354,7 @@ export function createWorkspacesHandler(
    */
   async function filePreview(name: string, rawPath: string | null): Promise<{ path: string; content: string; bytes: number }> {
     if (rawPath === null || rawPath.trim() === '') throw badRequest('paramètre « path » attendu (chemin relatif au workspace)')
-    const root = rootOf(name)
+    const root = await rootOf(name)
     const scope = await resolveInScope(root, rawPath)
     if (!scope.ok) throw badRequest(`chemin refusé — ${scope.reason}`)
     let content: string
@@ -229,21 +388,24 @@ export function createWorkspacesHandler(
     return { file, events }
   }
 
-  /** The last tool.call still waiting for its tool.result, if any. */
-  function pendingCall(events: readonly SessionEvent[]): ToolCall | undefined {
-    let open: ToolCall | undefined
-    for (const e of events) {
-      if (e.type === 'tool.call') open = { tool: e.tool as ToolCall['tool'], args: (e.args ?? {}) as Record<string, unknown> }
-      else if (e.type === 'tool.result') open = undefined
-    }
-    return open
+  /**
+   * M12 — the open DANGEROUS call of a journal, if any (write, shell):
+   * those are the ones that wait for a human. Open safe calls may exist
+   * while parallel calls execute — they are not a reason to refuse.
+   */
+  function pendingDangerous(events: readonly SessionEvent[]): ToolCall | undefined {
+    return pendingToolCalls(events)
+      .filter((t) => isDangerous(t.tool))
+      .map((t) => ({ tool: t.tool as ToolCall['tool'], args: (t.args ?? {}) as Record<string, unknown> }))
+      .at(0)
   }
 
   /**
-   * POST /workspaces/:name/tool — journals the call, executes it, or pauses
-   * it for a human when it is dangerous (write, shell). Refusals (unknown
-   * tool, bad args, out of scope) are executed-and-journaled refusals: the
-   * model sees the error and adjusts.
+   * POST /workspaces/:name/tool — journals the call (callId M12), executes
+   * it, or pauses it for a human when it is dangerous (write, shell —
+   * background included). Refusals (unknown tool, bad args, out of scope)
+   * are executed-and-journaled refusals: the model sees the error and
+   * adjusts.
    */
   async function runTool(req: IncomingMessage, name: string): Promise<ToolRunDto> {
     const body = await readJson(req)
@@ -253,36 +415,39 @@ export function createWorkspacesHandler(
     if (tool === '') throw badRequest('outil (tool) attendu')
     if (args === null || typeof args !== 'object' || Array.isArray(args)) throw badRequest('arguments (args) : objet attendu')
 
-    const root = rootOf(name)
+    const root = await rootOf(name)
     const { file } = await sessionJournal(name, sessionId)
     if (busy.has(sessionId)) throw new HttpError(409, 'une décision d\'outil est déjà en cours pour cette session')
-    if (pendingCall(await readEvents(file)) !== undefined) {
-      throw new HttpError(409, 'un appel d\'outil est déjà en attente — décidez-le (POST /tool/decision) avant d\'en lancer un autre')
+    if (pendingDangerous(await readEvents(file)) !== undefined) {
+      throw new HttpError(409, 'un appel d\'outil dangereux est déjà en attente — décidez-le (POST /tool/decision) avant d\'en lancer un autre')
     }
 
     const call: ToolCall = { tool: tool as ToolCall['tool'], args: args as Record<string, unknown> }
     const check = await checkToolCall(root, call)
-    await appendEvent(file, { type: 'tool.call', at: nowIso(), tool: call.tool, args: call.args })
+    const callId = newCallId()
+    await appendEvent(file, { type: 'tool.call', at: nowIso(), tool: call.tool, args: call.args, ...(callId !== '' ? { callId } : {}) })
 
     if (!check.ok) {
       const refusal = check.refusal as ToolOutcome
-      await appendEvent(file, { type: 'tool.result', at: nowIso(), ok: false, summary: refusal.summary })
-      return { status: 'executed', outcome: refusal }
+      await appendEvent(file, { type: 'tool.result', at: nowIso(), ok: false, summary: refusal.summary, callId })
+      return { status: 'executed', callId, outcome: refusal }
     }
     if (check.approval) {
-      // Dangerous (write, shell): the human decides — the journal keeps the
-      // call open (no tool.result), the UI shows the approval card.
-      return { status: 'pending', call: { tool: call.tool, args: call.args } }
+      // Dangerous (write, shell — background or not): the human decides —
+      // the journal keeps the call open (no tool.result), the UI shows the
+      // approval card.
+      return { status: 'pending', callId, call: { tool: call.tool, args: call.args } }
     }
-    const outcome = await executeToolCall(root, call, false)
+    const outcome = await executeToolCall(root, call, false, { workspace: name, jobs })
     await appendEvent(file, {
       type: 'tool.result',
       at: nowIso(),
       ok: outcome.ok,
       summary: outcome.summary,
       ...(outcome.ok ? { data: outcome.data } : {}),
+      callId,
     })
-    return { status: 'executed', outcome }
+    return { status: 'executed', callId, outcome }
   }
 
   /** POST /workspaces/:name/tool/decision — resolve the paused call (M5 pattern). */
@@ -292,24 +457,26 @@ export function createWorkspacesHandler(
     const decision = body.decision === 'approve' ? 'approve' : body.decision === 'refuse' ? 'refuse' : ''
     if (decision === '') throw badRequest('decision : "approve" ou "refuse" attendu')
 
-    const root = rootOf(name)
+    const root = await rootOf(name)
     const { file, events } = await sessionJournal(name, sessionId)
     if (busy.has(sessionId)) throw new HttpError(409, 'une décision d\'outil est déjà en cours pour cette session')
-    const call = pendingCall(events)
+    const call = pendingDangerous(events)
     if (call === undefined) throw new HttpError(409, 'aucun appel d\'outil en attente pour cette session')
+    const callId = pendingToolCalls(events).find((t) => isDangerous(t.tool))?.callId ?? ''
 
     busy.add(sessionId)
     try {
       const outcome: ToolOutcome =
-        decision === 'refuse' ? refusedByUser(call) : await executeToolCall(root, call, true)
+        decision === 'refuse' ? refusedByUser(call) : await executeToolCall(root, call, true, { workspace: name, jobs })
       await appendEvent(file, {
         type: 'tool.result',
         at: nowIso(),
         ok: outcome.ok,
         summary: outcome.summary,
         ...(outcome.ok ? { data: outcome.data } : {}),
+        ...(callId !== '' ? { callId } : {}),
       })
-      return { status: 'executed', outcome }
+      return { status: 'executed', callId, outcome }
     } finally {
       busy.delete(sessionId)
     }
@@ -330,6 +497,10 @@ export function createWorkspacesHandler(
     const parts = url.replace(/^\//, '').split('/')
     const name = parts[0] ?? ''
 
+    if (parts.length === 1 && parts[0] === 'browse') {
+      if (method === 'GET') return send(res, 200, await browse(query?.get('path') ?? null))
+      throw notFound('route inconnue')
+    }
     if (parts.length === 2 && parts[1] === 'icm') {
       if (method === 'GET') return send(res, 200, await icmOf(name))
       throw notFound('route inconnue')

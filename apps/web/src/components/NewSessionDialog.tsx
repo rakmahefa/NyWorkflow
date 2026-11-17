@@ -1,31 +1,48 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as api from '../lib/sessionApi'
 import type { SessionInfo } from '../lib/types'
 
 const LAST_WS_KEY = 'nyworkflow.lastWorkspace'
 
+type Mode = 'existing' | 'new' | 'folder'
+
 interface NewSessionDialogProps {
   /** 'server' — the dialog lists real workspaces; 'memory' falls back to plain. */
   mode: 'booting' | 'server' | 'memory'
   initialTitle: string
+  /** M12 — preselected workspace (the sidebar's per-group "+"). */
+  initialWorkspace?: string
   onClose(): void
   onCreated(session: SessionInfo): void
 }
 
 /**
- * New agentic session (M11): a title, and the workspace the session — and
- * the model — will live in. The picker lists the registry; a fresh
- * workspace can be scaffolded inline (the modern agentic ICM tree). The
- * last used workspace is remembered.
+ * New agentic session (M11, M12): a title and where the session — and the
+ * model — will live. Three ways to bind a workspace:
+ *   - an existing one (the registry);
+ *   - a fresh scaffold (the modern agentic ICM tree);
+ *   - **a folder of the user's disk** (M12): browsed, then registered
+ *     as-is — the tree is the user's own, nothing is created inside.
+ * The last used workspace is remembered.
  */
-export function NewSessionDialog({ mode, initialTitle, onClose, onCreated }: NewSessionDialogProps) {
+export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose, onCreated }: NewSessionDialogProps) {
   const [title, setTitle] = useState(initialTitle)
+  const [mode_, setMode] = useState<Mode>('existing')
   const [workspaces, setWorkspaces] = useState<readonly api.WorkspaceSummaryDto[]>([])
-  const [selected, setSelected] = useState('')
-  const [createNew, setCreateNew] = useState(false)
+  const [selected, setSelected] = useState(initialWorkspace ?? '')
   const [newName, setNewName] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  // --- folder browser state (M12) ---
+  const [browse, setBrowse] = useState<api.BrowseDto | null>(null)
+  const [browsePath, setBrowsePath] = useState('')
+  const [folderName, setFolderName] = useState('')
+  const [browsing, setBrowsing] = useState(false)
+  /** Latest browse request wins — a stale response never clobbers the screen. */
+  const browseSeq = useRef(0)
+  /** True once the user typed a path: the initial home load must not overwrite it. */
+  const pathTouched = useRef(false)
 
   useEffect(() => {
     if (mode !== 'server') return
@@ -36,8 +53,11 @@ export function NewSessionDialog({ mode, initialTitle, onClose, onCreated }: New
         if (cancelled) return
         setWorkspaces(list)
         const last = localStorage.getItem(LAST_WS_KEY) ?? ''
-        setSelected(list.some((w) => w.name === last) ? last : (list[0]?.name ?? ''))
-        if (list.length === 0) setCreateNew(true)
+        setSelected((prev) => {
+          if (prev !== '' && list.some((w) => w.name === prev)) return prev
+          return list.some((w) => w.name === last) ? (last as string) : (list[0]?.name ?? '')
+        })
+        if (list.length === 0) setMode('new')
       })
       .catch(() => {
         if (!cancelled) setError('Workspaces injoignables — réessayez.')
@@ -46,6 +66,34 @@ export function NewSessionDialog({ mode, initialTitle, onClose, onCreated }: New
       cancelled = true
     }
   }, [mode])
+
+  // Loads the folder browser (home on first open).
+  useEffect(() => {
+    if (mode_ !== 'folder' || browse !== null || mode !== 'server') return
+    void loadBrowse(undefined)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode_, browse, mode])
+
+  const loadBrowse = (path: string | undefined): void => {
+    const seq = ++browseSeq.current
+    setBrowsing(true)
+    setError('')
+    void api
+      .browseFolders(path)
+      .then((dto) => {
+        if (seq !== browseSeq.current) return // réponse périmée — une plus récente a pris l'écran
+        setBrowse(dto)
+        // Le chargement initial (home) ne doit JAMAIS écraser un chemin déjà tapé.
+        setBrowsePath((current) => (path === undefined && pathTouched.current ? current : dto.path))
+        setFolderName((current) => (current === '' ? (dto.path.split('/').pop() ?? '') : current))
+      })
+      .catch((err) => {
+        if (seq === browseSeq.current) setError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        if (seq === browseSeq.current) setBrowsing(false)
+      })
+  }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -66,13 +114,30 @@ export function NewSessionDialog({ mode, initialTitle, onClose, onCreated }: New
           return
         }
         let workspace = selected
-        if (createNew) {
+        if (mode_ === 'new') {
           const name = newName.trim()
           if (name === '') {
             setError('Nom du nouveau workspace attendu.')
             return
           }
           workspace = (await api.createWorkspace(name)).name
+        } else if (mode_ === 'folder') {
+          const path = browsePath.trim()
+          if (path === '' || browse === null || path !== browse.path) {
+            setError('Choisissez un dossier (naviguez jusqu’à lui, ou collez son chemin absolu).')
+            return
+          }
+          const name = folderName.trim()
+          if (name === '') {
+            setError('Nom de workspace attendu pour ce dossier.')
+            return
+          }
+          try {
+            workspace = (await api.registerWorkspace(name, path)).name
+          } catch (err) {
+            setError(err instanceof Error ? err.message : String(err))
+            return
+          }
         } else if (workspace === '') {
           setError('Choisissez un workspace (ou créez-en un).')
           return
@@ -87,6 +152,21 @@ export function NewSessionDialog({ mode, initialTitle, onClose, onCreated }: New
       }
     })()
   }
+
+  const tab = (value: Mode, label: string): React.ReactNode => (
+    <button
+      type="button"
+      key={value}
+      className={`ws-tab ${mode_ === value ? 'active' : ''}`}
+      data-test={`ws-mode-${value}`}
+      onClick={() => {
+        setMode(value)
+        setError('')
+      }}
+    >
+      {label}
+    </button>
+  )
 
   return (
     <div className="modal-overlay" data-test="new-session-dialog" role="dialog" aria-modal="true" aria-label="Nouvelle session">
@@ -104,42 +184,112 @@ export function NewSessionDialog({ mode, initialTitle, onClose, onCreated }: New
         </label>
         {mode === 'server' ? (
           <>
-            <label className="field">
-              <span>Workspace ICM</span>
-              <select
-                data-test="ws-select"
-                value={createNew ? '' : selected}
-                disabled={createNew || workspaces.length === 0}
-                onChange={(e) => setSelected(e.target.value)}
-              >
-                {workspaces.length === 0 ? <option value="">(aucun workspace)</option> : null}
-                {workspaces.map((w) => (
-                  <option key={w.name} value={w.name}>
-                    {w.name}
-                    {w.summary !== undefined ? ` — ${w.summary}` : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                data-test="new-ws-toggle"
-                checked={createNew}
-                onChange={(e) => setCreateNew(e.target.checked)}
-              />
-              <span>Créer un nouveau workspace (arbre agentique : CONTEXT.md + inbox/notes/research/outputs)</span>
-            </label>
-            {createNew ? (
+            <div className="ws-tabs" role="tablist" aria-label="Workspace">
+              {tab('existing', 'Existant')}
+              {tab('new', 'Créer')}
+              {tab('folder', 'Dossier du disque')}
+            </div>
+            {mode_ === 'existing' ? (
               <label className="field">
-                <span>Nom du workspace</span>
+                <span>Workspace ICM</span>
+                <select
+                  data-test="ws-select"
+                  value={selected}
+                  disabled={workspaces.length === 0}
+                  onChange={(e) => setSelected(e.target.value)}
+                >
+                  {workspaces.length === 0 ? <option value="">(aucun workspace)</option> : null}
+                  {workspaces.map((w) => (
+                    <option key={w.name} value={w.name}>
+                      {w.name}
+                      {w.folder ? ' (dossier)' : ''}
+                      {w.summary !== undefined ? ` — ${w.summary}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {mode_ === 'new' ? (
+              <label className="field">
+                <span>Nom du workspace à créer</span>
                 <input
                   data-test="new-ws-name"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   placeholder="ex. rapport-loutres"
                 />
+                <span className="hint">
+                  Scaffold agentique : CONTEXT.md (charte) + inbox/notes/research/outputs — l’arbre reste libre ensuite.
+                </span>
               </label>
+            ) : null}
+            {mode_ === 'folder' ? (
+              <div className="folder-picker" data-test="folder-picker">
+                <div className="folder-bar">
+                  <input
+                    data-test="folder-path-input"
+                    value={browsePath}
+                    onChange={(e) => {
+                      pathTouched.current = true
+                      setBrowsePath(e.target.value)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        loadBrowse(browsePath.trim() || undefined)
+                      }
+                    }}
+                    placeholder="chemin absolu du dossier"
+                    aria-label="Chemin du dossier"
+                  />
+                  <button type="button" data-test="folder-go" onClick={() => loadBrowse(browsePath.trim() || undefined)} disabled={browsing}>
+                    {browsing ? '…' : 'Ouvrir'}
+                  </button>
+                </div>
+                <div className="folder-list" data-test="folder-list" role="listbox" aria-label="Sous-dossiers">
+                  {browse === null ? (
+                    <p className="hint">Chargement…</p>
+                  ) : (
+                    <>
+                      {browse.parent !== null ? (
+                        <button type="button" className="folder-row up" data-test="folder-up" onClick={() => loadBrowse(browse.parent!)}>
+                          <span aria-hidden="true">↑</span> …
+                        </button>
+                      ) : null}
+                      {browse.dirs.length === 0 ? (
+                        <p className="hint">(aucun sous-dossier)</p>
+                      ) : (
+                        browse.dirs.map((d) => (
+                          <div className="folder-row" key={d.path} data-test="folder-row">
+                            <button type="button" className="folder-open" onClick={() => loadBrowse(d.path)} title={`Ouvrir ${d.path}`}>
+                              <span aria-hidden="true">▸</span> {d.name}
+                            </button>
+                            <button
+                              type="button"
+                              className="folder-choose"
+                              data-test="folder-choose"
+                              onClick={() => {
+                                loadBrowse(d.path)
+                                setFolderName(d.name)
+                              }}
+                            >
+                              Choisir
+                            </button>
+                          </div>
+                        ))
+                      )}
+                      {browse.truncated ? <p className="hint">(liste tronquée à 500 dossiers)</p> : null}
+                    </>
+                  )}
+                </div>
+                <label className="field">
+                  <span>Nom du workspace pour ce dossier</span>
+                  <input data-test="folder-ws-name" value={folderName} onChange={(e) => setFolderName(e.target.value)} placeholder="ex. mes-documents" />
+                  <span className="hint">
+                    Le dossier est enregistré TEL QUEL (aucun fichier créé) — son arbre et ses CONTEXT.md deviennent l’ICM.
+                  </span>
+                </label>
+              </div>
             ) : null}
           </>
         ) : (

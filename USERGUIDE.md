@@ -124,28 +124,29 @@ Une chaîne brute n'a pas de date : rien ne s'affiche pour elle (on ne peut pas 
 
 ## 3. Tour de l'interface
 
-Une seule surface : **les sessions** — et chaque session est un agent ICM qui vit dans son workspace.
+Une seule surface : **les sessions** — et chaque session est un agent ICM qui vit dans son workspace. La barre latérale **groupe les sessions par dossier workspace** (groupes repliables — l'état est retenu, compteur de sessions, bouton « + » par groupe pour démarrer directement dedans).
 
 ### Nouvelle session — le dialogue
 
-Le bouton **Nouvelle session** (ou `/new`) ouvre un dialogue :
+Le bouton **Nouvelle session** (ou `/new`) ouvre un dialogue avec **trois onglets** pour lier le contexte :
 
-- **Titre** (optionnel) ;
-- **Workspace ICM** — le dossier où la session vit et travaille : ceux d'`examples/workspaces/` (ou votre dossier via `NYW_WORKSPACES`) ;
-- ou **créer un nouveau workspace** dans la foulée : la charte agentique est posée d'office (voir §5).
+- **Existant** — un workspace déjà connu (ceux d'`examples/workspaces/`, ou votre dossier via `NYW_WORKSPACES`, ou un dossier déjà enregistré — badge « dossier ») ;
+- **Créer** — un workspace neuf : la charte agentique est posée d'office (voir §5) ;
+- **Dossier du disque** (M12) — **l'un de vos propres dossiers**, navigué (chemin collable, dossiers seuls, départ au home) puis enregistré **tel quel** : l'arbre et les `CONTEXT.md` existants deviennent l'ICM, **rien n'est créé dedans**. L'inscription vit dans `examples/workspaces/workspaces.json` (une donnée — éditable à la main, relue à chaud).
 
-Le dernier workspace utilisé est retenu pour la prochaine fois. Le bandeau sous l'en-tête rappelle le workspace de la session active (`ICM · nom — API v1beta`).
+Le dernier workspace utilisé est retenu pour la prochaine fois. Le bandeau sous l'en-tête rappelle le workspace de la session active (`ICM · nom — API v1beta`) et porte les **onglets Conversation / Activité**.
 
 ### La boucle agentique
 
 À chaque message :
 
-1. **L'ICM part vers le modèle** — l'arborescence du workspace et tous ses `CONTEXT.md` sont assemblés en prompt système, **rechargé à chaque tour** (l'arbre grandit pendant que la session vit).
-2. **Le modèle agit avec ses outils** — `tool_calls` standard (façon OpenAI) : il lit, liste, cherche, crée des dossiers, propose des écritures. L'activité apparaît **dans le flux du chat** (lignes `read « CONTEXT.md » — 1726 caractères`, en vert quand ça réussit, rouge au refus).
-3. **Vous décidez** — toute **écriture** (`write`, `shell`) met le tour en pause : la **carte d'approbation** s'affiche, un clic **Approuve** (exécution) ou **Refuse** (l'agent continue sans) — et la boucle reprend toute seule. Un appel en attente **survit aux redémarrages** (il se dérive du journal) : rechargez la page, la carte est toujours là.
-4. **La réponse finale arrive en streaming**, le modèle se choisit dans l'en-tête.
+1. **L'ICM part vers le modèle** — l'arborescence du workspace et tous ses `CONTEXT.md` sont assemblés en prompt système, **rechargé à chaque tour** (l'arbre grandit pendant que la session vit) — avec la **méthode agentique** : quand paralléliser, quand détacher une commande, quand explorer sans demander.
+2. **Le modèle réfléchit visiblement** — sa réflexion (thinking) arrive **en flux** dans un bloc repliable « Réflexion » au-dessus de la réponse : ouvert pendant qu’il coule, replié d’un rang une fois la réponse partie, rouvrable d’un clic (le nombre de caractères s’affiche). Le **niveau de réflexion** se règle dans l’en-tête (Auto = défaut du modèle, ou 0–4 — envoyé comme suffixe `@think=N` à la passerelle) ; il est mémorisé et visible dans l’onglet Activité.
+3. **Le modèle agit avec ses outils** — `tool_calls` standard (façon OpenAI) : il lit, liste, cherche, crée des dossiers, propose des écritures. Les appels **indépendants d’un même tour partent en parallèle** ; l’activité apparaît **dans le flux du chat** (lignes dépliables : `read « CONTEXT.md » — 1726 caractères`, vert quand ça réussit, rouge au refus — cliquez pour voir les arguments et le résultat exact renvoyé au modèle).
+4. **Vous décidez** — toute **écriture** (`write`, `shell` — arrière-plan compris) met le tour en pause : la **carte d’approbation** s’affiche **avec l’aperçu du contenu ou de la commande**, un clic **Approuve** (exécution) ou **Refuse** (l’agent continue sans) — et la boucle reprend toute seule. Un appel en attente **survit aux redémarrages** (il se dérive du journal) : rechargez la page, la carte est toujours là.
+5. **Vous gardez la main** — le bouton **Stop** (à la place de l’envoi pendant un tour) interrompt proprement : le texte déjà reçu est conservé et journalisé, une approbation en attente est refusée. Le composer reste **actif** pendant un tour : un message tapé à ce moment part **dès la fin du tour** (message « mis en file ») — jamais perdu.
 
-Les **sept outils** (tous fonctionnels, périmètre = la racine du workspace, garde lexicale **et** realpath — un symlink ne s'échappe pas) :
+Les **neuf outils** (tous fonctionnels, périmètre = la racine du workspace, garde lexicale **et** realpath — un symlink ne s’échappe pas) :
 
 | Outil | Arguments | Exécution |
 |---|---|---|
@@ -154,24 +155,43 @@ Les **sept outils** (tous fonctionnels, périmètre = la racine du workspace, ga
 | `ls` | `{"path"}` | auto |
 | `glob` | `{"pattern"}` (`*`, `**`, `?`) | auto |
 | `mkdir` | `{"path"}` | auto — l'arbre est libre, le modèle le façonne |
-| `shell` | `{"command"}` | **approbation** — bash, cwd = racine, 30 s max, sorties bornées |
+| `shell` | `{"command", "background"?}` | **approbation** — bash, cwd = racine, 30 s max en avant-plan ; `background: true` détache (voir ci-dessous) |
+| `shell_output` | `{"jobId"}` | auto — sortie d’un processus d’arrière-plan (stdout/stderr, code, en cours ?) |
+| `shell_kill` | `{"jobId"}` | auto — arrête un processus d’arrière-plan |
 | `websearch` | `{"query"}` ou `{"url"}` | auto — recherche (titres/URLs/snippets) ou page **nettoyée** |
+
+**Arrière-plan, à la Claude (M12)** : `shell {"command": "make watch", "background": true}` rend un **jobId immédiat** (après votre approbation — c’est un shell) ; le modèle le suit avec `shell_output` et l’arrête avec `shell_kill`. Bornes : 16 jobs vivants par workspace, 10 minutes de durée de vie, 64 Kio par flux. Le registre vit en mémoire : après un redémarrage du serveur, un jobId est « processus inconnu » — le modèle le voit et relance si besoin.
 
 **websearch nettoie pour le modèle** (demande du pilote) : scripts, styles, navigation, en-têtes/pieds de page, formulaires, commentaires et attributs inutiles sont retirés ; les URI `data:` (mégaoctets de base64) sautent ; les **balises sémantiques restent** (`h1..h6`, `p`, `li`, `table`, `pre/code`, `a href`…) — le contenu arrive structuré et lisible, plafonné à 64 Kio.
 
-Tout est journalisé : messages, appels d'outils, refus (`tool.call` / `tool.result` en append-only sous `.nyworkflow/sessions/`, un JSONL par session). Un chemin hors workspace est refusé **et tracé**, jamais silencieux.
+Tout est journalisé : messages, appels d'outils, refus (`tool.call` / `tool.result` en append-only sous `.nyworkflow/sessions/`, un JSONL par session) — **appariés par `callId`** depuis la M12, pour que les appels parallèles gardent chacun son résultat (les anciens journaux se lisent pareil). Un chemin hors workspace est refusé **et tracé**, jamais silencieux.
+
+### L'onglet Activité — le tracking façon harness (M12)
+
+Le bandeau de la session porte deux onglets : **Conversation** (le chat) et **Activité** — la trace complète, chronologique :
+
+- chaque **requête modèle** : horodatage, modèle demandé (suffixe de réflexion compris), nombre de messages et de déclarations d'outils envoyées, durée, résultat (réponse / appels d'outils / erreur / interrompu), caractères de réflexion et de réponse reçus — dépliable pour le détail ;
+- chaque **appel d'outil** : arguments et résultat exact renvoyé au modèle (payload JSON dépliable), statut ok/refusé/en approbation.
+
+Les appels d'outils **survivent au rechargement** (ils viennent du journal) ; les requêtes modèle sont tracées **en direct par le navigateur** — après un rechargement, seuls les outils restent (le panneau le dit).
+
+### Modèle et niveau de réflexion (M12)
+
+L'en-tête porte le sélecteur de modèle **groupé et étiqueté** (Raisonnement / Flash / Pro / Auto / Lite — les modèles « réflexion » portent une étoile ; les libellés viennent de la passerelle, un serveur externe garde ses ids purs) et le **niveau de réflexion** (Auto = défaut du modèle, 0 · minimal … 4 · maximum). Le choix est mémorisé d'une session à l'autre ; le suffixe `@think=N` part tel quel vers la passerelle, qui le borne (0–4).
 
 ### Sessions — gestion
 
+- **Renommer** (crayon au survol d'une session, double-clic sur son titre, ou `/rename <titre>`) — le nouveau titre survit aux rechargements (événement `session.renamed` au journal).
 - **Fork** copie un journal (avec son historique d'outils) pour explorer une variante sans toucher à l'original.
 - **Supprimer** (icône corbeille, deux clics — armer puis confirmer) efface la session : son journal disparaît du disque, l'UI bascule sur la session précédente. Une suppression est une décision, pas une édition.
-- Sessions anciennes (M4–M10) : elles restent lisibles ; une session liée à un ancien workspace d'étapes devient agentique telle quelle (l'arbre se lit pareil), une session sans workspace converse simplement sans outils.
+- Sessions anciennes (M4–M10) : elles restent lisibles ; une session liée à un ancien workspace d'étapes devient agentique telle quelle (l'arbre se lit pareil), une session sans workspace converse simplement sans outils — elles se regroupent sous « Sans workspace ».
 
 Commandes du chat (préfixées par `/`) :
 
 | Commande | Effet |
 |---|---|
 | `/new [titre]` | Ouvre le dialogue de nouvelle session (titre prérempli) |
+| `/rename <titre>` | Renomme la session active |
 | `/delete` | Supprime la session active (même garde-fou que le bouton) |
 | `/help` | Liste les commandes |
 | `/clear` | Vide l'affichage — **le journal reste intact** |
@@ -190,14 +210,13 @@ Le bouton **Paramètres** (engrenage, bas de la barre latérale) ouvre une modal
 
 ## 5. Créer son propre workspace
 
-Un workspace = **un dossier libre**. Le plus simple : cochez « Créer un nouveau workspace » dans le dialogue de nouvelle session, ou :
+Un workspace = **un dossier libre**. Trois portes :
 
-```sh
-curl -s -X POST http://127.0.0.1:3080/workspaces \
-  -H 'content-type: application/json' -d '{"name": "missions"}'
-```
+- **scaffold** — l'onglet **Créer** du dialogue, ou `curl -s -X POST http://127.0.0.1:3080/workspaces -H 'content-type: application/json' -d '{"name": "missions"}'` ;
+- **dossier du disque** (M12) — l'onglet **Dossier du disque** du dialogue (navigateur intégré), ou `curl -s -X POST http://127.0.0.1:3080/workspaces -H 'content-type: application/json' -d '{"name": "mes-docs", "path": "/home/moi/mes-documents"}'` — le dossier est enregistré **tel quel** (aucun fichier créé) dans `examples/workspaces/workspaces.json` ;
+- **dossier de workspaces entier** — `NYW_WORKSPACES=/chemin/vers/mes/workspaces pnpm dev` (le registre devient votre dossier).
 
-Le **scaffold agentique** est posé d'office — moderne et complet :
+Avec le scaffold, la charte agentique est posée d'office — moderne et complète :
 
 ```
 missions/
@@ -208,7 +227,7 @@ missions/
 └── outputs/          # livrables finaux
 ```
 
-**Éditez le `CONTEXT.md`** : c'est la première chose que le modèle lit à chaque tour. Remplacez la section Mission par l'objectif réel du workspace, ajustez les conventions — tout le reste (arbre, outils, approbations) est déjà enseigné au modèle par la charte et le prompt système.
+**Éditez le `CONTEXT.md`** : c'est la première chose que le modèle lit à chaque tour. Remplacez la section Mission par l'objectif réel du workspace, ajustez les conventions — tout le reste (arbre, outils, approbations, méthode agentique) est déjà enseigné au modèle par la charte et le prompt système. Un dossier enregistré sans `CONTEXT.md` reste un workspace valide : l'ICM porte son arbre, et le modèle peut y écrire la charte lui-même (avec votre approbation — c'est un `write`).
 
 L'arbre est **libre** : le modèle crée les dossiers dont il a besoin (`mkdir`), et un sous-dossier qui acquiert un rôle mérite son propre `CONTEXT.md` (relu comme les autres, jusqu'à 8 fichiers de 32 Kio). Vos propres dossiers hors du repo : `NYW_WORKSPACES=/chemin/vers/mes/workspaces pnpm dev`.
 

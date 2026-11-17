@@ -180,3 +180,25 @@ describe('scaffoldAgenticWorkspace', () => {
     expect(scaffoldContext('demo')).toContain('# demo — workspace ICM agentique')
   })
 })
+
+describe('buildIcmSystemPrompt — méthode agentique (M12)', () => {
+  it('enseigne parallélisme, arrière-plan et boucle honnête', async () => {
+    const root = tmp()
+    writeFileSync(join(root, 'CONTEXT.md'), '# Mission')
+    const prompt = buildIcmSystemPrompt(await loadIcm(root))
+    expect(prompt).toContain('## Méthode agentique (M12)')
+    expect(prompt).toContain('Parallélise')
+    expect(prompt).toContain('"background": true')
+    expect(prompt).toContain('shell_output {"jobId"}')
+    expect(prompt).toContain('shell_kill {"jobId"}')
+    expect(prompt).toContain('Explore sans demander')
+  })
+
+  it('la charte scaffold liste les 9 outils et le parallélisme', () => {
+    const charter = scaffoldContext('exemple-agentique')
+    expect(charter).toContain('shell_output {"jobId"}')
+    expect(charter).toContain('shell_kill {"jobId"}')
+    expect(charter).toContain('"background": true')
+    expect(charter).toContain('ENSEMBLE')
+  })
+})

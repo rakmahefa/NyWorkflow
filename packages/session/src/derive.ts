@@ -17,6 +17,8 @@ export interface DerivedToolCall {
   tool: string
   args: unknown
   at: string
+  /** M12 — pairs a result with its call when parallel calls interleave. */
+  callId?: string
   ok?: boolean
   summary?: string
 }
@@ -42,20 +44,22 @@ const TITLE_MAX = 60
 
 type CreatedEvent = Extract<SessionEvent, { type: 'session.created' }>
 type ForkedEvent = Extract<SessionEvent, { type: 'session.forked' }>
+type RenamedEvent = Extract<SessionEvent, { type: 'session.renamed' }>
 type UserEvent = Extract<SessionEvent, { type: 'user.message' }>
 type ChatEvent = Extract<SessionEvent, { type: 'user.message' | 'assistant.message' }>
 
 const isChatEvent = (e: SessionEvent): e is ChatEvent => e.type === 'user.message' || e.type === 'assistant.message'
 
 /** Projects a journal into what the UI and the model history need. */
-export function deriveSession(events: SessionEvent[]): DerivedSession {
+export function deriveSession(events: readonly SessionEvent[]): DerivedSession {
   const created = events.find((e): e is CreatedEvent => e.type === 'session.created')
   const forked = events.find((e): e is ForkedEvent => e.type === 'session.forked')
+  const renamed = [...events].reverse().find((e): e is RenamedEvent => e.type === 'session.renamed')
   const firstUser = events.find((e): e is UserEvent => e.type === 'user.message')
 
-  // Title precedence: title given at creation, else the first user message,
-  // else a neutral fallback.
-  const baseTitle = created?.title?.trim() || firstUser?.text.trim().slice(0, TITLE_MAX) || 'Session'
+  // Title precedence: last rename (M12) > title given at creation > the
+  // first user message > a neutral fallback.
+  const baseTitle = renamed?.title.trim() || created?.title?.trim() || firstUser?.text.trim().slice(0, TITLE_MAX) || 'Session'
 
   const messages: DerivedMessage[] = events.filter(isChatEvent).map((e) =>
     e.type === 'user.message'
@@ -63,14 +67,19 @@ export function deriveSession(events: SessionEvent[]): DerivedSession {
       : { role: 'assistant', text: e.text, at: e.at },
   )
 
-  // Tool calls pair with the tool.result that follows them in the journal;
-  // a call without a result is pending (waiting for a human approval).
+  // Tool calls pair with their tool.result — by callId when both carry one
+  // (M12: parallel calls may interleave in the journal), positionally
+  // otherwise (legacy journals). A call without a result is pending
+  // (waiting for a human approval).
   const tools: DerivedToolCall[] = []
   for (const e of events) {
     if (e.type === 'tool.call') {
-      tools.push({ tool: e.tool, args: e.args, at: e.at })
+      tools.push({ tool: e.tool, args: e.args, at: e.at, ...(e.callId !== undefined ? { callId: e.callId } : {}) })
     } else if (e.type === 'tool.result') {
-      const open = [...tools].reverse().find((t) => t.ok === undefined)
+      const open =
+        e.callId !== undefined
+          ? tools.find((t) => t.callId === e.callId && t.ok === undefined)
+          : [...tools].reverse().find((t) => t.ok === undefined)
       if (open) {
         open.ok = e.ok
         open.summary = e.summary
@@ -87,4 +96,11 @@ export function deriveSession(events: SessionEvent[]): DerivedSession {
     messages,
     tools,
   }
+}
+
+/** The tool calls still waiting for their result — by callId when present,
+ * positionally otherwise (parallel-safe pending detection, M12). */
+export function pendingToolCalls(events: readonly SessionEvent[]): DerivedToolCall[] {
+  const { tools } = deriveSession(events)
+  return tools.filter((t) => t.ok === undefined)
 }

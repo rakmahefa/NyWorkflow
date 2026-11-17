@@ -19,16 +19,22 @@
  * replays its conversation byte-faithfully after a restart) and `model` on
  * stage.started (the model that ran the stage, so an approval can resume
  * without asking again). Old journals stay readable.
+ *
+ * M12 notes: two additive changes — `callId` on tool.call/tool.result
+ * (pairs a result with ITS call even when parallel calls interleave in
+ * the journal; old events fall back to positional pairing), and the
+ * `session.renamed` event (inline rename, additive like session.forked).
  */
 
 /** Every fact of a session, in order. */
 export type SessionEvent =
   | { type: 'session.created'; at: string; title?: string; workspace?: string }
   | { type: 'session.forked'; at: string; from: string }
+  | { type: 'session.renamed'; at: string; title: string }
   | { type: 'user.message'; at: string; text: string }
   | { type: 'assistant.message'; at: string; text: string }
-  | { type: 'tool.call'; at: string; tool: string; args: unknown }
-  | { type: 'tool.result'; at: string; ok: boolean; summary: string; data?: unknown }
+  | { type: 'tool.call'; at: string; tool: string; args: unknown; callId?: string }
+  | { type: 'tool.result'; at: string; ok: boolean; summary: string; data?: unknown; callId?: string }
   | { type: 'stage.started'; at: string; stage: string; model?: string }
   | { type: 'stage.output'; at: string; stage: string; files: string[] }
   | { type: 'run.completed'; at: string; stages: string[] }
@@ -58,5 +64,5 @@ export {
   parseJournal,
   readEvents,
 } from './journal.ts'
-export { deriveSession } from './derive.ts'
+export { deriveSession, pendingToolCalls } from './derive.ts'
 export type { DerivedMessage, DerivedSession, DerivedToolCall } from './derive.ts'

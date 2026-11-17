@@ -20,6 +20,8 @@ export interface MockStreamStep {
   status?: number
   /** Snapshots texte complets — un par frame wrb.fr (deltas reconstruits par le client). */
   snapshots?: string[]
+  /** M12 — snapshots de réflexion, parallèles aux snapshots (même longueur recommandée). */
+  thoughts?: string[]
   /** Lignes brutes envoyées telles quelles (cas exotiques : inner invalide, métadonnées). */
   rawLines?: string[]
   /** Délai entre les écritures, ms. */
@@ -60,9 +62,15 @@ export const STREAM_PATH = '/_/BardChatUi/data/assistant.lamda.BardFrontendServi
 
 export const DISCOVERED_BL = 'boq_assistant-bard-web-server_20261101.07_p3'
 
-/** Frame wrb.fr portant un snapshot texte (inner[4] candidats). */
-export function textFrame(snapshot: string): string {
-  const inner = JSON.stringify([null, ['tok'], 'padding'.repeat(12), [], [['c', [snapshot]]], [], [], []])
+/** Frame wrb.fr portant un snapshot texte (inner[4] candidats) — avec la
+ * réflexion du candidat à [37][0][0] quand elle est donnée (M12). */
+export function textFrame(snapshot: string, thought?: string): string {
+  const candidate: unknown[] = ['c', [snapshot]]
+  if (thought !== undefined) {
+    // [37] = [[thought]] — la case où vit la réflexion (vérité amont).
+    candidate[37] = [[thought]]
+  }
+  const inner = JSON.stringify([null, ['tok'], 'padding'.repeat(12), [], [candidate], [], [], []])
   return JSON.stringify([['wrb.fr', [62, 0], inner], ['di', 72]])
 }
 
@@ -128,7 +136,9 @@ export async function startMockGemini(options: MockGeminiOptions = {}): Promise<
         void (async () => {
           try {
             res.write(")]}'\n")
-            const lines = step.rawLines ?? (step.snapshots ?? []).map(textFrame)
+            const lines =
+              step.rawLines ??
+              (step.snapshots ?? []).map((text, i) => textFrame(text, step.thoughts?.[i]))
             for (const line of lines) {
               if (step.delayMs && step.delayMs > 0) await new Promise((r) => setTimeout(r, step.delayMs))
               if (record.closed) return

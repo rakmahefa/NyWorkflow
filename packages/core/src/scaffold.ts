@@ -48,11 +48,16 @@ Un sous-dossier qui acquiert un rôle mérite son propre \`CONTEXT.md\`.
 
 ## Outils
 
-- \`read {"path"}\`, \`ls {"path"}\`, \`glob {"pattern"}\` — explorer.
+- \`read {"path"}\`, \`ls {"path"}\`, \`glob {"pattern"}\` — explorer (libre).
 - \`mkdir {"path"}\` — créer un dossier (libre).
 - \`write {"path","content"}\` — écrire un fichier (approbation du pilote).
-- \`shell {"command"}\` — commande bash, cwd = racine (approbation).
+- \`shell {"command"}\` — commande bash, cwd = racine (approbation) ;
+  \`"background": true\` pour une commande longue — jobId rendu immédiat.
+- \`shell_output {"jobId"}\` — suivre un processus d'arrière-plan (libre).
+- \`shell_kill {"jobId"}\` — arrêter un processus d'arrière-plan (libre).
 - \`websearch {"query"}\` — recherche ; \`websearch {"url"}\` — page nettoyée.
+
+Les appels indépendants se lancent ENSEMBLE dans une même réponse.
 
 Tout chemin reste dans le workspace. Les refus « hors périmètre » sont
 définitifs : ne réessaie pas le même chemin.

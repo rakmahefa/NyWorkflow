@@ -24,12 +24,14 @@ test('write approuvé : fichier écrit, boucle reprise, décision journalisée',
   await box.fill('AGENTECRIT écris le livrable de test')
   await box.press('Enter')
 
-  // La carte d'approbation apparaît (write en pause), composer verrouillé.
+  // La carte d'approbation apparaît (write en pause) — M12 : le composer
+  // reste actif pour écrire la suite, mais le bouton devient Stop.
   const card = page.locator('[data-test="approval-card"]')
   await expect(card).toBeVisible({ timeout: 10_000 })
   await expect(card).toContainText('write')
   await expect(card).toContainText('outputs/agent-e2e.md')
-  await expect(box).toBeDisabled()
+  await expect(page.locator('[data-test="stop-btn"]')).toBeVisible()
+  await expect(page.locator('[data-test="send-btn"]')).toHaveCount(0)
 
   // Rien n'est écrit avant la décision.
   expect(existsSync(OUT_FILE)).toBe(false)

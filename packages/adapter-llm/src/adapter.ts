@@ -229,6 +229,11 @@ export function createWeb2ApiClient(options: ClientOptions): LlmAdapter {
       const choice = firstChoice(obj)
       if (choice !== undefined) {
         const delta = (choice.delta ?? {}) as Record<string, unknown>
+        // delta.reasoning_content (M12, dialecte DeepSeek) : la réflexion du
+        // modèle — affichage seul, jamais renvoyée dans l'historique.
+        if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+          yield { type: 'thinking', delta: delta.reasoning_content }
+        }
         // delta.content (stream) ou message.content (serveur non streamé).
         const content = typeof delta.content === 'string' ? delta.content : undefined
         const message = (choice.message ?? {}) as Record<string, unknown>

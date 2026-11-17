@@ -30,6 +30,7 @@ import {
   readEvents,
 } from '@nyworkflow/session'
 import type { DerivedSession, SessionEvent } from '@nyworkflow/session'
+import { workspaceExists } from './workspaces.ts'
 
 /** Workspace folder names, same rule as the /workspaces API. */
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
@@ -162,13 +163,13 @@ export function createSessionsHandler(
     return out
   }
 
-  /** Validates a workspace name against the registry (M11). */
+  /** Validates a workspace name against the registry + manifest (M11, M12). */
   async function checkWorkspace(name: unknown): Promise<string | undefined> {
     if (name === undefined || name === null) return undefined
     if (typeof name !== 'string' || !NAME_RE.test(name) || name === '.' || name === '..') {
       throw badRequest('nom de workspace invalide')
     }
-    if (workspacesDir !== '' && !existsSync(join(workspacesDir, name))) {
+    if (workspacesDir !== '' && !(await workspaceExists(workspacesDir, name))) {
       throw badRequest(`workspace inconnu : ${name}`)
     }
     return name
@@ -227,6 +228,23 @@ export function createSessionsHandler(
     await deleteJournal(home, id)
   }
 
+  /** M12 — renames a session (append-only: the session.renamed event wins in derivation). */
+  async function rename(req: IncomingMessage, id: string): Promise<SessionDto> {
+    const file = journalPath(home, id)
+    try {
+      await access(file)
+    } catch {
+      throw notFound('session inconnue')
+    }
+    const body = await readJson(req)
+    const title = typeof body.title === 'string' ? body.title.trim().slice(0, 60) : ''
+    if (title === '') throw badRequest('titre non vide attendu')
+    await appendEvent(file, { type: 'session.renamed', at: nowIso(), title })
+    const events = await readEvents(file)
+    const d = deriveSession(events)
+    return { id, title: d.title, createdAt: toMs(d.createdAt), forkedFrom: d.forkedFrom, workspace: d.workspace, events, messages: d.messages.map((m) => ({ role: m.role, text: m.text, at: toMs(m.at) })) }
+  }
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const method = req.method ?? 'GET'
     const url = (req.url ?? '/').split('?')[0] || '/'
@@ -257,6 +275,9 @@ export function createSessionsHandler(
       }
       if (parts[1] === 'fork' && method === 'POST') {
         return send(res, 201, await fork(id))
+      }
+      if (parts[1] === 'rename' && method === 'POST') {
+        return send(res, 200, await rename(req, id))
       }
       if (parts[1] === 'delete' && method === 'POST') {
         await remove(id)

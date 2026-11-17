@@ -17,6 +17,7 @@ const MAX_METADATA_BYTES = 64 * 1024
 
 export type FrameEvent =
   | { type: 'text'; text: string }
+  | { type: 'thought'; text: string }
   | { type: 'toolCall'; id: string; name: string; arguments: unknown }
   | { type: 'metadata'; kind: string; value: unknown }
 
@@ -109,14 +110,24 @@ export class FrameDecoder {
       const candidates = (inner as Record<string, unknown>)[4]
       if (Array.isArray(candidates)) {
         let longest: string | undefined
+        let thought: string | undefined
         for (const candidate of candidates) {
           if (candidate === null || typeof candidate !== 'object') continue
-          const segments = (candidate as Record<string, unknown>)[1]
+          const segments = (candidate as unknown[])[1]
           if (!Array.isArray(segments)) continue
           const text = segments.filter((s): s is string => typeof s === 'string').join('')
-          if (text.length > 0 && (longest === undefined || text.length > longest.length)) longest = text
+          if (text.length > 0 && (longest === undefined || text.length > longest.length)) {
+            longest = text
+            // M12 — thoughts live at candidate[37][0][0] of the SAME
+            // candidate (upstream gemini_webapi truth); snapshots, like text.
+            const t = thoughtOf(candidate)
+            if (t !== undefined) thought = t
+          }
         }
-        if (longest !== undefined) events.push({ type: 'text', text: longest })
+        if (longest !== undefined) {
+          events.push({ type: 'text', text: longest })
+          if (thought !== undefined) events.push({ type: 'thought', text: thought })
+        }
       }
     }
     return events
@@ -152,6 +163,16 @@ export class FrameDecoder {
       }
     }
   }
+}
+
+/** Thoughts of one candidate — `candidate[37][0][0]` when it is a string
+ * (upstream gemini_webapi truth, M12). */
+function thoughtOf(candidate: unknown): string | undefined {
+  if (!Array.isArray(candidate)) return undefined
+  const slot = candidate[37]
+  if (!Array.isArray(slot) || !Array.isArray(slot[0])) return undefined
+  const value = slot[0][0]
+  return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
 function parseToolObject(value: unknown): { id?: string; name: string; arguments: unknown } | undefined {

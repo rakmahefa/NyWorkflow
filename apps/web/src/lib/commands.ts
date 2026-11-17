@@ -23,6 +23,7 @@ export function parseInput(raw: string): ParsedInput {
 export const HELP_TEXT = [
   'Commandes disponibles :',
   '  /new — ouvrir la boîte de nouvelle session (titre + workspace ICM)',
+  '  /rename <titre> — renommer la session active',
   '  /delete — supprimer la session active (confirmation demandée)',
   '  /clear — vider l’affichage de la session courante (le journal est conservé)',
   '  /help — cette aide',
@@ -36,6 +37,8 @@ export interface CommandOutcome {
   openNewDialog?: boolean
   /** Set by /delete: the active session to remove. */
   deleteActive?: boolean
+  /** M12 — set by /rename: the title change to apply (server + store). */
+  renameTo?: string
 }
 
 export interface CommandDeps {
@@ -51,6 +54,11 @@ export async function runCommand(deps: CommandDeps, name: string, args: string):
       return { systemText: '', openNewDialog: true }
     case 'delete':
       return { systemText: '', deleteActive: true }
+    case 'rename': {
+      const title = args.trim().slice(0, 60)
+      if (title === '') return { systemText: 'Usage : /rename <titre>' }
+      return { systemText: '', renameTo: title }
+    }
     case 'clear': {
       // The journal is append-only: /clear empties the view, nothing more.
       const removed = deps.store.clearMessages(deps.activeSessionId)

@@ -1,13 +1,16 @@
 /**
  * @nyworkflow/tools — the agent's hands, and their leash.
  *
- * Seven tools (M5: read, write, ls, glob — M11: mkdir, shell, websearch),
- * one permission that matters: every path stays inside the workspace root
+ * Nine tools (M5: read, write, ls, glob — M11: mkdir, shell, websearch —
+ * M12: shell_output, shell_kill + the background flag on shell), one
+ * permission that matters: every path stays inside the workspace root
  * (lexical + realpath guard). `write` and `shell` are dangerous: execution
  * pauses until a human approves through the UI. `mkdir` is free — the
  * model shapes its own tree. `websearch` returns cleaned web content
  * (scripts, nav, headers and attributes stripped; semantic tags kept).
- * Every call and outcome is journaled by the caller as tool.call /
+ * A background shell runs detached after its approval, followed with
+ * shell_output and stopped with shell_kill (both free — the agent's own
+ * jobs). Every call and outcome is journaled by the caller as tool.call /
  * tool.result events — refusals included, never silent.
  *
  * Pure Node, no core import (core depends on this package, never the
@@ -35,7 +38,10 @@ export type {
   ToolOutcome,
   ToolRefusal,
   ToolRefusalCode,
+  ToolRuntime,
 } from './tools.ts'
+export { JOB_MAX_LIFETIME_MS, JOB_MAX_PER_WORKSPACE, JOB_STREAM_MAX, ShellJobRegistry } from './shelljobs.ts'
+export type { ShellJobSnapshot } from './shelljobs.ts'
 export {
   checkWebUrl,
   cleanHtml,

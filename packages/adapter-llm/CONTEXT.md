@@ -7,3 +7,5 @@ Sorties : `AsyncIterable<ChatStreamEvent>` — deltas de texte, appels d'outils 
 
 Ne fait pas : parsing Gemini, auth cookie — c'est le travail de `@nyworkflow/webapi`.
 Tâches : M2 ✅, M11 ✅ (v1beta + tools, 2026-11-17) — voir MILESTONES.md.
+
+**M12** (2026-11-17) : événement de flux additif `{ type: 'thinking'; delta }` — décodé de `delta.reasoning_content` (dialecte DeepSeek servi par la passerelle) avant le texte ; jamais renvoyé au modèle (affichage seul). `tool_calls` et `finish` inchangés.

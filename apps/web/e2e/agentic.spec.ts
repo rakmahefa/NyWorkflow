@@ -27,8 +27,10 @@ test('nouvelle session : dialogue titre + workspace, bandeau ICM, session active
 
   // Le bandeau porte le workspace de la session — l'ICM est visible.
   await expect(page.locator('[data-test="ws-banner"]')).toContainText('exemple-agentique')
-  // Le workspace est rappelé dans la liste, sous le titre.
-  await expect(page.locator('.session-row[data-active="true"] .session-ws')).toContainText('exemple-agentique')
+  // M12 : la sidebar groupe par workspace — la session vit dans son groupe.
+  const group = page.locator('[data-test="ws-group"]', { hasText: 'exemple-agentique' })
+  await expect(group).toBeVisible()
+  await expect(group.locator('[data-test="session-item"]').filter({ hasText: title })).toBeVisible()
   // La confirmation système mentionne le chargement vers le modèle.
   await expect(page.locator('.msg.system').last()).toContainText('workspace « exemple-agentique » chargé vers le modèle')
 })
