@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ASSESSMENT_EXAMPLE,
   EMPTY_RESPONSE_NUDGE,
   NO_TOOL_EMPTY_PROSE_NUDGE,
   UNSIGNED_FINAL_NUDGE,
   TOOL_CALL_FORMAT,
+  capitulationNote,
+  detectCapitulation,
   normalizeIcmPath,
+  parseAssessment,
   parseCallPlan,
   parseRoundPhases,
   planRedoNote,
@@ -25,14 +29,16 @@ const call = (over: Partial<RoundToolCall> = {}): RoundToolCall => ({
 })
 
 /** A compliant M22 round — thinking first, titled, the [TOOL_LISTING]
- * section, a [MESSAGE] section, one titled valid call (contract held). */
+ * section, a [MESSAGE] section, one titled valid call (contract held).
+ * M23 : le thinking du PREMIER round ouvre par la ligne EXIGENCE (le
+ * briefing du professionnel — le silence du mentor l’exige). */
 const round = (over: Partial<RoundProtocol> = {}): RoundProtocol => {
   const r = {
     round: 1,
     firstEvent: 'thinking' as const,
     thinkingChars: 250,
     thinkingTitles: ['Explorer la racine'],
-    thinking: 'Je liste la racine pour comprendre le workspace.',
+    thinking: 'EXIGENCE: standard — skills: workspace — ICM: chargée.\nJe liste la racine pour comprendre le workspace.',
     text: '[TOOL_LISTING] 1 tool_calls — [Lister la racine]\n\n[MESSAGE]\nJe regarde la racine.',
     toolCalls: [call()],
     ...over,
@@ -347,5 +353,87 @@ describe('normalizeIcmPath', () => {
     expect(normalizeIcmPath('./notes/CONTEXT.md')).toBe('notes/CONTEXT.md')
     expect(normalizeIcmPath('.workspace/notes/CONTEXT.md')).toBe('notes/CONTEXT.md')
     expect(normalizeIcmPath('/notes/CONTEXT.md')).toBe('notes/CONTEXT.md')
+  })
+})
+
+describe('M23 — LE BRIEFING : parseAssessment, la ligne EXIGENCE du premier round', () => {
+  it('lit la ligne où qu’elle vive dans le thinking, insensible à la casse', () => {
+    expect(parseAssessment('EXIGENCE: exigeante — skills: python — ICM: à renforcer')).toBe('exigeante — skills: python — ICM: à renforcer')
+    expect(parseAssessment('exigeance: triviale')).toBeNull() // coquille du marqueur : pas de briefing
+    expect(parseAssessment('Je réfléchis.\nexigence : standard — ICM: riche')).toBe('standard — ICM: riche')
+  })
+
+  it('rend la ligne présente mais vide, et null quand elle manque', () => {
+    expect(parseAssessment('EXIGENCE:')).toBe('')
+    expect(parseAssessment('EXIGENCE : ')).toBe('')
+    expect(parseAssessment('Je liste la racine sans estimer.')).toBeNull()
+    expect(parseAssessment('')).toBeNull()
+  })
+
+  it('borné à 300 caractères — le briefing est une ligne, pas un essai', () => {
+    expect(parseAssessment(`EXIGENCE: ${'a'.repeat(400)}`)!.length).toBe(300)
+  })
+
+  it('le feedback réclame le briefing manquant du PREMIER round, avec le gabarit exact', () => {
+    const fb = protocolFeedback(
+      round({ thinking: 'Je liste la racine pour comprendre le workspace.' }),
+      new ProtocolMemory(),
+      [],
+    )
+    expect(fb).toContain('ligne de BRIEFING')
+    expect(fb).toContain(ASSESSMENT_EXAMPLE)
+    expect(fb).toContain('estime AVANT d’agir')
+  })
+
+  it('round 2+ : l’estimation est faite — on ne sermonne pas deux fois', () => {
+    expect(
+      protocolFeedback(
+        round({ round: 2, thinking: 'Je poursuis le plan du tour.' }),
+        new ProtocolMemory(),
+        [],
+      ),
+    ).toBeNull()
+  })
+
+  it('sans thinking du tout, le briefing n’est pas réclamé (le thinking l’est déjà)', () => {
+    const fb = protocolFeedback(round({ thinkingChars: 0, thinking: '', thinkingTitles: [], firstEvent: 'tool_calls' }), new ProtocolMemory(), [])
+    expect(fb).not.toContain('BRIEFING')
+  })
+})
+
+describe('M23 — L’ANTI-RENONCEMENT : detectCapitulation, le model control', () => {
+  it('détecte la déclaration exacte du pilote (« pas programmé pour ce type de chose »)', () => {
+    const snippet = detectCapitulation('[MESSAGE]\nJe ne suis pas programmé pour faire ce type de chose.')
+    expect(snippet).not.toBeNull()
+    expect(snippet).toContain('pas programmé')
+  })
+
+  it('détecte chaque famille de renoncement d’identité', () => {
+    expect(detectCapitulation('Ceci n’a pas été conçu pour ce travail.')).toContain('conçu')
+    expect(detectCapitulation('Je ne suis qu’un modèle de langage.')).toContain('modèle')
+    expect(detectCapitulation('En tant qu’IA, je ne peux pas créer de projet complet.')).toContain('IA')
+    expect(detectCapitulation('Cela est hors de ma portée.')).toContain('portée')
+    expect(detectCapitulation('Il m’est impossible de continuer.')).not.toBeNull()
+    expect(detectCapitulation('Je n’ai pas la capacité de gérer ce projet.')).not.toBeNull()
+    expect(detectCapitulation('Je ne suis pas en mesure de créer cette archive.')).not.toBeNull()
+  })
+
+  it('laisse passer l’impossibilité locale honnête — le blocage précis n’est pas un renoncement', () => {
+    expect(detectCapitulation('Je ne peux pas lire ce fichier binaire : read renvoie du texte.')).toBeNull()
+    expect(detectCapitulation('Le dossier inbox/ n’existe pas — je passe au suivant.')).toBeNull()
+    expect(detectCapitulation('En tant qu’agent du workspace, je vais analyser la demande.')).toBeNull()
+    expect(detectCapitulation('')).toBeNull()
+  })
+
+  it('capitulationNote : l’identité, les trois mouvements, la reprise, l’exception du blocage réel', () => {
+    const note = capitulationNote('je ne suis pas programmé pour faire ce type de chose')
+    expect(note.split('\n')[0]).toContain('[HARNESS — feedback')
+    expect(note).toContain('je ne suis pas programmé pour faire ce type de chose')
+    expect(note).toContain('programmé pour EXACTEMENT ce travail')
+    expect(note).toContain('se CHERCHE')
+    expect(note).toContain('se CONSTRUIT')
+    expect(note).toContain('se FABRIQUE')
+    expect(note).toContain(ASSESSMENT_EXAMPLE)
+    expect(note).toContain('blocage RÉEL')
   })
 })

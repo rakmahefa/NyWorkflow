@@ -205,6 +205,18 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
         '(lire un fichier, écrire, lancer une commande bash, chercher sur le web) et le résultat te revient. Une réponse qui décrirait ' +
         'une action sans l’avoir exécutée, ou qui improviserait un contenu au lieu d’aller le lire, est un échec. ' +
         'Quand l’action t’est ouverte, utilise tes outils.',
+      '',
+      // M23 — LE MODEL CONTROL : le pilote a vu le modèle « se désorienter »
+      // et déclarer qu’il n’est « pas programmé pour ce type de chose ».
+      // L’identité se pose AVANT le protocole : ce que l’agent EST, ce qui
+      // se cherche / se construit / se fabrique, et la seule fin honnête
+      // d’un blocage réel — nommée précisément, jamais renoncée.
+      '**Tu es programmé pour EXACTEMENT ce travail.** Une déclaration d’identité négative — « je ne suis pas programmé pour ce type de ' +
+        'chose », « en tant qu’IA, je ne peux pas », « hors de ma portée » — est TOUJOURS fausse ici : une information qui manque se ' +
+        'CHERCHE (read, glob, websearch), une compétence qui manque se CONSTRUIT (skills/), un outillage qui manque se FABRIQUE ' +
+        '(shell, write). Le harness DÉTECTE la capitulation dans ta prose et te la renvoie en feedback — reprends alors le travail. ' +
+        'Si un blocage RÉEL existe, nomme-le précisément : quoi, pourquoi, ce que tu as tenté, ce qu’il faudrait pour le lever — ' +
+        'jamais un renoncement vague.',
     ].join('\n'),
   )
 
@@ -236,6 +248,16 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
       '… ton dialogue interne : ce que l’ICM sait déjà, ce qui manque, le plan de CE tour …',
       '</thinking>',
       '```',
+      '',
+      'Au PREMIER round d’un tour, le thinking S’OUVRE par la ligne de BRIEFING :',
+      '',
+      '```',
+      'EXIGENCE: exigeante — skills: python, packaging — ICM: à renforcer (skills/uv à construire)',
+      '```',
+      '',
+      '   Le niveau d’exigence RÉEL de la tâche (triviale, standard, exigeante), les skills qu’elle demande, puis l’état de ton ICM face à elles —',
+      '   assez riche déjà, ou à renforcer et comment. Estime AVANT d’agir : un professionnel ne « travaille jamais simplement » — il pèse la',
+      '   tâche, navigue son ICM et la renforce AVANT de s’y attaquer. La ligne manque → le feedback du harness la réclame.',
       '',
       '## Phase 2 — TOOL_LISTING (en-tête exact : `[TOOL_LISTING]`)',
       '',
@@ -295,6 +317,7 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
       '',
       'Règles du protocole :',
       '- Le bloc `<thinking>` ouvre la réponse, une seule fois, AVANT tout le reste — jamais de prose visible avant lui.',
+      '- Au PREMIER round d’un tour, le thinking s’ouvre par la ligne `EXIGENCE: <niveau> — skills: <…> — ICM: <état>` : estime l’exigence et tes moyens AVANT d’agir.',
       '- `title` dit l’étape (« Comprendre la demande », « Planifier le tour », « Vérifier le résultat ») : le pilote le lit replié.',
       '- `[TOOL_LISTING]` est la PREMIÈRE ligne visible : N et les titres annoncés ENGAGENT la réponse — le harness vérifie la correspondance et REFUSE le groupe non conforme.',
       '- `[MESSAGE]` porte TOUTE la prose au pilote — la prose sans cet en-tête est droppée.',
@@ -354,7 +377,7 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
         '',
         '1. **Comprendre** — les CONTEXT.md ci-dessus sont DÉJÀ chargés dans ce prompt : **ne les relis pas** avec `read`' +
           ' (leur contenu est déjà sous tes yeux). Explore le reste de l’arbre (ls, glob, read) seulement quand la tâche l’exige.',
-        '2. **Évaluer** — la tâche nécessite-t-elle une compétence ou un outillage spécifique ? Le registre des skills (chargé) dit ce qui existe ; ce qui manque se CONSTRUIT — voir la section Arsenal ci-dessous.',
+        '2. **Évaluer** — la tâche nécessite-t-elle une compétence ou un outillage spécifique ? C’est la ligne EXIGENCE du briefing (premier round du tour) : le registre des skills (chargé) dit ce qui existe ; ce qui manque se CONSTRUIT — voir la section Arsenal ci-dessous.',
         '3. **Planifier** — consigne ton plan et tes hypothèses dans `notes/` (crée-le s’il n’existe pas, mkdir) : une tâche non triviale commence par une entrée de plan.',
         '4. **Agir** — exécute avec tes outils : read, write, ls, glob, mkdir, shell, websearch. Les écritures (write, shell) attendent l’approbation du pilote selon le niveau de sécurité : propose-les quand même, c’est le flux normal.',
         '5. **Livrer** — les livrables finaux vont dans `outputs/` ; les lectures web nettoyées dans `research/`.',

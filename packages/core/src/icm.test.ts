@@ -303,6 +303,46 @@ describe('buildIcmSystemPrompt — identité harness (M14)', () => {
     // Le format exact d’un bloc d’appel est enseigné.
     expect(prompt).toContain('{{tool {"name": "read"')
   })
+
+  it('M23 — le briefing EXIGENCE : estimer l’exigence, les skills et l’ICM AVANT d’agir', async () => {
+    const root = tmp()
+    await ensureIcmTree(root)
+    const prompt = buildIcmSystemPrompt(await loadIcm(root))
+    // Le gabarit exact de la ligne, enseigné au premier round de chaque tour.
+    expect(prompt).toContain('EXIGENCE: exigeante — skills: python, packaging — ICM: à renforcer (skills/uv à construire)')
+    expect(prompt).toContain('le thinking S’OUVRE par la ligne de BRIEFING')
+    // Les trois champs de l’estimation : niveau, skills, état de l’ICM.
+    expect(prompt).toContain('niveau d’exigence RÉEL de la tâche')
+    expect(prompt).toContain('les skills qu’elle demande')
+    expect(prompt).toContain('l’état de ton ICM')
+    // La règle du pilote : jamais de travail « simple », l’estimation d’abord.
+    expect(prompt).toContain('ne « travaille jamais simplement »')
+    expect(prompt).toContain('Estime AVANT d’agir')
+    // La règle du protocole la porte aussi (premier round).
+    expect(prompt).toContain('Au PREMIER round d’un tour, le thinking s’ouvre par la ligne `EXIGENCE:')
+    // La méthode ICM pointe vers la ligne (Évaluer).
+    expect(prompt).toContain('C’est la ligne EXIGENCE du briefing')
+  })
+
+  it('M23 — le model control : programmé pour EXACTEMENT ce travail, jamais de renoncement', async () => {
+    const root = tmp()
+    await ensureIcmTree(root)
+    const prompt = buildIcmSystemPrompt(await loadIcm(root))
+    // L’identité posée en dur, AVANT le protocole.
+    expect(prompt).toContain('Tu es programmé pour EXACTEMENT ce travail')
+    // Les renoncements cités sont TOUJOURS faux dans ce harness.
+    expect(prompt).toContain('je ne suis pas programmé pour ce type de chose')
+    expect(prompt).toContain('en tant qu’IA, je ne peux pas')
+    // Les trois mouvements du professionnel : chercher, construire, fabriquer.
+    expect(prompt).toContain('se CHERCHE (read, glob, websearch)')
+    expect(prompt).toContain('se CONSTRUIT (skills/)')
+    expect(prompt).toContain('se FABRIQUE (shell, write)')
+    // La détection est annoncée : le harness renvoie la capitulation.
+    expect(prompt).toContain('DÉTECTE la capitulation')
+    // L’exception honnête : le blocage réel se nomme précisément.
+    expect(prompt).toContain('nomme-le précisément')
+    expect(prompt).toContain('jamais un renoncement vague')
+  })
 })
 
 describe('scaffoldAgenticWorkspace (M14 — arbre dans .workspace/)', () => {

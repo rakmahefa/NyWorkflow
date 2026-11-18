@@ -35,6 +35,18 @@ export const TOOL_LISTING_HEADER = '[TOOL_LISTING]'
 export const MESSAGE_HEADER = '[MESSAGE]'
 export const FEEDBACK_HEADER = '[HARNESS — feedback'
 
+/** M23 — LE BRIEFING, première ligne du thinking du PREMIER round d'un tour.
+ * Le pilote l'a demandé : le modèle ne doit pas « travailler simplement » —
+ * il ESTIME le niveau d'exigence et les skills nécessaires, puis l'état de
+ * l'ICM, AVANT de s'attaquer à la tâche. La ligne vit dans le thinking
+ * (phase 1) : c'est le plan de vol du professionnel, pas de la prose au
+ * pilote. */
+export const ASSESSMENT_PREFIX = 'EXIGENCE:'
+
+/** Le gabarit exact, tel que le prompt l'enseigne et le feedback le rappelle. */
+export const ASSESSMENT_EXAMPLE =
+  'EXIGENCE: exigeante — skills: python, packaging — ICM: à renforcer (skills/uv à construire)'
+
 /** M22 — LE FORMAT EXACT d'un appel d'outil, tel que le harness le décode.
  * La passerelle enseigne la convention en amont (préambule [Tool calling]) ;
  * le feedback la RAPPELE au moment exact où le modèle se trompe — un appel
@@ -202,6 +214,77 @@ function callLabel(c: RoundToolCall): string {
   return c.tool
 }
 
+/**
+ * M23 — the PRE-TASK BRIEFING, parsed from the round-1 thinking: the
+ * EXIGENCE: line (level, required skills, ICM state). Tolerant — anywhere
+ * in the thinking, any case, spaced or not — because the check must catch
+ * the model that forgot it, not punish the one that wrote it slightly
+ * differently. Returns the line's CONTENT (after the prefix), '' when the
+ * line is present but empty, null when absent.
+ */
+export function parseAssessment(thinking: string): string | null {
+  for (const line of thinking.split('\n')) {
+    const m = line.match(/^\s*exIGENCE\s*:?\s*(.*)$/i)
+    if (m !== null) return m[1]!.trim().slice(0, 300)
+  }
+  return null
+}
+
+/**
+ * M23 — L'ANTI-RENONCEMENT : detects the identity-level capitulation the
+ * pilot reported (« le modèle dit qu'il n'est pas programmé pour faire ce
+ * type de chose »). These are NOT local impossibilities (« je ne peux pas
+ * lire ce fichier binaire » is honest) — they are wholesale refusals of
+ * what the agent IS: programmed for exactly this harness, with ten real
+ * tools, an ICM and a work folder. Returns the matched snippet for the
+ * feedback to quote, null when the prose holds no capitulation.
+ *
+ * La classe `[\wÀ-ÿ]` couvre les accents français (programmé, conçu,
+ * capacité…) que `\w` ASCII ignore ; les deux apostrophes (' et ') sont
+ * admises partout où le français s'écrit.
+ */
+const CAPITULATION_PATTERNS: readonly RegExp[] = [
+  /je\s+(?:ne\s+|n['’]\s*)?(?:suis|serais|étais)\s+pas\s+(?:un\s+|une\s+)?(?:programm[\wÀ-ÿ]*|con[çc][\wÀ-ÿ]*|fait[\wÀ-ÿ]*|autoris[\wÀ-ÿ]*)/i,
+  /(?:pas|jamais)\s+(?:été\s+)?(?:programm[\wÀ-ÿ]*|con[çc][\wÀ-ÿ]*|fait[\wÀ-ÿ]*)\s+(?:pour|à)/i,
+  /je\s+(?:ne\s+|n['’]\s*)?(?:suis|serais)\s+qu['’](?:un|une)\s+(?:mod[eè]le|IA|intelligence|chatbot|assistant\s+basique)/i,
+  /en\s+tant\s+qu['’]?\s*(?:une?\s+)?(?:IA|mod[eè]le(?:\s+de\s+langage)?|intelligence\s+artificielle)\b[^.\n]{0,60}?\b(?:je\s+ne\s+peux|je\s+n['’]arrive|je\s+ne\s+sais\s+pas|je\s+ne\s+suis\s+pas\s+capable|incapable|impossible)/i,
+  /(?:hors|au[- ]delà|en\s+dehors)\s+(?:de\s+)?(?:ma|mes)\s+(?:port[\wÀ-ÿ]*|capacit[\wÀ-ÿ]*|comp[ée]tences|possibilit[\wÀ-ÿ]*|fonctions|attributions)/i,
+  /impossible\s+(?:pour\s+moi|de\s+ma\s+part)/i,
+  /(?:il\s+)?m['’]est\s+impossible/i,
+  /je\s+(?:ne\s+|n['’]\s*)?ai\s+pas\s+(?:la|les)\s+(?:capacit[\wÀ-ÿ]*|comp[ée]tence|autorisation|possibilit[ée])\s+(?:de\s|d['’]|pour)/i,
+  /je\s+(?:ne\s+|n['’]\s*)?(?:suis|serais)\s+pas\s+(?:en\s+mesure|capable)\s+de\s+(?:faire|réaliser|realiser|créer|creer|gérer|gerer|écrire|ecrire)/i,
+]
+
+/** The matched capitulation snippet (≤ 90 chars), or null. */
+export function detectCapitulation(text: string): string | null {
+  if (text.trim() === '') return null
+  for (const re of CAPITULATION_PATTERNS) {
+    const m = re.exec(text)
+    if (m !== null) {
+      const from = Math.max(0, m.index - 10)
+      return text.slice(from, from + 90).replace(/\s+/g, ' ').trim()
+    }
+  }
+  return null
+}
+
+/**
+ * M23 — the note that answers a capitulation: the model control the pilot
+ * asked for. It quotes the offending snippet, states what the agent IS
+ * (programmed for exactly this work), and re-teaches the professional
+ * move — estimate (EXIGENCE), navigate the ICM, build the missing skill,
+ * act — with the honest exception: a REAL blocker is named precisely,
+ * never renounced vaguely.
+ */
+export function capitulationNote(snippet: string): string {
+  return [
+    `${FEEDBACK_HEADER}] Ta réponse déclare ne pas être programmée ou capable de ce travail : « ${snippet} ».`,
+    `C'est FAUX dans ce harness : tu es l'agent NyWorkflow, programmé pour EXACTEMENT ce travail — dix outils réels (read, write, ls, glob, mkdir, shell, websearch, shell_output, shell_kill, no_tool), une ICM vivante et un dossier de travail sur la machine du pilote.`,
+    `Une information qui manque se CHERCHE (websearch, read) ; une compétence qui manque se CONSTRUIT (skills/) ; un outillage qui manque se FABRIQUE (shell, write). Reprends le travail : ${ASSESSMENT_EXAMPLE}, navigue ton ICM, construis le manque, agis.`,
+    `Si un blocage RÉEL existe, nomme-le précisément — quoi, pourquoi, ce que tu as tenté et ce qu'il faudrait pour le lever — jamais un renoncement vague.`,
+  ].join('\n')
+}
+
 function targetOfArgs(args: Record<string, unknown>): string {
   for (const key of ['path', 'pattern', 'command', 'query', 'url', 'jobId', 'reason']) {
     const v = args?.[key]
@@ -301,6 +384,17 @@ export function protocolLines(
     )
   } else if (ctx.thinkingChars > 0 && ctx.thinkingTitles.length === 0) {
     lines.push('Ton bloc thinking n’a pas de title — donne-lui un titre court (« Comprendre la demande »…).')
+  }
+
+  // M23 — LE BRIEFING : au PREMIER round du tour, le thinking porte la ligne
+  // EXIGENCE (niveau d'exigence, skills nécessaires, état de l'ICM) — le
+  // modèle ne « travaille jamais simplement », il estime AVANT d'agir. La
+  // ligne manque → le feedback la réclame avec le gabarit exact. Round 2+ :
+  // l'estimation est faite, on ne sermonne pas deux fois.
+  if (ctx.round === 1 && ctx.thinkingChars > 0 && parseAssessment(ctx.thinking) === null) {
+    lines.push(
+      `Le thinking de ce premier round doit s’ouvrir par la ligne de BRIEFING — ${ASSESSMENT_EXAMPLE} — le niveau d’exigence et les skills nécessaires à la tâche, puis l’état de ton ICM : estime AVANT d’agir, ne travaille jamais « simplement ».`,
+    )
   }
 
   // PHASE 2 — LE LISTING ENGAGE LE GROUPE : l'en-tête [TOOL_LISTING] précède

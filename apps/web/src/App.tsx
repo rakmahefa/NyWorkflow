@@ -15,7 +15,7 @@ import { fakeReply, streamText } from './lib/fakeLLM'
 import { useGatewayStatus } from './lib/gateway'
 import { toAgentMessages } from './lib/history'
 import { baseModelOf, withThinkLevel } from './lib/modelMeta'
-import { EMPTY_RESPONSE_NUDGE, NO_TOOL_EMPTY_PROSE_NUDGE, UNSIGNED_FINAL_NUDGE, ProtocolMemory, parseRoundPhases, planRedoNote, protocolFeedback, protocolLines } from './lib/protocol'
+import { EMPTY_RESPONSE_NUDGE, NO_TOOL_EMPTY_PROSE_NUDGE, UNSIGNED_FINAL_NUDGE, ProtocolMemory, capitulationNote, detectCapitulation, parseRoundPhases, planRedoNote, protocolFeedback, protocolLines } from './lib/protocol'
 import { loadDefaultSecurity, SECURITY_HINT, SECURITY_LABEL } from './lib/security'
 import { applyTheme, loadTheme } from './lib/theme'
 import * as api from './lib/sessionApi'
@@ -453,6 +453,11 @@ export default function App() {
       const turnMemory = new ProtocolMemory()
       let mentorNote: string | null = null
       let emptyNudged = false
+      // M23 — LE MODEL CONTROL : le renoncement d'identité (« je ne suis
+      // pas programmé pour ce type de chose ») n'est pas une réponse — la
+      // fin de tour est REFUSÉE une fois, la note de contrôle repart au
+      // round suivant ; répété, le tour se termine honnêtement.
+      let capNudged = false
       // M21 — LE CONTRAT D’APPELS : combien de groupes ce tour a déjà vu
       // refusés pour contrat non tenu (annonce PLAN ≠ groupe émis).
       let planRedos = 0
@@ -693,11 +698,19 @@ export default function App() {
             phases,
             toolCalls: roundCalls,
           }
+          // M23 — LE MODEL CONTROL, temps de la détection : la prose du
+          // round renonce-t-elle à l'identité ? Ce n'est pas une réponse.
+          // La note de contrôle part au round suivant — seule quand le
+          // round n'a pas d'appels, AVEC le verdict protocole sinon (une
+          // carte de feedback, phase 5, jamais deux). La fin de tour sur
+          // renoncement est refusée plus bas, comme la signature manquante.
+          const cap = toolsOn ? detectCapitulation(text) : null
+          const capNote = cap === null ? null : capitulationNote(cap)
           const mentor = calls.length > 0 ? protocolFeedback(roundProtocol, turnMemory, icmContextPaths) : null
-          mentorNote = mentor
+          mentorNote = capNote !== null && mentor !== null ? `${capNote}\n\n${mentor}` : (capNote ?? mentor)
           // M22 — le feedback s'affiche DANS le round qu'il corrige (carte
           // repliée, phase 5) et part au round suivant.
-          if (mentor !== null) store.attachFeedback(placeholder.id, mentor)
+          if (mentorNote !== null) store.attachFeedback(placeholder.id, mentorNote)
           // Les faits des phases, pour la trace et le journal.
           const phaseFacts = {
             listing: phases.listingPresent ? phases.listingRaw : null,
@@ -852,6 +865,23 @@ export default function App() {
               }
               return
             }
+            // M23 — UN RENONCEMENT N'EST PAS UNE RÉPONSE : la prose
+            // capitule (« je ne suis pas programmé pour ce type de chose »)
+            // — la fin de tour est REFUSÉE, la note de model control part au
+            // round suivant et le modèle REPEND le travail. Une fois par
+            // tour ; répété, la prose s'affiche telle quelle et le tour se
+            // termine honnêtement (jamais de boucle).
+            if (capNote !== null) {
+              if (!capNudged && round < MAX_ROUNDS) {
+                capNudged = true
+                store.settleTrace(traceId, { outcome: 'tool_calls', feedback: capNote })
+                store.appendMessage(session.id, 'system', 'Renoncement détecté — feedback de model control renvoyé au modèle.')
+                continue
+              }
+              store.setRawDisplay(placeholder.id, true)
+              store.appendMessage(session.id, 'system', 'Renoncement répété malgré le feedback — prose affichée telle quelle, tour terminé.')
+              return
+            }
             // M22 — LA SIGNATURE : une prose sans no_tool ne termine PAS le
             // tour. Le modèle doit attendre le feedback du harness pour
             // décider de la suite — le feedback lui réclame la signature
@@ -879,6 +909,20 @@ export default function App() {
           // au serveur (journalisé, jamais dangereux), son observation part au
           // journal, et le tour se termine proprement.
           if (onlyNoTool) {
+            // M23 — un renoncement SIGNÉ reste un renoncement : la note de
+            // model control refuse la fin de tour une fois (le modèle
+            // reprend le travail), puis le tour se termine honnêtement.
+            if (capNote !== null) {
+              if (!capNudged && round < MAX_ROUNDS) {
+                capNudged = true
+                store.settleTrace(traceId, { outcome: 'tool_calls', feedback: capNote })
+                store.appendMessage(session.id, 'system', 'Renoncement détecté — feedback de model control renvoyé au modèle.')
+                continue
+              }
+              if (phases.message !== '') store.setRawDisplay(placeholder.id, true)
+              store.appendMessage(session.id, 'system', 'Renoncement répété malgré le feedback — prose affichée telle quelle, tour terminé.')
+              return
+            }
             // no_tool SANS prose en-têtée : le modèle a signé la fin sans
             // écrire la réponse — réclamée une fois, puis tour terminé
             // honnêtement (la prose nue, s'il y en avait, s'affiche brute).

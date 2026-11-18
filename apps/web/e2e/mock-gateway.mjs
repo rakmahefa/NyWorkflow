@@ -122,6 +122,32 @@ const TOOL_SCENARIOS = {
     final: 'NONSIGNÉ CORRIGÉ — la réponse est signée à présent.',
     fixed: { thinkTitle: 'Signer la fin', thinkBody: 'Listing no_tool, [MESSAGE], puis l’appel no_tool.', unsigned: false },
   },
+  // M23 — LE RENONCEMENT : la maquette déclare qu’elle n’est « pas programmée
+  // pour ce type de chose » (le retour du pilote sur le modèle réel) — le
+  // model control la DÉTECTE, refuse la fin de tour et renvoie la note
+  // d’identité ; la variante fixed REPREND le travail (briefing compris).
+  AGENTRENONCE: {
+    unsigned: true,
+    thinkTitle: 'Répondre au pilote',
+    thinkBody: 'Cette demande dépasse ce que je sais faire.',
+    final: 'Je ne suis pas programmé pour faire ce type de chose. En tant qu’IA, je ne peux pas créer un projet complet.',
+    fixed: {
+      thinkTitle: 'Reprendre le travail',
+      thinkBody: 'EXIGENCE: exigeante — skills: python, packaging — ICM: riche (chargée ce tour). Le feedback a raison : je construis.',
+      unsigned: false,
+      final: 'RENONCE CORRIGÉ — le travail est fait, vérifié et livré.',
+    },
+  },
+  // M23 — LE BRIEFING MANQUANT : le thinking du premier round n’ouvre PAS
+  // par la ligne EXIGENCE — le feedback la réclame avec le gabarit exact.
+  AGENTBRIEFING: {
+    name: 'ls',
+    arguments: { title: 'Lister la racine', path: '.' },
+    thinkTitle: 'Agir sans estimer',
+    thinkBody: 'Je liste la racine directement.',
+    noBriefing: true,
+    final: 'BRIEFING NOTÉ — l’exigence sera estimée avant d’agir.',
+  },
   AGENTECRIT: {
     name: 'write',
     arguments: { title: 'Écrire le livrable', path: 'outputs/agent-e2e.md', content: 'CONTENU AGENT E2E' },
@@ -356,8 +382,12 @@ export function startMockGateway(port) {
           if (!scenario.noThinking) {
             const title = scenario.thinkTitle ?? 'Agir sur le workspace'
             const body = scenario.thinkBody ?? 'Je lance les actions de ce tour.'
+            // M23 — le BRIEFING ouvre le thinking du PREMIER round du tour
+            // (ligne EXIGENCE) ; le scénario déviant (noBriefing) l’omet —
+            // le feedback la réclame au round suivant.
+            const briefing = scenario.noBriefing === true ? '' : 'EXIGENCE: standard — skills: workspace — ICM: chargée.\n'
             chunk({ content: `<thinking title="${title}">` })
-            chunk({ content: `${body}</thinking>` })
+            chunk({ content: `${briefing}${body}</thinking>` })
           }
           // Phase 2 — le listing, PREMIÈRE ligne visible (auto-généré
           // conforme aux appels émis quand le scénario ne l'écrit pas ;
