@@ -259,6 +259,18 @@ it(
     }
     // Les fichiers du pilote sont intacts.
     expect(readFileSync(join(pilotDir, 'projet.md'), 'utf8')).toBe('le projet du pilote')
-    rmSync(pilotDir, { recursive: true, force: true })
+    // Les writers de logs de la session écrivent en fire-and-forget dans
+    // pilotDir/.logs/ — le rm peut tomber ENTRE deux écritures (ENOTEMPTY,
+    // vu au CI sous charge) : on laisse le temps filer puis on réessaie.
+    await new Promise((r) => setTimeout(r, 150))
+    for (let attempt = 0; ; attempt++) {
+      try {
+        rmSync(pilotDir, { recursive: true, force: true })
+        break
+      } catch (err) {
+        if (attempt >= 4) throw err
+        await new Promise((r) => setTimeout(r, 150))
+      }
+    }
   },
 )
