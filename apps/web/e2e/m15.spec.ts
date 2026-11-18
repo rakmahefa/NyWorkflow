@@ -96,8 +96,11 @@ test('persistance : le groupe et les titres survivent au rechargement (journal)'
 
   // Rechargement : le journal rejoue les tool.call dans l'ordre — le
   // regroupement par adjacence et les titres (arguments journalisés)
-  // reconstruisent la même carte.
+  // reconstruisent la même carte. Les suites parallèles partagent le
+  // workspace : on RE-SÉLECTIONNE notre session par son titre (l'app
+  // ouvre la plus récente, qui peut être celle d'un autre test).
   await page.reload()
+  await page.locator('[data-test="session-item"]').filter({ hasText: title }).click()
   const group = page.locator('[data-test="tool-group"]')
   await expect(group.first()).toBeVisible({ timeout: 10_000 })
   await expect(group).toHaveCount(1)
