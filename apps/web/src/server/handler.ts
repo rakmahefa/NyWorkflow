@@ -524,6 +524,11 @@ export function createSessionsHandler(
       ms: int(body.ms, 3_600_000),
       calls: results.length,
       ok: results.every((r) => r.ok),
+      // M18 — the group's verdict in counts: `ok: false` on a 7/8 group
+      // read like « the observation failed » — the counts say what really
+      // happened (7 ok, 1 error).
+      okCalls: results.filter((r) => r.ok).length,
+      errCalls: results.filter((r) => !r.ok).length,
       results,
     }
     profiler?.model(record)

@@ -24,7 +24,7 @@ import type { ChatMsg, RequestTrace, SecurityLevel, SessionInfo } from './lib/ty
 import { APP_VERSION } from './lib/version'
 
 const WELCOME =
-  'Bienvenue dans NyWorkflow (v0.5.0). Sessions ICM agentiques — chaque session vit dans SON dossier (obligatoire) : l’ICM complet naît dans le dossier caché .workspace/ (charte, plan, tâches, journal, décisions, recherche, mémoire, livrables) et ses logs de profilage dans .logs/<session>/ au même endroit. Le modèle sait qu’il tourne dans ce harness et agit avec ses outils (read, write, ls, glob, mkdir, shell + arrière-plan, websearch, shell_output, shell_kill). Niveau de sécurité par session (demander / accepter / aucun outil), onglet Activité (requêtes + outils, journalisés), trio de logs global dans .nyworkflow/.logs/.'
+  `Bienvenue dans NyWorkflow (v${APP_VERSION}). Sessions ICM agentiques — chaque session vit dans SON dossier (obligatoire) : l’ICM complet naît dans le dossier caché .workspace/ (charte, plan, tâches, journal, décisions, recherche, mémoire, livrables) et ses logs de profilage dans .logs/<session>/ au même endroit (quatuor : engine, session, activity, model). Le modèle sait qu’il tourne dans ce harness et agit avec ses outils (read, write, ls, glob, mkdir, shell + arrière-plan, websearch, shell_output, shell_kill). Niveau de sécurité par session (demander / accepter / aucun outil). Le chat reste épuré : vos messages à droite, l’activité de l’agent à gauche en groupes repliés titrés (« N fichiers lus · N commandes lancées ») ; l’onglet Activité profile chaque tour (rounds, appels, payloads exacts, journaux de la session).`
 const GATEWAY_DOWN =
   'Passerelle webapi absente — réponses simulées. Elle démarre normalement avec l’application ; ouvrez Paramètres → Passerelle pour le diagnostic, ou vérifiez NYW_WEBAPI_EMBED (0 = désactivée).'
 const MEMORY_FALLBACK =
@@ -210,6 +210,8 @@ export default function App() {
               ...(e.error !== undefined ? { error: e.error } : {}),
               thinkingChars: e.thinkingChars,
               textChars: e.textChars,
+              // M18 — journaled turn.completed: the turn's final summary.
+              final: true,
             },
           ]
         : [],

@@ -237,32 +237,43 @@ button { font: inherit; color: inherit; }
 .chat {
   flex: 1;
   overflow: auto;
-  padding: 24px 20px;
+  padding: 24px 24px;
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
-.chat > * { max-width: 760px; width: 100%; margin-left: auto; margin-right: auto; }
+/* M18 — Z.ai-style geometry: the agent's whole production (thinking,
+ * actions, answers) stays LEFT on a readable column; the USER speaks from
+ * the FAR RIGHT of the chat area. No centered column anymore. */
+.chat > * {
+  width: 100%;
+  max-width: 860px;
+}
+.chat > .msg.user {
+  max-width: min(78%, 860px);
+  margin-left: auto; /* tout à droite */
+}
 .msg {
   padding: 0;
   white-space: pre-wrap;
   overflow-wrap: break-word;
   font-size: 14.5px;
 }
-/* Bulle utilisateur : bleu deepseek-100, rayon 16, alignée à droite — comme dsh. */
+/* Bulle utilisateur : bleu deepseek-100, rayon 16, alignée à DROITE — comme dsh. */
 .msg.user {
   align-self: flex-end;
   width: fit-content;
-  max-width: 75%;
   background: var(--bubble);
   color: var(--text);
   padding: 10px 16px;
   border-radius: var(--radius-l);
 }
-/* Réponse assistant : texte plein, sans bulle — comme dsh. */
+/* Réponse assistant : texte plein, sans bulle — bien à GAUCHE. */
 .msg.assistant { align-self: flex-start; color: var(--text); }
+/* Messages système : pastille discrète, à GAUCHE comme le reste de
+ * l'activité du harness (M18 — plus de centrage). */
 .msg.system {
-  align-self: center;
+  align-self: flex-start;
   width: fit-content;
   max-width: 90%;
   background: var(--panel-2);
@@ -270,7 +281,7 @@ button { font: inherit; color: inherit; }
   padding: 4px 14px;
   color: var(--text-2);
   font-size: 12.5px;
-  text-align: center;
+  text-align: left;
 }
 .empty {
   margin: auto;
@@ -287,8 +298,10 @@ button { font: inherit; color: inherit; }
   background: transparent;
 }
 .composer-card {
-  max-width: 760px;
-  margin: 0 auto;
+  max-width: 860px;
+  /* M18 — aligné sur la colonne de chat (à gauche), plus de centrage :
+   * l'utilisateur parle à droite, tout le reste vit à gauche. */
+  margin: 0;
   background: var(--panel);
   border: 1px solid var(--line-2);
   border-radius: var(--radius-l);
@@ -600,24 +613,22 @@ button { font: inherit; color: inherit; }
 }
 .ws-api { font-size: 11.5px; color: var(--text-3); font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo, Courier, monospace; }
 
-/* Lignes d'activité d'outils, dans le flux du chat (M11). */
+/* Lignes d'activité d'outils, dans le flux du chat (M11, M18 : titre +
+ * cible + statut, SANS JSON — les payloads vivent dans l'onglet Activité). */
 .msg.tool {
-  align-self: center;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 12.5px;
   color: var(--text-3);
-  font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-s);
-  padding: 3px 10px;
-  max-width: 90%;
+  background: transparent;
+  padding: 2px 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.msg.tool[data-state='ok'] { color: var(--ok); border-color: transparent; background: transparent; }
-.msg.tool[data-state='err'] { color: var(--err); border-color: transparent; background: transparent; }
-.msg.tool[data-state='pending'] { color: var(--warn); }
+.msg.tool[data-state='ok'] .tool-state { color: var(--ok); }
+.msg.tool[data-state='err'] .tool-state { color: var(--err); }
+.msg.tool[data-state='pending'] .tool-state { color: var(--warn); }
 
 /* Boîte de dialogue « nouvelle session » — champs du formulaire. */
 .modal .field { display: flex; flex-direction: column; gap: 5px; margin: 12px 0; }
@@ -823,14 +834,17 @@ button { font: inherit; color: inherit; }
 }
 
 /* ===== M12 : lignes d'outils enrichies (dépliables) ======================== */
+/* M18 — la ligne n'est plus un bouton : titre + cible + statut, rien
+ * d'autre. Le JSON (arguments, résultat) est un matériau de profilage,
+ * il vit dans l'onglet Activité. */
 .msg.tool {
   white-space: normal;
-  padding: 0;
+  padding: 2px 0;
   overflow: visible;
   text-overflow: unset;
-  max-width: 92%;
+  max-width: 100%;
 }
-/* ===== M15 : titre d'appel + groupe d'actions =============================== */
+/* ===== M15/M18 : titre d'appel + groupe d'actions (façon Z.ai) ============== */
 .tool-title {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
@@ -846,14 +860,19 @@ button { font: inherit; color: inherit; }
   font-weight: 400;
 }
 .tool-sum { color: var(--text-3); }
+/* M18 — la carte de groupe : titre agrégé par outil (« 8 fichiers lus ·
+ * 2 commandes lancées »), statut à droite, arbre replié une fois terminé. */
 .tool-group {
   margin: 2px 0 6px;
   border: 1px solid var(--line);
   border-radius: var(--radius-m);
   background: var(--panel-2);
   overflow: hidden;
-  max-width: 94%;
+  max-width: 100%;
+  align-self: flex-start;
 }
+.tool-group[data-state='pending'] { border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
+.tool-group[data-state='err'] { border-color: color-mix(in srgb, var(--err) 35%, var(--line)); }
 .tool-group-head {
   display: flex;
   align-items: center;
@@ -870,58 +889,50 @@ button { font: inherit; color: inherit; }
   text-align: left;
 }
 .tool-group-head:hover { color: var(--text); }
-.tool-group-title { letter-spacing: 0.2px; }
+.tool-group-title { letter-spacing: 0.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tool-group-meta {
   margin-left: auto;
   font-size: 11px;
   font-weight: 400;
+  flex: none;
   display: flex;
   gap: 4px;
   align-items: baseline;
 }
 .tool-group-body {
   border-top: 1px dashed var(--line-2);
-  padding: 3px 0 4px 6px;
+  padding: 3px 10px 4px 14px;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
-.tool-head {
+/* M18 — la ligne d'appel n'est plus un bouton : une ligne de l'arbre. */
+.msg.tool .tool-label {
   display: flex;
   align-items: center;
-  gap: 7px;
-  width: 100%;
-  border: none;
-  background: none;
-  padding: 5px 10px;
-  font: inherit;
-  font-size: 12.5px;
-  color: var(--text-3);
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
-  cursor: pointer;
-  text-align: left;
 }
-.tool-head:hover { color: var(--text); }
+.msg.tool .tool-label code { font-size: 11.5px; color: var(--text-3); }
 .tool-glyph { flex: none; font-size: 13px; }
 .tool-state { flex: none; }
 .tool-state.ok { color: var(--ok); }
 .tool-state.err { color: var(--err); }
 .tool-state.pending { color: var(--warn); }
-.tool-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .tool-bg {
   font-size: 10px;
-  font-family: inherit;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   background: var(--brand-soft);
   color: var(--brand);
   border-radius: 999px;
   padding: 0 7px;
   margin-right: 4px;
+  flex: none;
 }
 .tool-details {
   border-top: 1px solid var(--line);
@@ -1023,6 +1034,69 @@ button { font: inherit; color: inherit; }
 .act-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 0; }
 .act-facts dt { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-3); }
 .act-facts dd { margin: 2px 0 0; font-size: 12.5px; }
+
+/* ===== M18 : l'activité groupée par TOUR, repliée d'office =================== */
+.turn-block {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--brand);
+  border-radius: var(--radius-m);
+  background: var(--panel);
+  overflow: hidden;
+}
+.turn-block[data-running='true'] { border-left-color: var(--warn); }
+.turn-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.turn-head:hover { background: var(--hover); }
+.turn-label { font-weight: 600; flex: none; }
+.turn-model {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.turn-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.turn-meta {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.turn-body {
+  border-top: 1px solid var(--line);
+  padding: 8px 10px 8px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.turn-round { display: flex; flex-direction: column; gap: 4px; }
+.turn-round .act-card { margin-left: 14px; }
+/* M18 — l'arbre tour > round > outil : les appels s'indentent SOUS leur
+ * round, la hiérarchie se lit d'un coup d'œil repliée ou dépliée. */
+.turn-round .act-card.tool { margin-left: 34px; border-left: 2px solid var(--line-2); }
+.turn-final { padding: 2px 4px 4px; }
+.turn-final .act-facts { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 
 /* ===== M17 : la réponse du modèle dans la carte requête + logs de la session */
 .act-protocol { margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }

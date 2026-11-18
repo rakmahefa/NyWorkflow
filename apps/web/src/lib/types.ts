@@ -101,4 +101,8 @@ export interface RequestTrace {
   toolCalls?: { tool: string; title: string; argsOk: boolean }[]
   /** M17 — the ICM system prompt's size (the context drift, per request). */
   systemChars?: number
+  /** M18 — true when this trace is a journaled turn.completed (the TURN's
+   * summary, not one round's): the activity tab groups by turn and closes
+   * a block on it. */
+  final?: boolean
 }

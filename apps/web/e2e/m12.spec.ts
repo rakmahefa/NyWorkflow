@@ -97,6 +97,12 @@ test('onglet Activité : chaque requête modèle tracée, chaque outil dépliabl
   await expect(page.locator('.msg.assistant').last()).toContainText('LIVRABLE FINAL AGENT', { timeout: 10_000 })
 
   await page.locator('[data-test="tab-activity"]').click()
+  // M18 : un TOUR par bloc, replié d'office — le résumé tient en une ligne
+  // (« 1 fichier lu »), on déplie pour lire les rounds et les appels.
+  const turn = page.locator('[data-test="act-turn"]').first()
+  await expect(turn).toBeVisible()
+  await expect(turn.locator('.turn-summary')).toContainText('1 fichier lu')
+  await turn.locator('.turn-head').click()
   const requests = page.locator('[data-test="act-request"]')
   await expect(requests.first()).toBeVisible()
   expect(await requests.count()).toBeGreaterThanOrEqual(2)
@@ -141,17 +147,28 @@ test('parallèle : deux appels sûrs d’un même tour, exécutés ensemble', as
   await box.fill('AGENTPARALLELE lis tout d’un coup')
   await box.press('Enter')
 
-  // Les deux lignes (read + ls) se règlent, puis la réponse finale.
-  const read = page.locator('[data-test="tool-row"]', { hasText: 'read' }).first()
-  const ls = page.locator('[data-test="tool-row"]', { hasText: 'ls' }).first()
-  await expect(read).toHaveAttribute('data-state', 'ok', { timeout: 10_000 })
-  await expect(ls).toHaveAttribute('data-state', 'ok', { timeout: 10_000 })
+  // Les deux appels (read + ls) se règlent, puis la réponse finale.
+  // M18 : le groupe réglé se replie de lui-même — le compteur « 2 ✓ » dit
+  // le verdict sans ouvrir l'arbre (les lignes vivent dedans).
+  const group = page.locator('[data-test="tool-group"]').first()
+  await expect(group).toBeVisible({ timeout: 10_000 })
+  await expect(group).toHaveAttribute('data-count', '2')
+  await expect(group.locator('.tool-group-meta')).toContainText('2 ✓', { timeout: 10_000 })
   await expect(page.locator('.msg.assistant').last()).toContainText('PARALLÈLE FAIT', { timeout: 10_000 })
 
   // Chaque appel garde SON résultat (appariement par callId) : read rend le
-  // contenu, ls rend les entrées — visibles dans les détails dépliables.
-  await read.locator('.tool-head').click()
-  await expect(read.locator('[data-test="tool-details"] pre').first()).toContainText('path')
+  // contenu, ls rend les entrées — payloads visibles dans l'onglet Activité
+  // (M18 : le chat montre titre + cible + statut, le JSON vit LÀ).
+  await page.locator('[data-test="tab-activity"]').click()
+  const turn = page.locator('[data-test="act-turn"]').first()
+  await expect(turn).toBeVisible()
+  await expect(turn.locator('.turn-summary')).toContainText('1 fichier lu')
+  await expect(turn.locator('.turn-summary')).toContainText('1 dossier listé')
+  await turn.locator('.turn-head').click()
+  const readCard = page.locator('[data-test="act-tool"]', { hasText: 'read' }).first()
+  await readCard.locator('.act-head').click()
+  await expect(readCard.locator('.act-body')).toBeVisible()
+  await expect(readCard.locator('pre').first()).toContainText('path')
 })
 
 test('arrière-plan : approbation → jobId → suivi shell_output → arrêt', async ({ page }) => {

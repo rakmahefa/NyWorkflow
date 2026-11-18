@@ -56,12 +56,24 @@ test('groupe d’actions : tool_calls groupés, titrés, repliables', async ({ p
   await expect(group.first()).toBeVisible({ timeout: 10_000 })
   await expect(group).toHaveCount(1)
   await expect(group.first()).toHaveAttribute('data-count', '2')
-  await expect(group.first().locator('[data-test="tool-row"]')).toHaveCount(2)
 
   // Le thinking titré du tour d'actions est là, lui aussi.
   await expect(page.locator('[data-test="thinking-block"]').first()).toHaveAttribute('data-title', 'Planifier le tour')
 
-  // Chaque ligne porte le titre que le modèle a rempli dans ses arguments.
+  // Exécutés en parallèle (les deux se règlent), la réponse finale conclut.
+  // M18 : le groupe réglé se replie DE LUI-MÊME — le titre agrégé dit
+  // l'intention (« 1 fichier lu · 1 recherche de fichiers »), le compteur
+  // dit le verdict.
+  await expect(group.first()).toHaveAttribute('data-state', 'ok', { timeout: 10_000 })
+  await expect(group.first().locator('.tool-group-meta')).toContainText('2 ✓')
+  await expect(group.first()).toContainText('1 fichier lu')
+  await expect(group.first()).toContainText('1 recherche de fichiers')
+  await expect(page.locator('.msg.assistant').last()).toContainText('PROTOCOLE TROIS TEMPS', { timeout: 10_000 })
+  await expect(group.first().locator('[data-test="tool-row"]')).toHaveCount(0) // replié d'office
+
+  // Un clic ouvre l'arbre : chaque ligne porte le titre que le modèle a
+  // rempli dans ses arguments.
+  await group.first().locator('.tool-group-head').click()
   const read = group.locator('[data-test="tool-row"]', { hasText: 'read' })
   const glob = group.locator('[data-test="tool-row"]', { hasText: 'glob' })
   await expect(read).toHaveAttribute('data-title', 'Relire la charte')
@@ -69,16 +81,10 @@ test('groupe d’actions : tool_calls groupés, titrés, repliables', async ({ p
   await expect(read).toContainText('Relire la charte')
   await expect(glob).toContainText('Cartographier les notes')
 
-  // Exécutés en parallèle (les deux se règlent), la réponse finale conclut.
-  await expect(read).toHaveAttribute('data-state', 'ok', { timeout: 10_000 })
-  await expect(glob).toHaveAttribute('data-state', 'ok', { timeout: 10_000 })
-  await expect(group.first().locator('.tool-group-meta')).toContainText('2 ✓')
-  await expect(page.locator('.msg.assistant').last()).toContainText('PROTOCOLE TROIS TEMPS', { timeout: 10_000 })
-
-  // La carte se replie d'un clic — les lignes disparaissent, le compteur reste.
+  // La carte se replie d'un clic — les lignes disparaissent, le titre reste.
   await group.first().locator('.tool-group-head').click()
   await expect(group.first().locator('[data-test="tool-row"]')).toHaveCount(0)
-  await expect(group.first()).toContainText('2 appels')
+  await expect(group.first()).toContainText('1 fichier lu')
   await group.first().locator('.tool-group-head').click()
   await expect(group.first().locator('[data-test="tool-row"]')).toHaveCount(2)
 })
@@ -91,7 +97,7 @@ test('persistance : le groupe et les titres survivent au rechargement (journal)'
   const box = page.getByLabel('Message')
   await box.fill('AGENTPROTOCOL cartographie encore')
   await box.press('Enter')
-  await expect(page.locator('[data-test="tool-row"]', { hasText: 'glob' }).first()).toHaveAttribute('data-state', 'ok', { timeout: 10_000 })
+  await expect(page.locator('[data-test="tool-group"]').first()).toHaveAttribute('data-state', 'ok', { timeout: 10_000 })
   await expect(page.locator('.msg.assistant').last()).toContainText('PROTOCOLE TROIS TEMPS', { timeout: 10_000 })
 
   // Rechargement : le journal rejoue les tool.call dans l'ordre — le
@@ -105,6 +111,10 @@ test('persistance : le groupe et les titres survivent au rechargement (journal)'
   await expect(group.first()).toBeVisible({ timeout: 10_000 })
   await expect(group).toHaveCount(1)
   await expect(group.first()).toHaveAttribute('data-count', '2')
+  // M18 : le groupe rejoué est réglé — replié d'office, le titre agrégé
+  // reconstitué depuis le journal. Un clic ouvre l'arbre et ses titres.
+  await expect(group.first()).toContainText('1 fichier lu')
+  await group.first().locator('.tool-group-head').click()
   await expect(group.first().locator('[data-test="tool-row"]', { hasText: 'read' })).toHaveAttribute('data-title', 'Relire la charte')
   await expect(group.first().locator('[data-test="tool-row"]', { hasText: 'glob' })).toHaveAttribute('data-title', 'Cartographier les notes')
 })

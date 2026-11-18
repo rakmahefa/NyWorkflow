@@ -29,6 +29,10 @@ test('activité : la RÉPONSE du modèle et le quatuor de la session, dans l’o
 
   // L'onglet Activité porte la réponse, pas seulement la requête.
   await page.locator('[data-test="tab-activity"]').click()
+  // M18 : le tour est replié d'office — on le déplie pour lire la requête.
+  const turn = page.locator('[data-test="act-turn"]').first()
+  await expect(turn).toBeVisible()
+  await turn.locator('.turn-head').click()
   const req = page.locator('[data-test="act-request"]').first()
   await expect(req).toBeVisible()
   await req.locator('.act-head').click()

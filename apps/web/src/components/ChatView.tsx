@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { isDangerousTool } from '../lib/agentTools'
 import type { ChatMsg, ThinkingBlock } from '../lib/types'
 
 /** Compact display of a tool call's target. */
@@ -10,7 +11,7 @@ function targetOf(args: unknown): string {
       if (typeof v === 'string' && v !== '') return v
     }
   }
-  return JSON.stringify(args)
+  return ''
 }
 
 /** One letter-icon per tool — a quick visual grammar for the activity. */
@@ -26,9 +27,39 @@ const TOOL_GLYPH: Record<string, string> = {
   shell_kill: '🛑',
 }
 
+/**
+ * M18 — the Z.ai-style group summary: counts aggregated BY TOOL, one label
+ * per tool present in the group (« 8 fichiers lus · 4 fichiers écrits ·
+ * 2 commandes lancées »). The pilot reads the group's intention at a
+ * glance, without ever opening it.
+ */
+const TOOL_GROUP_LABEL: Record<string, (n: number) => string> = {
+  read: (n) => (n === 1 ? '1 fichier lu' : `${n} fichiers lus`),
+  write: (n) => (n === 1 ? '1 fichier écrit' : `${n} fichiers écrits`),
+  ls: (n) => (n === 1 ? '1 dossier listé' : `${n} dossiers listés`),
+  glob: (n) => (n === 1 ? '1 recherche de fichiers' : `${n} recherches de fichiers`),
+  mkdir: (n) => (n === 1 ? '1 dossier créé' : `${n} dossiers créés`),
+  shell: (n) => (n === 1 ? '1 commande lancée' : `${n} commandes lancées`),
+  websearch: (n) => (n === 1 ? '1 recherche web' : `${n} recherches web`),
+  shell_output: (n) => (n === 1 ? '1 job suivi' : `${n} jobs suivis`),
+  shell_kill: (n) => (n === 1 ? '1 job arrêté' : `${n} jobs arrêtés`),
+}
+
+/** The aggregated head line of a group: « 2 fichiers lus · 1 dossier listé ». */
+function groupSummary(rows: readonly ChatMsg[]): string {
+  const counts = new Map<string, number>()
+  for (const r of rows) counts.set(r.tool ?? '', (counts.get(r.tool ?? '') ?? 0) + 1)
+  const parts: string[] = []
+  for (const [tool, n] of counts) {
+    parts.push(TOOL_GROUP_LABEL[tool] !== undefined ? TOOL_GROUP_LABEL[tool]!(n) : `${n} ${tool}`)
+  }
+  return parts.join(' · ')
+}
+
 /** The summary for the HEAD LINE: the server writes « tool « target » —
  * outcome », but the line already shows tool and target — strip the
- * redundant prefix, keep the informative tail (full summary in details). */
+ * redundant prefix, keep the informative tail (full summary in the
+ * activity tab). */
 function headSummary(m: ChatMsg): string {
   const s = m.summary ?? ''
   if (m.tool === undefined) return s
@@ -36,54 +67,33 @@ function headSummary(m: ChatMsg): string {
   return s.replace(re, '')
 }
 
-/** A tool call's args and result payload, pretty-printed and capped. */
-function prettyJson(value: unknown): string {
-  try {
-    const raw = JSON.stringify(value, null, 2) ?? ''
-    return raw.length > 4000 ? `${raw.slice(0, 4000)}\n… (tronqué)` : raw
-  } catch {
-    return String(value)
-  }
-}
-
-/** One tool row of the agent's activity (M11, M12: expandable details; M15:
- * the call's `title` argument leads the line when the model filled it). */
+/**
+ * M18 — one tool row of the chat: TITLE, TARGET and STATUS, nothing else.
+ * The raw JSON (arguments, result payload) is profiling material: it lives
+ * in the Activité tab and in model.jsonl, not in the conversation. A
+ * pending row says whether it is RUNNING or WAITING FOR APPROVAL — the
+ * pilot never guesses.
+ */
 function ToolRow({ m }: { m: ChatMsg }) {
-  const [open, setOpen] = useState(false)
   const state = m.ok === undefined ? 'pending' : m.ok ? 'ok' : 'err'
   const background =
     m.tool === 'shell' && m.args !== null && typeof m.args === 'object' && (m.args as Record<string, unknown>).background === true
+  const target = targetOf(m.args)
   return (
     <div className="msg tool" data-test="tool-row" data-state={state} data-tool={m.tool} {...(m.title !== undefined ? { 'data-title': m.title } : {})}>
-      <button type="button" className="tool-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        <span className="tool-glyph" aria-hidden="true">{TOOL_GLYPH[m.tool ?? ''] ?? '🔧'}</span>
-        <span className={`tool-state ${state}`} aria-hidden="true">{state === 'pending' ? '⏳' : state === 'ok' ? '✓' : '✗'}</span>
-        <span className="tool-label">
-          {m.title !== undefined && m.title !== '' ? <span className="tool-title">{m.title}</span> : null}
-          {background ? <span className="tool-bg">arrière-plan</span> : null}
-          <code>{m.tool}</code> « {targetOf(m.args)} »
-          {m.ok === undefined ? (
-            <span className="tool-sum"> — en attente d'approbation</span>
-          ) : m.summary !== undefined && m.summary !== '' ? (
-            <span className="tool-sum"> — {headSummary(m)}</span>
-          ) : null}
-        </span>
-        <svg className="chev" viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true" style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s var(--ease)' }}>
-          <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </button>
-      {open ? (
-        <div className="tool-details" data-test="tool-details">
-          <p className="tool-details-title">Arguments</p>
-          <pre>{prettyJson(m.args ?? {})}</pre>
-          {m.ok !== undefined ? (
-            <>
-              <p className="tool-details-title">Résultat renvoyé au modèle</p>
-              <pre>{m.ok && m.data !== undefined ? prettyJson(m.data) : prettyJson({ ok: false, summary: m.summary })}</pre>
-            </>
-          ) : null}
-        </div>
-      ) : null}
+      <span className="tool-glyph" aria-hidden="true">{TOOL_GLYPH[m.tool ?? ''] ?? '🔧'}</span>
+      <span className={`tool-state ${state}`} aria-hidden="true">{state === 'pending' ? '⏳' : state === 'ok' ? '✓' : '✗'}</span>
+      <span className="tool-label">
+        {m.title !== undefined && m.title !== '' ? <span className="tool-title">{m.title}</span> : null}
+        {background ? <span className="tool-bg">arrière-plan</span> : null}
+        <code>{m.tool}</code>
+        {target !== '' ? <> « {target} »</> : null}
+        {m.ok === undefined ? (
+          <span className="tool-sum"> — {isDangerousTool(m.tool ?? '') ? 'en attente d’approbation' : 'en cours…'}</span>
+        ) : m.summary !== undefined && m.summary !== '' ? (
+          <span className="tool-sum"> — {headSummary(m)}</span>
+        ) : null}
+      </span>
     </div>
   )
 }
@@ -143,29 +153,38 @@ function ThinkingBlocks({ m }: { m: ChatMsg }) {
 }
 
 /**
- * One GROUP of tool calls (M15): the calls of a same model round run in
- * parallel and land together — they are shown as ONE collapsible card that
- * holds their rows. The header counts them live (pending, ok, err); a single
- * call renders as the plain row (no wrapper noise).
+ * One GROUP of tool calls (M15 grouped, M18 Z.ai-style): the calls of a
+ * same model round run in parallel and land together — ONE collapsible
+ * card whose HEAD aggregates them by tool (« 8 fichiers lus · 2 commandes
+ * lancées »). The tree is OPEN while calls are pending (the pilot watches
+ * the live statuses) and FOLDS ITSELF when the group settles — unless the
+ * pilot opened or closed it by hand, which always wins.
  */
 function ToolGroup({ rows }: { rows: readonly ChatMsg[] }) {
-  const [open, setOpen] = useState(true)
+  const pendingCount = rows.filter((r) => r.ok === undefined).length
+  const pending = pendingCount > 0
+  const [manual, setManual] = useState<boolean | null>(null)
+  const open = manual ?? pending
   if (rows.length === 1) return <ToolRow m={rows[0]!} />
-  const pending = rows.filter((r) => r.ok === undefined).length
   const ok = rows.filter((r) => r.ok === true).length
   const err = rows.filter((r) => r.ok === false).length
+  const state = pending ? 'pending' : err > 0 ? 'err' : 'ok'
   return (
-    <div className="tool-group" data-test="tool-group" data-count={rows.length}>
-      <button type="button" className="tool-group-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+    <div className="tool-group" data-test="tool-group" data-count={rows.length} data-state={state}>
+      <button type="button" className="tool-group-head" onClick={() => setManual(!open)} aria-expanded={open}>
         <svg className="chev" viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true" style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s var(--ease)' }}>
           <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <span className="tool-group-title">Actions de l'agent</span>
+        <span className="tool-group-title">{groupSummary(rows)}</span>
         <span className="tool-group-meta">
-          {rows.length} appels
-          {ok > 0 ? <span className="tool-state ok"> · {ok} ✓</span> : null}
-          {err > 0 ? <span className="tool-state err"> · {err} ✗</span> : null}
-          {pending > 0 ? <span className="tool-state pending"> · {pending} ⏳</span> : null}
+          {pending ? (
+            <span className="tool-state pending">⏳ {rows.length - pendingCount}/{rows.length}</span>
+          ) : (
+            <>
+              {ok > 0 ? <span className="tool-state ok">{ok} ✓</span> : null}
+              {err > 0 ? <span className="tool-state err">{err} ✗</span> : null}
+            </>
+          )}
         </span>
       </button>
       {open ? (
@@ -180,10 +199,11 @@ function ToolGroup({ rows }: { rows: readonly ChatMsg[] }) {
 }
 
 /**
- * The session stream (M11, M12, M15): chat messages (with their titled
+ * The session stream (M11, M12, M15, M18): chat messages (with their titled
  * thinking cards), and the agent's tool activity — the calls of one round
- * grouped into a single collapsible card, in journal order. The caret
- * marks an ongoing stream.
+ * grouped into a single collapsible card, in journal order. The USER speaks
+ * from the right; EVERYTHING the agent produces (thinking, actions, text)
+ * stays on the left. The caret marks an ongoing stream.
  */
 export function ChatView({ messages }: { messages: readonly ChatMsg[] }) {
   if (messages.length === 0) {

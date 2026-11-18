@@ -71,6 +71,25 @@ import { appendEvent, deriveSession, isSessionId, journalPath, pendingToolCalls,
 import type { SessionEvent } from '@nyworkflow/session'
 import { sessionProfiler, type Profiler } from './logs.ts'
 
+/** M18 — the call's TITLE and TARGET, extracted from its args: the
+ * activity log (and the engine view) become self-sufficient — reading a
+ * tool.call line tells WHAT was called on WHICH path, without
+ * cross-referencing model.jsonl by callId. */
+function toolCallMeta(args: unknown): { title?: string; target?: string } {
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) return {}
+  const a = args as Record<string, unknown>
+  const meta: { title?: string; target?: string } = {}
+  if (typeof a.title === 'string' && a.title.trim() !== '') meta.title = a.title.trim().slice(0, 60)
+  for (const key of ['path', 'pattern', 'command', 'query', 'url', 'jobId']) {
+    const v = a[key]
+    if (typeof v === 'string' && v !== '') {
+      meta.target = v.slice(0, 200)
+      break
+    }
+  }
+  return meta
+}
+
 /** One workspace as listed. */
 export interface WorkspaceSummaryDto {
   name: string
@@ -560,6 +579,24 @@ export function createWorkspacesHandler(
   }
 
   /**
+   * M18 — dangerous callIds currently EXECUTING server-side (auto-approved
+   * under « accept »). While a dangerous call runs, its journal entry stays
+   * open (tool.call without tool.result yet): without this set, the 409
+   * guard below read that window as « waiting for a human » and refused the
+   * call's SIBLINGS of the same parallel round — seen in the wild, a 240 ms
+   * shell blocking five parallel writes, one of them lost to an unfair 409.
+   * In the set: in flight, siblings proceed. Not in the set: genuinely
+   * waiting for a decision, new calls are refused.
+   */
+  const executingDangerous = new Set<string>()
+
+  /** M18 — the ONE state that must block new calls: a dangerous call open
+   * in the journal AND not executing (a human must decide it). */
+  function waitingApproval(events: readonly SessionEvent[]): boolean {
+    return pendingToolCalls(events).some((t) => isDangerous(t.tool) && t.callId !== undefined && !executingDangerous.has(t.callId))
+  }
+
+  /**
    * POST /workspaces/:name/tool — journals the call (callId M12), executes
    * it, or pauses it for a human when it is dangerous (write, shell —
    * background included). The session's SECURITY LEVEL (M13) rules first:
@@ -582,7 +619,10 @@ export function createWorkspacesHandler(
     // result lands there too (the pilot zips and uploads that folder).
     const sp = sessionProfiler(root, sessionId)
     if (busy.has(sessionId)) throw new HttpError(409, 'une décision d\'outil est déjà en cours pour cette session')
-    if (pendingDangerous(await readEvents(file)) !== undefined) {
+    // M18 — only a dangerous call WAITING FOR A HUMAN blocks: one that is
+    // executing (auto-approved) leaves its siblings of the same parallel
+    // round through (the « accept » race, see executingDangerous).
+    if (waitingApproval(await readEvents(file))) {
       throw new HttpError(409, 'un appel d\'outil dangereux est déjà en attente — décidez-le (POST /tool/decision) avant d\'en lancer un autre')
     }
 
@@ -590,14 +630,15 @@ export function createWorkspacesHandler(
     // call is journaled FIRST (it really happened), the refusal right after.
     const call: ToolCall = { tool: tool as ToolCall['tool'], args: args as Record<string, unknown> }
     const callId = newCallId()
+    const meta = toolCallMeta(call.args) // M18 — title + target in the logs
     if (security === 'no-tools') {
       await appendEvent(file, { type: 'tool.call', at: nowIso(), tool: call.tool, args: call.args, callId })
-      profiler?.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security })
-      sp.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security })
+      profiler?.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security, ...meta })
+      sp.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security, ...meta })
       const disabled = toolsDisabledRefusal(call.tool)
       await appendEvent(file, { type: 'tool.result', at: nowIso(), ok: false, summary: disabled.summary, callId })
-      profiler?.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: disabled.code, security })
-      sp.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: disabled.code, security })
+      profiler?.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: disabled.code, security, ...meta })
+      sp.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: disabled.code, security, ...meta })
       return { status: 'executed', callId, outcome: disabled }
     }
 
@@ -605,13 +646,13 @@ export function createWorkspacesHandler(
     // open call behind (a pending dangerous call would block the session).
     const check = await checkToolCall(root, call)
     await appendEvent(file, { type: 'tool.call', at: nowIso(), tool: call.tool, args: call.args, callId })
-    profiler?.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security })
-    sp.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security })
+    profiler?.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security, ...meta })
+    sp.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security, ...meta })
     if (!check.ok) {
       const refusal = check.refusal as ToolRefusal
       await appendEvent(file, { type: 'tool.result', at: nowIso(), ok: false, summary: refusal.summary, callId })
-      profiler?.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: refusal.code })
-      sp.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: refusal.code })
+      profiler?.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: refusal.code, ...meta })
+      sp.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: refusal.code, ...meta })
       return { status: 'executed', callId, outcome: refusal }
     }
     if (check.approval && security === 'ask') {
@@ -621,16 +662,25 @@ export function createWorkspacesHandler(
       return { status: 'pending', callId, call: { tool: call.tool, args: call.args } }
     }
     // 'accept' (M13): the dangerous call runs right away, approval skipped.
+    // M18 — mark it EXECUTING for the whole run: its journal entry stays
+    // open until the result lands, and the siblings of the same parallel
+    // round must not read that window as « waiting for a human ».
+    if (check.approval) executingDangerous.add(callId)
+    let outcome: ToolOutcome
     const started = Date.now()
-    const outcome = await executeToolCall(root, call, check.approval, { workspace: name, jobs })
-    await appendEvent(file, {
-      type: 'tool.result',
-      at: nowIso(),
-      ok: outcome.ok,
-      summary: outcome.summary,
-      ...(outcome.ok ? { data: outcome.data } : {}),
-      callId,
-    })
+    try {
+      outcome = await executeToolCall(root, call, check.approval, { workspace: name, jobs })
+      await appendEvent(file, {
+        type: 'tool.result',
+        at: nowIso(),
+        ok: outcome.ok,
+        summary: outcome.summary,
+        ...(outcome.ok ? { data: outcome.data } : {}),
+        callId,
+      })
+    } finally {
+      if (check.approval) executingDangerous.delete(callId)
+    }
     const ms = Date.now() - started
     profiler?.activity({
       kind: 'tool.result',
@@ -642,6 +692,7 @@ export function createWorkspacesHandler(
       code: outcome.ok ? undefined : outcome.code,
       security,
       ms,
+      ...meta,
     })
     sp.activity({
       kind: 'tool.result',
@@ -653,8 +704,9 @@ export function createWorkspacesHandler(
       code: outcome.ok ? undefined : outcome.code,
       security,
       ms,
+      ...meta,
     })
-    sp.engine({ kind: 'tool.exec', sessionId, tool: call.tool, callId, ok: outcome.ok, ms })
+    sp.engine({ kind: 'tool.exec', sessionId, tool: call.tool, callId, ok: outcome.ok, ms, ...meta })
     return { status: 'executed', callId, outcome }
   }
 
@@ -672,6 +724,7 @@ export function createWorkspacesHandler(
     const call = pendingDangerous(events)
     if (call === undefined) throw new HttpError(409, 'aucun appel d\'outil en attente pour cette session')
     const callId = pendingToolCalls(events).find((t) => isDangerous(t.tool))?.callId ?? ''
+    const meta = toolCallMeta(call.args) // M18 — title + target in the logs
 
     busy.add(sessionId)
     try {
@@ -695,6 +748,7 @@ export function createWorkspacesHandler(
         ...(callId !== '' ? { callId } : {}),
         ok: outcome.ok,
         ms: Date.now() - started,
+        ...meta,
       })
       sp.activity({
         kind: 'tool.decision',
@@ -705,7 +759,9 @@ export function createWorkspacesHandler(
         ...(callId !== '' ? { callId } : {}),
         ok: outcome.ok,
         ms: Date.now() - started,
+        ...meta,
       })
+      sp.engine({ kind: 'tool.exec', sessionId, tool: call.tool, callId, ok: outcome.ok, ms: Date.now() - started, decision, ...meta })
       return { status: 'executed', callId, outcome }
     } finally {
       busy.delete(sessionId)
