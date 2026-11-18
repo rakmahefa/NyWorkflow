@@ -116,7 +116,7 @@ test('Paramètres : défaut de sécurité des nouvelles sessions + carte Profili
   await page.locator('[data-test="settings-btn"]').click()
   await expect(settings).toBeVisible()
   await expect(page.locator('[data-test="logs-table"]')).toBeVisible()
-  await expect(page.locator('[data-test="logs-row"]')).toHaveCount(3)
+  await expect(page.locator('[data-test="logs-row"]')).toHaveCount(4)
   await expect(page.locator('[data-test="logs-dir"]')).toContainText('.logs')
   // La queue d'un journal s'affiche.
   await page.locator('[data-test="logs-row"]', { hasText: 'session.jsonl' }).locator('button').click()
@@ -178,7 +178,7 @@ test('le scaffold complet naît avec le workspace, tout .md prêt DANS .workspac
   const icm = await page.request.get(`/workspaces/${name}/icm`)
   expect(icm.ok()).toBe(true)
   const icmBody = await icm.json()
-  expect(icmBody.contexts).toHaveLength(7)
+  expect(icmBody.contexts).toHaveLength(9)
   expect(icmBody.system).toContain('harness NyWorkflow')
   expect(icmBody.system).toContain('.workspace/')
   expect(icmBody.system).toContain('.workspace/notes/plan.md')

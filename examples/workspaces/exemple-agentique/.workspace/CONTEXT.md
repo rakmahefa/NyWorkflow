@@ -1,4 +1,4 @@
-# .tmp-m14-migrate — ICM du workspace
+# exemple-agentique — ICM du workspace
 
 ## Mission
 
@@ -21,6 +21,8 @@ l'agent lit. Remplace ce paragraphe, puis supprime cette parenthèse.)
 | Chemin | Rôle |
 |---|---|
 | `.workspace/CONTEXT.md` | cette charte — mission, méthode, règles |
+| `.workspace/harness/` | la doc du harness : charte chargée à chaque tour + le moteur en profondeur |
+| `.workspace/tools/` | le protocole trois temps (chargé) + une fiche rigoureuse par outil |
 | `.workspace/inbox/` | entrées déposées par le pilote (à lire, puis à vider) |
 | `.workspace/notes/plan.md` | le plan vivant : objectif, étapes, statut |
 | `.workspace/notes/tasks.md` | la file de tâches : à faire / en cours / fait |
@@ -37,21 +39,22 @@ l'agent lit. Remplace ce paragraphe, puis supprime cette parenthèse.)
 L'arbre est **libre** : crée les dossiers dont tu as besoin (mkdir), dans
 `.workspace/` pour ton organisation, à la racine pour les livrables du
 pilote. Un sous-dossier qui acquiert un rôle mérite son propre
-`CONTEXT.md` (au plus 8 sont chargés — ce scaffold en dépense 7).
+`CONTEXT.md` (au plus 12 sont chargés — ce scaffold en dépense 9).
 
 ## Outils
 
-- `read {"path"}`, `ls {"path"}`, `glob {"pattern"}` — explorer (libre).
-- `mkdir {"path"}` — créer un dossier (libre).
-- `write {"path","content"}` — écrire un fichier (selon le niveau de
-  sécurité de la session : approbation du pilote, ou accepté d'avance).
-- `shell {"command"}` — commande bash, cwd = racine du dossier ;
-  `"background": true` pour une commande longue — jobId rendu immédiatement.
-- `shell_output {"jobId"}` / `shell_kill {"jobId"}` — suivre / arrêter un
-  processus d'arrière-plan (libre).
-- `websearch {"query"}` — recherche ; `websearch {"url"}` — page nettoyée.
+Neuf outils, un contrat — le **protocole trois temps** : thinking titré
+d'abord, action (tool_calls parallèles et titrés), puis ATTENTE du groupe
+entier des résultats. Le contrat et le catalogue vivent dans
+`.workspace/tools/CONTEXT.md` (chargé à chaque tour) ; la fiche
+rigoureuse de chaque outil (arguments exacts, lancements corrects,
+erreurs courantes) est dans `.workspace/tools/<outil>.md` — lis-la avant
+ta première utilisation. Ton harness lui-même est documenté dans
+`.workspace/harness/`.
 
-Les appels indépendants se lancent ENSEMBLE dans une même réponse.
+Résumé : `read`, `write`, `ls`, `glob`, `mkdir`, `shell`,
+`websearch`, `shell_output`, `shell_kill` — les appels indépendants
+se lancent ENSEMBLE dans une même réponse, puis on attend les résultats.
 Si les outils sont désactivés (sécurité « aucun outil »), réponds à partir
 de l'ICM et de la conversation, sans tool_call.
 

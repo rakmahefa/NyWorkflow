@@ -15,6 +15,7 @@ import {
   ICM_DIR,
   SCAFFOLD_FILES,
   SCAFFOLD_FOLDERS,
+  TOOL_NAMES,
   CONTEXT_MAX_CHARS,
   CONTEXT_MAX_FILES,
 } from './index.ts'
@@ -189,22 +190,30 @@ describe('buildIcmSystemPrompt — identité harness (M14)', () => {
     expect(prompt).toContain('CONTEXT.md')
   })
 
-  it('M15 — le protocole deux temps : thinking titré en premier, puis le travail, tool_calls titrés', async () => {
+  it('M16 — le protocole trois temps : thinking titré, action parallèle, observation du groupe entier', async () => {
     const root = tmp()
     await ensureIcmTree(root)
     const prompt = buildIcmSystemPrompt(await loadIcm(root))
     // Le contrat : le bloc titré ouvre la réponse, AVANT tout le reste.
-    expect(prompt).toContain('Protocole de réponse — deux temps')
+    expect(prompt).toContain('Protocole de réponse — trois temps')
     expect(prompt).toContain('<thinking title="titre court de l’étape en cours">')
     expect(prompt).toContain('</thinking>')
-    expect(prompt).toContain('Tu dialogues d’abord avec toi-même')
-    expect(prompt).toContain('Puis tu bascules hors du thought process')
+    expect(prompt).toContain('Le temps du thinking, en premier')
+    expect(prompt).toContain('Le temps de l’action')
+    expect(prompt).toContain('Le temps de l’observation')
+    // Le format de réponse du groupe entier, montré au modèle.
+    expect(prompt).toContain('{"tool": "read", "title": "Lire la charte", "ok": true, "result": "…"}')
+    expect(prompt).toContain('NOUVEAU protocole démarre')
+    // L'action : appels indépendants ENSEMBLE, puis STOP.
+    expect(prompt).toContain('INDÉPENDANTS ENSEMBLE')
+    expect(prompt).toContain('tu TERMINES ta réponse')
     // Le titre des tool_calls : l’argument `title` que le pilote lira.
     expect(prompt).toContain('`title` (≤ 60 caractères)')
-    // Le parallélisme s’étend au harness : exécution groupée, affichage groupé.
-    expect(prompt).toContain('les regroupe pour le pilote')
     // Modèle-agnostique : jamais la balise en prose visible.
     expect(prompt).toContain('JAMAIS la balise')
+    // L’ICM documente le harness et les outils.
+    expect(prompt).toContain('harness/')
+    expect(prompt).toContain('tools/')
   })
 })
 
@@ -245,26 +254,49 @@ describe('scaffoldAgenticWorkspace (M14 — arbre dans .workspace/)', () => {
     expect(readFileSync(join(root, ICM_DIR, 'memory', 'lessons.md'), 'utf8')).toContain('Leçons')
     expect(readFileSync(join(root, ICM_DIR, 'research', 'sources.md'), 'utf8')).toContain('Registre des sources')
 
-    // L'ICM charge ce workspace fraîchement scaffoldé : 7 CONTEXT.md (≤ cap),
+    // L'ICM charge ce workspace fraîchement scaffoldé : 9 CONTEXT.md (≤ cap),
     // l'arbre .workspace/ complet, et le prompt porte la charte.
     const icm = await loadIcm(root)
     expect(icm.icmDir).toBe(true)
     expect(icm.tree).toContain(`${ICM_DIR}/\n├── archive/`)
+    expect(icm.tree).toContain('├── harness/')
     expect(icm.tree).toContain('├── inbox/')
     expect(icm.tree).toContain('├── memory/')
     expect(icm.tree).toContain('├── notes/')
-    expect(icm.contexts).toHaveLength(7)
+    expect(icm.tree).toContain('├── tools/')
+    expect(icm.contexts).toHaveLength(9)
     expect(icm.contexts.length).toBeLessThanOrEqual(CONTEXT_MAX_FILES)
     const prompt = buildIcmSystemPrompt(icm)
     expect(prompt).toContain('# mon-agent — ICM du workspace')
     expect(prompt).toContain('.workspace/notes/plan.md')
+    // M16 — la charte du harness et le protocole des outils sont chargés.
+    expect(prompt).toContain('# harness/ — le harness NyWorkflow')
+    expect(prompt).toContain('# tools/ — le protocole d’utilisation des outils')
+    // Les fiches rigoureuses existent dans l'arbre (lus à la demande).
+    expect(icm.tree).toContain('├── read.md')
+    expect(icm.tree).toContain('├── websearch.md')
   })
 
-  it('scaffoldFiles : la carte est pure et exhaustive — 14 fichiers, 7 CONTEXT.md', () => {
+  it('scaffoldFiles : la carte est pure et exhaustive — 26 fichiers, 9 CONTEXT.md', () => {
     const files = scaffoldFiles('demo')
     expect(Object.keys(files).sort()).toEqual([...SCAFFOLD_FILES].sort())
-    expect(SCAFFOLD_FILES.filter((f) => f.endsWith('CONTEXT.md'))).toHaveLength(7)
-    expect(SCAFFOLD_FOLDERS).toHaveLength(6)
+    expect(SCAFFOLD_FILES.filter((f) => f.endsWith('CONTEXT.md'))).toHaveLength(9)
+    expect(SCAFFOLD_FOLDERS).toHaveLength(8)
+    // M16 — une fiche rigoureuse par outil, au catalogue complet.
+    for (const tool of TOOL_NAMES) {
+      expect(files[`tools/${tool}.md`], tool).toBeDefined()
+      const fiche = files[`tools/${tool}.md`] as string
+      expect(fiche).toContain(`# ${tool} —`)
+      expect(fiche).toContain('## Arguments')
+      expect(fiche).toContain('## Lancement correct')
+      expect(fiche).toContain('## Erreurs courantes')
+    }
+    // La doc du harness : charte + moteur.
+    expect(files['harness/CONTEXT.md']).toContain('le harness NyWorkflow')
+    expect(files['harness/ENGINE.md']).toContain('La boucle de tour')
+    // Le protocole trois temps est chargé à chaque tour.
+    expect(files['tools/CONTEXT.md']).toContain('Le protocole trois temps')
+    expect(files['tools/CONTEXT.md']).toContain('{"tool": "read", "title": "Lire la charte", "ok": true, "result": "…"}')
   })
 
   it('refuse un workspace existant — jamais d’écrasement', async () => {
@@ -278,7 +310,7 @@ describe('scaffoldAgenticWorkspace (M14 — arbre dans .workspace/)', () => {
   })
 })
 
-describe('ensureIcmTree (M14 — création de session)', () => {
+describe('ensureIcmTree (M14 création, M16 upgrade)', () => {
   it('crée l’arbre complet quand .workspace/ manque', async () => {
     const root = tmp()
     writeFileSync(join(root, 'projet.md'), 'le projet du pilote')
@@ -299,16 +331,42 @@ describe('ensureIcmTree (M14 — création de session)', () => {
     expect(await ensureIcmTree(root)).toBe('present')
     expect(readFileSync(join(root, ICM_DIR, 'notes', 'plan.md'), 'utf8')).toBe('# MON plan, pas le template')
   })
+
+  it('M16 — un .workspace/ d’avant M16 est UPGRADE : fichiers de base manquants ajoutés, mémoire intacte', async () => {
+    const root = tmp()
+    // Un workspace d’avant M16 : pas de harness/, pas de tools/.
+    mkdirSync(join(root, ICM_DIR, 'notes'), { recursive: true })
+    writeFileSync(join(root, ICM_DIR, 'CONTEXT.md'), '# Charte VIVANTE de l’agent')
+    writeFileSync(join(root, ICM_DIR, 'notes', 'plan.md'), '# MON plan, pas le template')
+    expect(await ensureIcmTree(root)).toBe('upgraded')
+    // La mémoire vivante est INTACTE : rien d’existant n’est écrasé.
+    expect(readFileSync(join(root, ICM_DIR, 'CONTEXT.md'), 'utf8')).toBe('# Charte VIVANTE de l’agent')
+    expect(readFileSync(join(root, ICM_DIR, 'notes', 'plan.md'), 'utf8')).toBe('# MON plan, pas le template')
+    // Les fichiers de base manquants sont là (doc harness + outils + templates).
+    expect(existsSync(join(root, ICM_DIR, 'harness', 'CONTEXT.md'))).toBe(true)
+    expect(existsSync(join(root, ICM_DIR, 'harness', 'ENGINE.md'))).toBe(true)
+    expect(existsSync(join(root, ICM_DIR, 'tools', 'CONTEXT.md'))).toBe(true)
+    expect(existsSync(join(root, ICM_DIR, 'tools', 'read.md'))).toBe(true)
+    expect(existsSync(join(root, ICM_DIR, 'notes', 'journal.md'))).toBe(true)
+    // Complet désormais : un nouvel appel ne rajoute rien.
+    expect(await ensureIcmTree(root)).toBe('present')
+  })
 })
 
 describe('buildIcmSystemPrompt — charte scaffold (M12/M13 conservés)', () => {
-  it('la charte scaffold liste les 9 outils et le parallélisme', () => {
+  it('la charte scaffold pointe vers le protocole et les fiches, et garde le parallélisme', () => {
     const charter = scaffoldContext('exemple-agentique')
-    expect(charter).toContain('shell_output {"jobId"}')
-    expect(charter).toContain('shell_kill {"jobId"}')
-    expect(charter).toContain('"background": true')
+    expect(charter).toContain('protocole trois temps')
+    expect(charter).toContain('.workspace/tools/CONTEXT.md')
+    expect(charter).toContain('.workspace/tools/<outil>.md')
+    expect(charter).toContain('.workspace/harness/')
     expect(charter).toContain('ENSEMBLE')
     expect(charter).toContain('aucun outil')
+    // Le détail rigoureux vit dans les fiches (chargées à la demande).
+    const files = scaffoldFiles('exemple-agentique')
+    expect(files['tools/shell.md']).toContain('"background": true')
+    expect(files['tools/shell_output.md']).toContain('shell_output {"jobId":')
+    expect(files['tools/shell_kill.md']).toContain('shell_kill {"jobId":')
   })
 
   it('le prompt enseigne le comportement quand les outils sont désactivés', () => {

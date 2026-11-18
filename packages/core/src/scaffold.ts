@@ -1,6 +1,6 @@
 /**
- * Scaffold v3 (M14) — the COMPLETE agentic ICM tree, now living in the
- * HIDDEN `.workspace/` folder inside the session's folder (the project).
+ * Scaffold v4 (M16) — the COMPLETE agentic ICM tree, living in the HIDDEN
+ * `.workspace/` folder inside the session's folder (the project).
  *
  * The layout follows the modern agent-config pattern (`.git`, `.claude`,
  * `.continue`): the user's project stays pristine at the root — the
@@ -9,23 +9,32 @@
  *   <dossier de la session>/
  *   ├── .workspace/          ← l'ICM complet (caché)
  *   │   ├── CONTEXT.md       la charte — mission, méthode, règles
+ *   │   ├── harness/         la doc du harness : charte chargée + moteur
+ *   │   ├── tools/           le protocole trois temps + une fiche par outil
  *   │   ├── inbox/           entrées du pilote
  *   │   ├── notes/           plan, tâches, journal, décisions
  *   │   ├── research/        lectures web + registre des sources
  *   │   ├── memory/          MemGPT split : core (faits) / lessons
  *   │   ├── outputs/         livrables finaux
  *   │   └── archive/         travail terminé
- *   └── .logs/               logs de profilage par session (M14)
+ *   └── .logs/               logs de profilage par session (M14, + model.jsonl M16)
  *
- * Shaped by the field's current best practice (unchanged from M13):
- * one CONTEXT.md per folder (Model Workspace Protocol — the structure IS
- * the orchestration), the plan/tasks/journal/decisions quartet
- * (structured scratchpad), the MemGPT memory split, a source ledger so
- * every claim traces back to a read.
+ * Shaped by the field's current best practice (M13, unchanged): one
+ * CONTEXT.md per folder (Model Workspace Protocol — the structure IS the
+ * orchestration), the plan/tasks/journal/decisions quartet (structured
+ * scratchpad), the MemGPT memory split, a source ledger so every claim
+ * traces back to a read.
+ *
+ * M16 — the base ICM teaches the harness itself (pilot-driven): the
+ * `harness/` folder documents WHAT runs the agent (charter loaded each
+ * turn + the engine in depth), the `tools/` folder documents HOW to act
+ * (the three-step tool protocol, loaded each turn, plus ONE rigorous
+ * fiche per tool — exact arguments, correct launch patterns, common
+ * errors — read on demand, keeping the prompt bounded).
  *
  * Everything is plain Markdown, ready to use. The tree stays FREE — the
- * agent grows it with mkdir; the loader caps at 8 CONTEXT.md files, and
- * this scaffold spends exactly 7, leaving one for the agent.
+ * agent grows it with mkdir; the loader caps at 12 CONTEXT.md files, and
+ * this scaffold spends exactly 9, leaving three for the agent.
  */
 import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -35,12 +44,19 @@ import { workspaceName } from './icm.ts'
 /** The hidden folder, at the session folder's root, holding the whole ICM. */
 export const ICM_DIR = '.workspace'
 
-/** The six role folders of a working session — free tree, sane defaults. */
-export const SCAFFOLD_FOLDERS = ['inbox', 'notes', 'research', 'memory', 'outputs', 'archive'] as const
+/** The eight role folders of a working session — free tree, sane defaults. */
+export const SCAFFOLD_FOLDERS = ['harness', 'tools', 'inbox', 'notes', 'research', 'memory', 'outputs', 'archive'] as const
+
+/** The nine agent tools, in catalog order (one fiche each under tools/). */
+export const TOOL_NAMES = ['read', 'write', 'ls', 'glob', 'mkdir', 'shell', 'websearch', 'shell_output', 'shell_kill'] as const
 
 /** Every file the scaffold writes, relative to the `.workspace/` root. */
 export const SCAFFOLD_FILES = [
   'CONTEXT.md',
+  'harness/CONTEXT.md',
+  'harness/ENGINE.md',
+  'tools/CONTEXT.md',
+  ...TOOL_NAMES.map((t) => `tools/${t}.md`),
   'inbox/CONTEXT.md',
   'notes/CONTEXT.md',
   'notes/plan.md',
@@ -85,6 +101,8 @@ l'agent lit. Remplace ce paragraphe, puis supprime cette parenthèse.)
 | Chemin | Rôle |
 |---|---|
 | \`.workspace/CONTEXT.md\` | cette charte — mission, méthode, règles |
+| \`.workspace/harness/\` | la doc du harness : charte chargée à chaque tour + le moteur en profondeur |
+| \`.workspace/tools/\` | le protocole trois temps (chargé) + une fiche rigoureuse par outil |
 | \`.workspace/inbox/\` | entrées déposées par le pilote (à lire, puis à vider) |
 | \`.workspace/notes/plan.md\` | le plan vivant : objectif, étapes, statut |
 | \`.workspace/notes/tasks.md\` | la file de tâches : à faire / en cours / fait |
@@ -101,21 +119,22 @@ l'agent lit. Remplace ce paragraphe, puis supprime cette parenthèse.)
 L'arbre est **libre** : crée les dossiers dont tu as besoin (mkdir), dans
 \`.workspace/\` pour ton organisation, à la racine pour les livrables du
 pilote. Un sous-dossier qui acquiert un rôle mérite son propre
-\`CONTEXT.md\` (au plus 8 sont chargés — ce scaffold en dépense 7).
+\`CONTEXT.md\` (au plus 12 sont chargés — ce scaffold en dépense 9).
 
 ## Outils
 
-- \`read {"path"}\`, \`ls {"path"}\`, \`glob {"pattern"}\` — explorer (libre).
-- \`mkdir {"path"}\` — créer un dossier (libre).
-- \`write {"path","content"}\` — écrire un fichier (selon le niveau de
-  sécurité de la session : approbation du pilote, ou accepté d'avance).
-- \`shell {"command"}\` — commande bash, cwd = racine du dossier ;
-  \`"background": true\` pour une commande longue — jobId rendu immédiatement.
-- \`shell_output {"jobId"}\` / \`shell_kill {"jobId"}\` — suivre / arrêter un
-  processus d'arrière-plan (libre).
-- \`websearch {"query"}\` — recherche ; \`websearch {"url"}\` — page nettoyée.
+Neuf outils, un contrat — le **protocole trois temps** : thinking titré
+d'abord, action (tool_calls parallèles et titrés), puis ATTENTE du groupe
+entier des résultats. Le contrat et le catalogue vivent dans
+\`.workspace/tools/CONTEXT.md\` (chargé à chaque tour) ; la fiche
+rigoureuse de chaque outil (arguments exacts, lancements corrects,
+erreurs courantes) est dans \`.workspace/tools/<outil>.md\` — lis-la avant
+ta première utilisation. Ton harness lui-même est documenté dans
+\`.workspace/harness/\`.
 
-Les appels indépendants se lancent ENSEMBLE dans une même réponse.
+Résumé : \`read\`, \`write\`, \`ls\`, \`glob\`, \`mkdir\`, \`shell\`,
+\`websearch\`, \`shell_output\`, \`shell_kill\` — les appels indépendants
+se lancent ENSEMBLE dans une même réponse, puis on attend les résultats.
 Si les outils sont désactivés (sécurité « aucun outil »), réponds à partir
 de l'ICM et de la conversation, sans tool_call.
 
@@ -145,10 +164,436 @@ function folderContext(folder: string, role: string, rules: string[]): string {
   return [`# ${folder}/`, '', role, '', ...(rules.length > 0 ? ['## Règles', ...rules.map((r) => `- ${r}`), ''] : [])].join('\n')
 }
 
+/**
+ * `harness/CONTEXT.md` — the harness charter, LOADED each turn: what
+ * NyWorkflow is, the three pillars that carry every session, and what the
+ * engine does FOR the agent. The depth (ENGINE.md) is read on demand.
+ */
+function harnessContext(): string {
+  return `# harness/ — le harness NyWorkflow, ton moteur d’exécution
+
+Tu ne t’exécutes pas seul : un **harness** te porte. Le connaître, c’est
+travailler avec lui plutôt que contre lui — quel que soit le modèle qui
+te pilote, ce contrat est le même.
+
+## Les trois piliers d’une session
+
+1. **Le modèle — toi.** Tu raisonnes (thought process titré), tu décides,
+   tu agis (tool_calls). Tu ne vois le monde QUE par tes outils.
+2. **Le harness (engine) — NyWorkflow.** Il exécute : il charge l’ICM dans
+   ton prompt, dispatch tes tool_calls (en parallèle et en arrière-plan),
+   te renvoie leurs résultats groupés, journalise tout, et applique la
+   sécurité. C’est lui qui détient la vérité de ce qui s’est réellement
+   passé.
+3. **L’ICM — ton contexte interprétable.** L’arbre \`.workspace/\` : charte,
+   plan, journal, mémoire. Chargée dans ton prompt à chaque tour, entretenue
+   par tes écritures — c’est TOI qui la fais vivre.
+
+## Ce que le engine fait pour toi, à chaque tour
+
+- Il **recharge l’ICM** (l’arbre a pu grandir depuis le tour précédent).
+- Il **exécute tes tool_calls en parallèle et en arrière-plan**, puis te
+  renvoie le groupe ENTIER des résultats, dans un format défini — voir
+  \`tools/CONTEXT.md\` (le protocole trois temps).
+- Il **journalise** chaque appel, chaque résultat, chaque décision — le
+  journal est la vérité des échanges.
+- Il **garde la sécurité** : selon le niveau de la session, tes écritures
+  et tes shells attendent l’approbation du pilote (c’est le flux normal,
+  propose-les quand même) ou sont acceptées d’avance.
+
+## Ce que le harness attend de toi
+
+- Le **protocole trois temps** à chaque réponse (thinking titré → action →
+  observation) — le détail dans \`tools/CONTEXT.md\`.
+- Des **tool_calls corrects** : lis la fiche d’un outil
+  (\`tools/<outil>.md\`) avant ta première utilisation ou quand un appel
+  échoue.
+- **Jamais de contournement** : n’improvise pas un résultat, ne prétends
+  pas avoir agi — le journal sait, le pilote lit.
+
+## Pour aller plus loin
+
+\`harness/ENGINE.md\` — la boucle de tour en profondeur (rounds, dispatch,
+journal, logs, plafonds). \`harness/CONTEXT.md\` (ce fichier) suffit pour
+travailler ; ENGINE.md explique le pourquoi.
+`
+}
+
+/**
+ * `harness/ENGINE.md` — the engine in depth: the turn loop, the rounds,
+ * the dispatch, the journal, the logs, the caps. Read on demand by an
+ * agent that wants the why behind the contract.
+ */
+function harnessEngine(): string {
+  return `# ENGINE — le moteur NyWorkflow en profondeur
+
+La boucle d’un tour, telle que le engine la vit. Utile pour comprendre
+pourquoi le protocole trois temps existe, et ce que deviennent tes appels.
+
+## La boucle de tour (round par round)
+
+1. **Message du pilote** — enregistré dans le journal.
+2. **Rechargement de l’ICM** — l’arbre \`.workspace/\` est re-walké, les
+   CONTEXT.md (max 12, 32 Kio chacun) rechargés dans ton prompt système.
+   Conséquence : ce que tu écris dans l’ICM est VU au round suivant.
+3. **Ton protocole trois temps** — thinking titré, action (tool_calls),
+   puis STOP : tu attends les résultats.
+4. **Dispatch du groupe** — le engine exécute TOUS les appels du groupe :
+   les indépendants en parallèle (Promise.all), les shells longs en
+   arrière-plan (jobId rendu immédiat). Sous sécurité « ask », les appels
+   dangereux (write, shell) attendent le pilote UNE PAR UNE.
+5. **Retour du groupe ENTIER** — chaque appel reçoit sa réponse, au format
+   \`{"tool":…, "title":…, "ok":…, "result"|"error":…}\`. Le groupe complet
+   te revient avant qu’un nouveau round démarre.
+6. **Nouveau round** — retour à 1 (avec l’ICM rechargé et les résultats
+   dans l’historique) : nouveau protocole, jusqu’à la réponse finale
+   (une réponse sans tool_call termine le tour).
+
+## Le journal — la vérité des échanges
+
+Chaque événement (messages, tool_calls, résultats, décisions, sécurité)
+est append-only dans le journal de la session. Le rechargement de l’UI le
+rejoue à l’identique. Un appel non journalisé n’a pas existé ; un résultat
+improvisé contredit le journal — le pilote le voit.
+
+## La sécurité — trois niveaux
+
+- **ask** (défaut) : write et shell attendent l’approbation du pilote.
+  C’est le flux NORMAL : propose l’appel, la carte d’approbation s’affiche.
+- **accept** : tout s’exécute sans demande (sessions de confiance).
+- **no-tools** : aucun tool_call n’est exécuté — tous refusés avec la
+  raison. Réponds alors à partir de l’ICM et de la conversation.
+
+## Les logs de profilage — \`.logs/\`, interdits
+
+\`<dossier>/.logs/<sessionId>/\` contient quatre journaux JSONL (engine,
+session, activity, model — dont TES réponses, pour améliorer le harness).
+Ils sont pour le PILOTE : ne les lis ni ne les modifie jamais. L’arbre de
+l’ICM ne les montre même pas.
+
+## Les plafonds — honnêtes et constants
+
+- read : 32 Kio par fichier ; write : 128 Kio ; ls : 500 entrées ;
+  glob : motif ≤ 256 caractères.
+- shell avant-plan : 30 s max, sorties bornées ; arrière-plan : 10 min
+  max, 16 jobs simultanés par workspace, sorties accumulées bornées.
+- Les refus « hors périmètre » sont DÉFINITIFS : tout chemin reste dans le
+  dossier de la session.
+`
+}
+
+/**
+ * `tools/CONTEXT.md` — the three-step tool protocol, LOADED each turn.
+ * This is the contract that makes the model's actions reliable whatever
+ * the loader: think first, act in parallel, then WAIT for the whole
+ * group's results before the next round.
+ */
+function toolsContext(): string {
+  return `# tools/ — le protocole d’utilisation des outils
+
+Neuf outils, un seul contrat. Le protocole trois temps ci-dessous régit
+CHAQUE réponse ; les fiches (\`read.md\`, \`write.md\`, …) documentent chaque
+outil rigoureusement — lis une fiche avant ta première utilisation de
+l’outil, ou quand un appel échoue.
+
+## Le protocole trois temps — à CHAQUE réponse
+
+1. **Thinking** — d’abord, toujours : tu dialogues avec toi-même dans ton
+   thought process titré (ce que l’ICM sait, ce qui manque, le plan de CE
+   tour). Voir le protocole de réponse dans le prompt système.
+2. **Action** — tu émets tes tool_calls : les appels **indépendants
+   ENSEMBLE** dans la même réponse (le engine les exécute en parallèle),
+   chacun avec son \`title\`. Puis tu **TERMINES ta réponse** — jamais de
+   texte après les tool_calls, jamais de résultat annoncé avant de
+   l’avoir reçu.
+3. **Observation** — tu **ATTENDS**. Le engine exécute le groupe entier
+   et te renvoie, à la fin du protocole, TOUTES les réponses du groupe,
+   une par appel, dans ce format :
+
+\`\`\`
+{"tool": "read", "title": "Lire la charte", "ok": true, "result": "…"}
+{"tool": "shell", "title": "Compiler le projet", "ok": false, "error": "…refusé par le pilote"}
+\`\`\`
+
+C’est en recevant ces réponses qu’un **NOUVEAU protocole démarre** :
+retour au temps 1 — thinking, puis la suite (nouveaux tool_calls, ou la
+réponse finale si le travail est fini).
+
+## Règles de lancement
+
+- **Indépendants → ensemble** : trois fichiers à lire ? TROIS read dans
+  la même réponse. C’est plus rapide et le engine est fait pour ça.
+- **Dépendants → attendre** : un appel qui a besoin du résultat d’un autre
+  (lire PUIS écrire, chercher PUIS lire l’URL trouvée) attend le protocole
+  suivant.
+- **Un groupe = une étape** : les tool_calls d’une même réponse forment un
+  groupe cohérent, affiché groupé au pilote — un groupe par intention.
+- **Titres partout** : le \`title\` (≤ 60 caractères) dit l’étape au pilote ;
+  il te revient dans la réponse — exploite-le pour te repérer.
+- **Erreur = signal** : un refus (arguments invalides, hors périmètre,
+  refusé par le pilote) se corrige, ne se répète pas à l’identique.
+
+## Catalogue
+
+| Outil | Rôle | Libre ? | Fiche |
+|---|---|---|---|
+| read | lire un fichier (≤ 32 Kio) | oui | \`tools/read.md\` |
+| write | écrire un fichier (≤ 128 Kio) | approbation | \`tools/write.md\` |
+| ls | lister un dossier | oui | \`tools/ls.md\` |
+| glob | chercher par motif | oui | \`tools/glob.md\` |
+| mkdir | créer un dossier | oui | \`tools/mkdir.md\` |
+| shell | commande bash (30 s / 10 min bg) | approbation | \`tools/shell.md\` |
+| websearch | recherche ou page nettoyée | oui | \`tools/websearch.md\` |
+| shell_output | suivre un job d’arrière-plan | oui | \`tools/shell_output.md\` |
+| shell_kill | arrêter un job d’arrière-plan | oui | \`tools/shell_kill.md\` |
+
+« Libre » = sans approbation du pilote. Le niveau de sécurité de la
+session (ask / accept / no-tools) prime — voir \`harness/ENGINE.md\`.
+`
+}
+
+/** One tool's rigorous reference — what the fiches are made of. */
+interface ToolDoc {
+  name: string
+  role: string
+  args: [name: string, required: boolean, what: string][]
+  patterns: string[]
+  parallel: string
+  errors: string[]
+  related: string
+}
+
+/** Renders one tool's fiche — same structure for the nine, rigor inside. */
+function toolFiche(doc: ToolDoc): string {
+  return [
+    `# ${doc.name} — ${doc.role}`,
+    '',
+    `> Fiche de référence — arguments exacts, lancements corrects, erreurs`,
+    `> courantes. Le contrat général (trois temps, parallèle, format de`,
+    `> réponse) vit dans \`tools/CONTEXT.md\`.`,
+    '',
+    '## Arguments',
+    '',
+    '| Argument | Requis | Description |',
+    '|---|---|---|',
+    ...doc.args.map(([n, req, what]) => `| \`${n}\` | ${req ? 'oui' : 'non'} | ${what} |`),
+    '',
+    '## Lancement correct',
+    '',
+    ...doc.patterns.flatMap((p) => ['```', p, '```', '']),
+    '## Parallèle & arrière-plan',
+    '',
+    doc.parallel,
+    '',
+    '## Erreurs courantes',
+    '',
+    ...doc.errors.map((e) => `- ${e}`),
+    '',
+    '## À voir aussi',
+    '',
+    doc.related,
+    '',
+  ].join('\n')
+}
+
+/** The nine fiches — one per tool, in catalog order. */
+function toolFiches(): Record<string, string> {
+  const docs: ToolDoc[] = [
+    {
+      name: 'read',
+      role: 'lire un fichier texte du workspace',
+      args: [
+        ['path', true, 'Chemin relatif à la racine du dossier de session — ex. `notes/plan.md`, `.workspace/CONTEXT.md`'],
+        ['title', false, 'Titre court (≤ 60 caractères) de l’appel pour le pilote — ex. « Lire le plan »'],
+      ],
+      patterns: [
+        'read {"path": ".workspace/notes/plan.md", "title": "Lire le plan"}',
+        'read {"path": "README.md", "title": "Lire le readme du projet"}',
+      ],
+      parallel:
+        'Totalement parallélisable : N fichiers à lire = N read dans la MÊME réponse — le engine les exécute ensemble. Ne lis JAMAIS en série ce qui peut l’être en parallèle.',
+      errors: [
+        '`fichier introuvable` — vérifie le chemin avec ls ou glob avant de réessayer autrement.',
+        '`hors périmètre` — le chemin sort du dossier de session : le refus est définitif, ne réessaie pas ce chemin.',
+        '`c’est un dossier` — pour lister un dossier, c’est ls, pas read.',
+        'Relire un CONTEXT.md déjà chargé dans ton prompt est du gaspillage — son contenu est déjà sous tes yeux.',
+      ],
+      related: '`ls` (listé avant de lire), `glob` (trouver par motif), `write` (l’inverse).',
+    },
+    {
+      name: 'write',
+      role: 'écrire un fichier texte dans le workspace',
+      args: [
+        ['path', true, 'Chemin relatif du fichier — les dossiers parents sont créés s’ils manquent'],
+        ['content', true, 'Contenu COMPLET du fichier (≤ 128 Kio) — l’écriture remplace tout le fichier'],
+        ['title', false, 'Titre court pour le pilote — ex. « Écrire le livrable »'],
+      ],
+      patterns: [
+        'write {"path": ".workspace/notes/journal.md", "content": "# Journal\\n\\n- entrée du jour", "title": "Journaliser le tour"}',
+        'write {"path": ".workspace/outputs/rapport.md", "content": "# Rapport\\n…", "title": "Écrire le livrable"}',
+      ],
+      parallel:
+        'Parallélisable entre appels indépendants (deux fichiers distincts). Sous sécurité « ask », chaque write attend l’approbation du pilote — c’est le flux normal : propose-le quand même. Un write qui DÉPEND d’un read attend le protocole suivant.',
+      errors: [
+        'N’écris JAMAIS un contenu improvisé là où une lecture s’impose — lis d’abord (protocole suivant), puis écris.',
+        'Le contenu remplace INTÉGRALEMENT le fichier : pour modifier, relis-le d’abord (read), puis réécris-le complet.',
+        'Trop volumineux (> 128 Kio) : découpe le livrable en fichiers, ou passe par shell + here-doc.',
+        'Un refus du pilote n’est pas un échec du tour : propose une alternative ou demande la consigne.',
+      ],
+      related: '`read` (relire avant de réécrire), `mkdir` (l’arbre), `shell` (écrire via bash si besoin).',
+    },
+    {
+      name: 'ls',
+      role: 'lister un dossier du workspace',
+      args: [
+        ['path', false, 'Dossier relatif — `.` (défaut) pour la racine du dossier de session'],
+        ['title', false, 'Titre court pour le pilote — ex. « Lister la racine »'],
+      ],
+      patterns: [
+        'ls {"path": ".", "title": "Lister la racine"}',
+        'ls {"path": ".workspace/notes", "title": "Lister les notes"}',
+      ],
+      parallel:
+        'Totalement parallélisable : plusieurs dossiers à explorer = plusieurs ls dans la même réponse, avec read et glob.',
+      errors: [
+        '`dossier introuvable` — le chemin n’existe pas (ou c’est un fichier) : vérifie avec ls du parent ou glob.',
+        'L’ICM charge déjà l’arbre du workspace dans ton prompt : ne liste pas ce que l’arbre montre déjà — liste pour voir le DÉTAIL d’un dossier ou après tes propres créations.',
+      ],
+      related: '`glob` (chercher par motif sur tout l’arbre), `read` (lire une entrée), `mkdir` (créer).',
+    },
+    {
+      name: 'glob',
+      role: 'chercher des fichiers par motif',
+      args: [
+        ['pattern', true, 'Motif relatif : `*` = un segment, `**` = toute profondeur, `?` = un caractère — ex. `**/*.md`'],
+        ['title', false, 'Titre court pour le pilote — ex. « Cartographier les notes »'],
+      ],
+      patterns: [
+        'glob {"pattern": "**/*.md", "title": "Cartographier les markdown"}',
+        'glob {"pattern": "outputs/*.md", "title": "Voir les livrables"}',
+      ],
+      parallel:
+        'Totalement parallélisable — combine plusieurs motifs dans une même réponse si la question l’exige.',
+      errors: [
+        'Un motif trop large (`**`) retourne beaucoup : préfère `**/*.md` ou cible un dossier.',
+        'Le motif est RELATIF à la racine du dossier de session ; les dossiers cachés (`.workspace` inclus) ne sont pas matchés par `*` — nomme-les explicitement.',
+      ],
+      related: '`ls` (un dossier précis), `read` (lire les trouvés).',
+    },
+    {
+      name: 'mkdir',
+      role: 'créer un dossier (récursif)',
+      args: [
+        ['path', true, 'Chemin relatif du dossier à créer — les parents sont créés'],
+        ['title', false, 'Titre court pour le pilote — ex. « Préparer le dossier de veille »'],
+      ],
+      patterns: [
+        'mkdir {"path": ".workspace/research/veille", "title": "Préparer la veille"}',
+        'mkdir {"path": ".workspace/archive/2026-11", "title": "Ouvrir l’archive du mois"}',
+      ],
+      parallel:
+        'Parallélisable (dossiers indépendants) ; un dossier déjà existant n’est PAS une erreur — l’appel réussit sans rien casser.',
+      errors: [
+        'Organise-toi DANS `.workspace/` (ton ICM) ; à la racine, seul un livrable pour le pilote justifie un dossier.',
+        'Un sous-dossier qui acquiert un rôle mérite son CONTEXT.md (max 12 chargés).',
+      ],
+      related: '`write` (poser un fichier dedans), `ls` (vérifier).',
+    },
+    {
+      name: 'shell',
+      role: 'exécuter une commande bash (cwd = racine du dossier de session)',
+      args: [
+        ['command', true, 'La commande à exécuter (≤ 4 000 caractères) — ex. `"ls -la | head -20"`'],
+        ['background', false, '`true` = détaché : un jobId est rendu immédiatement (10 min max, suivi via shell_output)'],
+        ['title', false, 'Titre court pour le pilote — ex. « Compiler le projet »'],
+      ],
+      patterns: [
+        'shell {"command": "ls -la | head -20", "title": "Inspecter la racine"}',
+        'shell {"command": "wc -l notes/*.md", "title": "Compter les lignes des notes"}',
+        'shell {"command": "npm test 2>&1 | tail -30", "background": true, "title": "Lancer les tests en arrière-plan"}',
+      ],
+      parallel:
+        'Avant-plan : 30 s max, sorties bornées — parallélisable. Arrière-plan (`"background": true`) : le jobId revient immédiatement, suis-le avec shell_output — c’est LE mode pour build, veille, sleep. Max 16 jobs simultanés par workspace.',
+      errors: [
+        'Une commande longue SANS `background` est tuée à 30 s : mets `"background": true` dès que ça peut durer.',
+        'Le cwd est la RACINE du dossier de session — pour toucher ton ICM, préfixe par `.workspace/`.',
+        'Sous sécurité « ask », chaque shell attend le pilote — propose-le quand même, c’est le flux normal.',
+        'Sortie tronquée (bornée en avant-plan) : restreins la commande (`| tail`, `| head`) pour voir l’essentiel.',
+      ],
+      related: '`shell_output` / `shell_kill` (suivre/arrêter un job), `write` (écrire des fichiers).',
+    },
+    {
+      name: 'websearch',
+      role: 'recherche web (query) ou lecture de page nettoyée (url)',
+      args: [
+        ['query', false, 'Requête de recherche — retourne titres, URLs et snippets. Donne query OU url.'],
+        ['url', false, 'URL http(s) à lire — retourne la page NETTOYÉE (scripts, styles et navigation partis, le contenu reste).'],
+        ['title', false, 'Titre court pour le pilote — ex. « Chercher les références »'],
+      ],
+      patterns: [
+        'websearch {"query": "Model Context Protocol best practices", "title": "Chercher MCP"}',
+        'websearch {"url": "https://example.com/doc", "title": "Lire la doc"}',
+      ],
+      parallel:
+        'Totalement parallélisable : une recherche ET la lecture de deux pages déjà connues = trois appels dans la même réponse. Chercher PUIS lire un résultat de la recherche = deux protocoles (le second dépend du premier).',
+      errors: [
+        'Donne query OU url, jamais les deux — la query prime, l’url serait ignorée.',
+        'Consigne l’utile dans `.workspace/research/` (une fiche par sujet) et la source dans `research/sources.md` : une affirmation citée renvoie à une ligne du registre.',
+        'Une page qui échoue : réessaie via query (le site bloque peut-être les lectures directes), puis consigne la leçon dans `memory/lessons.md`.',
+      ],
+      related: '`write` (consigner la lecture), `shell` (outils en ligne de commande si besoin).',
+    },
+    {
+      name: 'shell_output',
+      role: 'suivre un processus d’arrière-plan lancé par shell {"background":true}',
+      args: [
+        ['jobId', true, 'Identifiant rendu par le shell en arrière-plan'],
+        ['title', false, 'Titre court pour le pilote — ex. « Voir où en sont les tests »'],
+      ],
+      patterns: [
+        'shell_output {"jobId": "job-…", "title": "Suivre les tests"}',
+      ],
+      parallel:
+        'Libre et parallélisable : plusieurs jobs à suivre = plusieurs appels dans la même réponse. Sondage honnête : rappelle shell_output au protocole suivant tant que `running` — mais pas à chaque tour si rien ne change.',
+      errors: [
+        'Le retour porte l’état (`running` / terminé), le code de sortie, et stdout/stderr accumulés (bornés à 64 Kio — `truncated: true` si coupés).',
+        'Un jobId inconnu (job expiré après 10 min ou achevé et évacué) : relance la commande plutôt que de boucler.',
+      ],
+      related: '`shell` (lancer), `shell_kill` (arrêter).',
+    },
+    {
+      name: 'shell_kill',
+      role: 'arrêter un processus d’arrière-plan lancé par l’agent',
+      args: [
+        ['jobId', true, 'Identifiant du job à arrêter'],
+        ['title', false, 'Titre court pour le pilote — ex. « Arrêter la veille »'],
+      ],
+      patterns: [
+        'shell_kill {"jobId": "job-…", "title": "Arrêter la veille"}',
+      ],
+      parallel:
+        'Libre et parallélisable. Arrête un job qui ne sert plus — c’est ton propre processus, l’hygiène est à toi.',
+      errors: [
+        'Un jobId déjà fini ou inconnu n’est pas une erreur fatale — le retour le dit, passe à la suite.',
+        'Tuer n’efface pas ce qui a déjà été produit (fichiers écrits, sortie accumulée) : vérifie avec shell_output avant de conclure.',
+      ],
+      related: '`shell` (lancer), `shell_output` (voir ce qu’il a produit avant de tuer).',
+    },
+  ]
+  const out: Record<string, string> = {}
+  for (const doc of docs) out[`tools/${doc.name}.md`] = toolFiche(doc)
+  return out
+}
+
 /** The full scaffold as a path → content map (pure: tests assert the bytes). */
 export function scaffoldFiles(name: string): Record<string, string> {
   const files: Record<string, string> = {
     'CONTEXT.md': scaffoldContext(name),
+    // M16 — the base ICM teaches the harness itself.
+    'harness/CONTEXT.md': harnessContext(),
+    'harness/ENGINE.md': harnessEngine(),
+    'tools/CONTEXT.md': toolsContext(),
+    ...toolFiches(),
     'inbox/CONTEXT.md': folderContext(
       'inbox',
       'Les entrées du pilote : fichiers, briefs, consignes déposés ici AVANT le travail. Le workspace commence souvent par vider cette boîte.',
@@ -277,23 +722,48 @@ async function writeIcmTree(root: string): Promise<void> {
 }
 
 /**
- * Ensures the session folder carries its ICM: creates the COMPLETE tree
- * under `<root>/.workspace/` when absent, leaves it untouched when present
- * (a second session on the same folder CONTINUES the living memory — the
- * scaffold never overwrites the agent's work). Returns what happened.
+ * Ensures the session folder carries its ICM:
+ *
+ *  - `.workspace/` ABSENT → the COMPLETE tree is created ('created');
+ *  - `.workspace/` PRESENT and complete → untouched ('present') — a second
+ *    session on the same folder CONTINUES the living memory;
+ *  - `.workspace/` present but MISSING base files (a workspace scaffolded
+ *    before M16) → the missing files are ADDED, nothing existing is ever
+ *    overwritten ('upgraded') — the agent's work survives, the base
+ *    contract (harness/, tools/ documentation) catches up with it.
  */
-export async function ensureIcmTree(root: string): Promise<'created' | 'present'> {
-  if (existsSync(join(root, ICM_DIR))) return 'present'
-  try {
-    await mkdir(join(root, ICM_DIR), { recursive: true })
-    await writeIcmTree(root)
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'EACCES') {
-      throw new Error(`droits insuffisants pour créer « ${join(root, ICM_DIR)} »`)
+export async function ensureIcmTree(root: string): Promise<'created' | 'present' | 'upgraded'> {
+  const files = scaffoldFiles(workspaceName(root))
+  if (!existsSync(join(root, ICM_DIR))) {
+    try {
+      await mkdir(join(root, ICM_DIR), { recursive: true })
+      await writeIcmTree(root)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EACCES') {
+        throw new Error(`droits insuffisants pour créer « ${join(root, ICM_DIR)} »`)
+      }
+      throw err
     }
-    throw err
+    return 'created'
   }
-  return 'created'
+  // Present — add the MISSING base files only (M16 upgrade): the living
+  // memory (anything the agent wrote or changed) is never touched.
+  let added = 0
+  for (const rel of Object.keys(files).sort()) {
+    const target = join(root, ICM_DIR, rel)
+    if (existsSync(target)) continue
+    try {
+      await mkdir(dirname(target), { recursive: true })
+      await writeFile(target, files[rel] as string, 'utf8')
+      added++
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EACCES') {
+        throw new Error(`droits insuffisants pour créer « ${target} »`)
+      }
+      throw err
+    }
+  }
+  return added > 0 ? 'upgraded' : 'present'
 }
 
 /**

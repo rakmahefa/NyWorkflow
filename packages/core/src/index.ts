@@ -37,4 +37,4 @@ export {
   TREE_SKIP_DIRS,
 } from './icm.ts'
 export type { IcmFile, IcmWorkspace, TreeEntry } from './icm.ts'
-export { ICM_DIR, SCAFFOLD_FILES, SCAFFOLD_FOLDERS, ensureIcmTree, scaffoldAgenticWorkspace, scaffoldContext, scaffoldFiles } from './scaffold.ts'
+export { ICM_DIR, SCAFFOLD_FILES, SCAFFOLD_FOLDERS, TOOL_NAMES, ensureIcmTree, scaffoldAgenticWorkspace, scaffoldContext, scaffoldFiles } from './scaffold.ts'

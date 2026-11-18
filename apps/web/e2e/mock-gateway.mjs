@@ -55,7 +55,7 @@ const TOOL_SCENARIOS = {
     ],
     thinkTitle: 'Planifier le tour',
     thinkBody: 'Deux lectures indépendantes — je les lance ensemble.',
-    final: 'PROTOCOLE DEUX TEMPS — thinking titré, appels groupés et titrés.',
+    final: 'PROTOCOLE TROIS TEMPS — thinking titré, appels groupés et titrés, observation du groupe entier.',
   },
 }
 

@@ -73,7 +73,7 @@ test('groupe d’actions : tool_calls groupés, titrés, repliables', async ({ p
   await expect(read).toHaveAttribute('data-state', 'ok', { timeout: 10_000 })
   await expect(glob).toHaveAttribute('data-state', 'ok', { timeout: 10_000 })
   await expect(group.first().locator('.tool-group-meta')).toContainText('2 ✓')
-  await expect(page.locator('.msg.assistant').last()).toContainText('PROTOCOLE DEUX TEMPS', { timeout: 10_000 })
+  await expect(page.locator('.msg.assistant').last()).toContainText('PROTOCOLE TROIS TEMPS', { timeout: 10_000 })
 
   // La carte se replie d'un clic — les lignes disparaissent, le compteur reste.
   await group.first().locator('.tool-group-head').click()
@@ -92,7 +92,7 @@ test('persistance : le groupe et les titres survivent au rechargement (journal)'
   await box.fill('AGENTPROTOCOL cartographie encore')
   await box.press('Enter')
   await expect(page.locator('[data-test="tool-row"]', { hasText: 'glob' }).first()).toHaveAttribute('data-state', 'ok', { timeout: 10_000 })
-  await expect(page.locator('.msg.assistant').last()).toContainText('PROTOCOLE DEUX TEMPS', { timeout: 10_000 })
+  await expect(page.locator('.msg.assistant').last()).toContainText('PROTOCOLE TROIS TEMPS', { timeout: 10_000 })
 
   // Rechargement : le journal rejoue les tool.call dans l'ordre — le
   // regroupement par adjacence et les titres (arguments journalisés)

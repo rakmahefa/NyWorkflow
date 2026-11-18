@@ -14,6 +14,10 @@
  *   POST   /sessions/:id/security → M13: change the security level live
  *   POST   /sessions/:id/turn     → M13: journal a completed agent turn
  *                                     (turn.completed — durable traces)
+ *   POST   /sessions/:id/response → M16: log one round's MODEL RESPONSE
+ *                                     to model.jsonl — thinking titled,
+ *                                     text, tool_calls titled, protocol
+ *                                     compliance, ICM prompt size
  *
  * M14 — every session-scoped record (lifecycle, chat, turns) lands BOTH
  * in the global trio (<home>/.logs) AND in the session's own trio inside
@@ -230,7 +234,7 @@ export function createSessionsHandler(
     if (workspacesDir !== '') {
       wsRoot = await resolveWorkspaceRoot(workspacesDir, workspace)
     }
-    let icm: 'created' | 'present' = 'present'
+    let icm: 'created' | 'present' | 'upgraded' = 'present'
     if (wsRoot !== undefined) {
       try {
         icm = await ensureIcmTree(wsRoot)
@@ -376,6 +380,80 @@ export function createSessionsHandler(
     })
   }
 
+  /**
+   * M16 — one round's MODEL RESPONSE, logged to model.jsonl (the 4th
+   * profiling log): what the model ACTUALLY said — thinking (titled),
+   * text, tool_calls (titled) — plus the protocol compliance, computed
+   * HERE (the server is the truth, not the browser). The pilot uploads
+   * these logs to check whether the three-step protocol is followed in
+   * real life: thinking first? titles filled? group coherent?
+   */
+  async function modelResponse(req: IncomingMessage, id: string): Promise<void> {
+    const file = journalPath(home, id)
+    try {
+      await access(file)
+    } catch {
+      throw notFound('session inconnue')
+    }
+    const body = await readJson(req)
+    const model = typeof body.model === 'string' && body.model.trim() !== '' ? body.model.trim().slice(0, 100) : ''
+    if (model === '') throw badRequest('model non vide attendu')
+    const int = (v: unknown, max: number): number =>
+      typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.min(Math.floor(v), max) : 0
+    const round = int(body.round, 999)
+    const outcome = body.outcome === 'ok' ? 'ok' : body.outcome === 'tool_calls' ? 'tool_calls' : body.outcome === 'stopped' ? 'stopped' : body.outcome === 'error' ? 'error' : ''
+    if (outcome === '') throw badRequest('outcome : "ok", "tool_calls", "stopped" ou "error" attendu')
+    const str = (v: unknown, max: number): string => (typeof v === 'string' ? (v.length > max ? `${v.slice(0, max)}… (tronqué à ${max} caractères)` : v) : '')
+    // Titles: capped in count and length — they are the compliance signal.
+    const thinkingTitles = (Array.isArray(body.thinkingTitles) ? body.thinkingTitles : [])
+      .filter((t): t is string => typeof t === 'string' && t.trim() !== '')
+      .slice(0, 20)
+      .map((t) => t.trim().slice(0, 120))
+    // Tool calls: the group as the model made it (tool, title, args).
+    const toolCalls = (Array.isArray(body.toolCalls) ? body.toolCalls : [])
+      .filter((c): c is Record<string, unknown> => c !== null && typeof c === 'object' && !Array.isArray(c))
+      .slice(0, 50)
+      .map((c) => ({
+        tool: typeof c.tool === 'string' ? c.tool.slice(0, 40) : 'unknown',
+        title: typeof c.title === 'string' ? c.title.trim().slice(0, 60) : '',
+        args: str(JSON.stringify(c.args ?? {}), 4096),
+      }))
+    const thinkingChars = int(body.thinkingChars, 10_000_000)
+    const textChars = int(body.textChars, 10_000_000)
+    const firstEvent = body.firstEvent === 'thinking' ? 'thinking' : body.firstEvent === 'text' ? 'text' : body.firstEvent === 'tool_calls' ? 'tool_calls' : 'none'
+    // Protocol compliance — the automatic check the pilot used to do by eye.
+    const protocol = {
+      thinkingFirst: firstEvent === 'thinking',
+      thinkingTitled: thinkingTitles.length > 0,
+      toolCalls: toolCalls.length,
+      toolCallsTitled: toolCalls.filter((c) => c.title !== '').length,
+    }
+    const record = {
+      kind: 'model.response',
+      sessionId: id,
+      model,
+      round,
+      outcome,
+      ms: int(body.ms, 3_600_000),
+      systemChars: int(body.systemChars, 10_000_000),
+      messages: int(body.messages, 1000),
+      thinkingChars,
+      textChars,
+      firstEvent,
+      thinkingTitles,
+      thinking: str(body.thinking, 32_768),
+      text: str(body.text, 32_768),
+      toolCalls,
+      protocol,
+      ...(typeof body.error === 'string' && body.error !== '' ? { error: body.error.slice(0, 300) } : {}),
+    }
+    profiler?.model(record)
+    // M16 — the session's own quartet: the response is its model view too.
+    const d = deriveSession(await readEvents(file))
+    const sp = await perSession(d.workspace, id)
+    sp?.model({ ...record, ...(d.workspace !== undefined ? { workspace: d.workspace } : {}) })
+  }
+
   /** Fork d'un journal (M12). */
   async function fork(id: string): Promise<SessionDto> {
     try {
@@ -473,6 +551,10 @@ export function createSessionsHandler(
       }
       if (parts[1] === 'turn' && method === 'POST') {
         await completeTurn(req, id)
+        return send(res, 201, { ok: true })
+      }
+      if (parts[1] === 'response' && method === 'POST') {
+        await modelResponse(req, id)
         return send(res, 201, { ok: true })
       }
       if (parts[1] === 'delete' && method === 'POST') {

@@ -3,7 +3,7 @@
 // dans docs/assets/screenshot.png.
 // Scène M15 : une session ICM agentique — dialogue de création (titre +
 // workspace, l'option attendue est attendue AVANT de cliquer), un tour
-// réflexion + DEUX lectures parallèles (thinking TITRÉ du protocole deux
+// réflexion + DEUX lectures parallèles (thinking TITRÉ du protocole trois
 // temps, carte « Actions de l'agent » groupée, lignes d'outils titrées),
 // puis un write qui met la carte d'approbation en scène : la capture montre
 // le cœur du produit — l'ICM vers le modèle, le protocole, les tools
@@ -85,7 +85,7 @@ try {
   await page.locator('.main-head h2').filter({ hasText: 'Les loutres de Madagascar — rapport' }).waitFor({ timeout: 20_000 })
   await page.locator('[data-test="ws-banner"]').waitFor({ state: 'visible' })
 
-  // Premier tour : réflexion + DEUX lectures parallèles (le protocole M15 :
+  // Premier tour : réflexion + DEUX lectures parallèles (le protocole M16 :
   // thinking titré ouvre la réponse, puis les appels groupés et titrés).
   // PENSE garde le canal natif pour la réponse finale — les deux familles
   // de modèles coexistent, la capture montre le bloc titré du tour d'actions.

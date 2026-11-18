@@ -340,7 +340,7 @@ export function createWorkspacesHandler(
       if (existsSync(join(dir, name)) || (await readManifest(dir)).workspaces.some((w) => w.name === name)) {
         throw badRequest(`le workspace « ${name} » existe déjà`)
       }
-      let icmStatus: 'created' | 'present'
+      let icmStatus: 'created' | 'present' | 'upgraded'
       try {
         icmStatus = await ensureIcmTree(path)
       } catch (err) {

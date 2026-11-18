@@ -144,7 +144,7 @@ it(
     expect(icm.body.system).toContain('Agir = appeler un outil')
     expect(icm.body.system).toContain('.workspace/')
     expect(icm.body.system).toContain('ne les relis pas')
-    expect(icm.body.contexts.length).toBe(7)
+    expect(icm.body.contexts.length).toBe(9) // M16 : + harness/ et tools/ charters
   },
 )
 

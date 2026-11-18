@@ -502,6 +502,10 @@ export default function App() {
           turn.rounds = round
           let text = ''
           let thinking = ''
+          // M16 — what the model log needs: the first streamed event (the
+          // thinking-first check) and every thinking title (the titled check).
+          let firstEvent: 'thinking' | 'text' | 'tool_calls' | 'none' = 'none'
+          const thinkingTitles: string[] = []
           let calls: ToolCallRequest[] = []
           let failed = false
           try {
@@ -513,12 +517,16 @@ export default function App() {
             })) {
               if (ev.type === 'thinking') {
                 // M15 — un titre ouvre un bloc titré, sans titre il continue le bloc en cours.
+                if (firstEvent === 'none') firstEvent = 'thinking'
+                if (ev.title !== undefined && ev.title !== '') thinkingTitles.push(ev.title)
                 if (!store.appendThinking(placeholder.id, ev.delta, ev.title)) return // session effacée
                 thinking += ev.delta
               } else if (ev.type === 'text') {
+                if (firstEvent === 'none') firstEvent = 'text'
                 if (!store.appendText(placeholder.id, ev.delta)) return // session effacée
                 text += ev.delta
               } else if (ev.type === 'tool_calls') {
+                if (firstEvent === 'none') firstEvent = 'tool_calls'
                 calls = ev.calls
               }
             }
@@ -538,6 +546,30 @@ export default function App() {
             const why = err instanceof Error ? err.message : String(err)
             store.appendMessage(session.id, 'system', `Erreur passerelle : ${why}`)
             store.settleTrace(traceId, { ms: Date.now() - startedAt, outcome: 'error', error: why, thinkingChars: thinking.length, textChars: text.length })
+            // M16 — l'échec du round est journalisé aussi : où le flux s'est arrêté.
+            if (mode === 'server') {
+              void api
+                .postResponse(session.id, {
+                  model,
+                  round,
+                  ms: Date.now() - startedAt,
+                  outcome: 'error',
+                  firstEvent,
+                  systemChars: system.length,
+                  messages: messages.length,
+                  thinkingChars: thinking.length,
+                  textChars: text.length,
+                  thinkingTitles,
+                  thinking,
+                  text,
+                  toolCalls: calls.map((c) => {
+                    const args = parseToolArgs(c.function.arguments)
+                    return { tool: c.function.name, title: titleOfArgs(args), args }
+                  }),
+                  error: turn.error,
+                })
+                .catch(() => undefined) // jamais bloquant
+            }
             return
           }
           store.setStreaming(placeholder.id, false)
@@ -558,6 +590,32 @@ export default function App() {
             thinkingChars: thinking.length,
             textChars: text.length,
           })
+
+          // M16 — la réponse du modèle de CE round part dans model.jsonl : le
+          // pilote voit si le protocole est suivi (thinking d'abord ? titres
+          // remplis ? groupe cohérent ?) — la conformité est calculée serveur.
+          if (mode === 'server') {
+            void api
+              .postResponse(session.id, {
+                model,
+                round,
+                ms: Date.now() - startedAt,
+                outcome: calls.length > 0 ? 'tool_calls' : 'ok',
+                firstEvent,
+                systemChars: system.length,
+                messages: messages.length,
+                thinkingChars: thinking.length,
+                textChars: text.length,
+                thinkingTitles,
+                thinking,
+                text,
+                toolCalls: calls.map((c) => {
+                  const args = parseToolArgs(c.function.arguments)
+                  return { tool: c.function.name, title: titleOfArgs(args), args }
+                }),
+              })
+              .catch(() => undefined) // jamais bloquant
+          }
 
           if (calls.length === 0) return // réponse finale — tour terminé
           turn.toolCalls += calls.length

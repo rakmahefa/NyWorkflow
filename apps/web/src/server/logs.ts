@@ -1,21 +1,28 @@
 /**
- * Profiling logs (M13, per-session M14) — three JSONL files, the pilot's
- * observability trio, meant to be uploaded to the repo to improve and
- * refine the harness. TWO homes:
+ * Profiling logs (M13, per-session M14, model log M16) — FOUR JSONL
+ * files, the pilot's observability quartet, meant to be uploaded to the
+ * repo to improve and refine the harness. TWO homes:
  *
- *   global  <home>/.logs/                  — the engine-wide trio (M13):
+ *   global  <home>/.logs/                  — the engine-wide quartet (M13):
  *     engine.jsonl   — server boot, gateway status, every /sessions +
  *                     /workspaces HTTP request (method, path, status, ms),
  *                     internal errors, the gateway's upstream turns;
  *     session.jsonl  — session lifecycle: created, renamed, forked,
  *                     deleted, security changed, chat events (sizes);
  *     activity.jsonl — every tool call and result (callId, ok, ms),
- *                     human decisions, workspace operations.
+ *                     human decisions, workspace operations;
+ *     model.jsonl    — M16: EVERY model response, round by round — the
+ *                     thinking (titled), the text, the tool_calls (titled),
+ *                     plus protocol compliance (thinking first? titles
+ *                     filled?) and the ICM prompt size (systemChars) —
+ *                     the raw material that says whether the protocol
+ *                     is followed in real life.
  *
- *   session <folder>/.logs/<sessionId>/    — the SAME trio, per session,
+ *   session <folder>/.logs/<sessionId>/    — the SAME quartet, per session,
  *     INSIDE the session's folder (M14, pilot-driven): each session's
- *     full story (its turns, its chat, its tool activity) is
- *     self-contained in its own folder, ready to be zipped and uploaded.
+ *     full story (its turns, its chat, its tool activity, its model
+ *     responses) is self-contained in its own folder, ready to be
+ *     zipped and uploaded.
  *
  * One JSON object per line: `{ "at": ISO, "kind": "…", …payload }` —
  * append-only like the journals, never a source of truth, never fatal:
@@ -31,8 +38,8 @@ import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 
-/** The three logs, in listing order. */
-export const LOG_NAMES = ['engine.jsonl', 'session.jsonl', 'activity.jsonl'] as const
+/** The four logs, in listing order. */
+export const LOG_NAMES = ['engine.jsonl', 'session.jsonl', 'activity.jsonl', 'model.jsonl'] as const
 export type LogName = (typeof LOG_NAMES)[number]
 
 const ROTATE_BYTES = 8 * 1024 * 1024
@@ -122,12 +129,14 @@ export class JsonlLog {
   }
 }
 
-/** The trio, plus the HTTP handler that exposes them read-only. */
+/** The quartet, plus the HTTP handler that exposes them read-only. */
 export interface Profiler {
   readonly dir: string
   engine(record: Record<string, unknown>): void
   session(record: Record<string, unknown>): void
   activity(record: Record<string, unknown>): void
+  /** M16 — the model's responses (one record per round). */
+  model(record: Record<string, unknown>): void
   /** Wraps a handler: every request lands in engine.jsonl (status, ms). */
   traceHttp(handler: (req: IncomingMessage, res: ServerResponse) => void): (req: IncomingMessage, res: ServerResponse) => void
 }
@@ -136,6 +145,7 @@ export function createProfiler(dir: string): Profiler {
   const engine = new JsonlLog(dir, 'engine.jsonl')
   const session = new JsonlLog(dir, 'session.jsonl')
   const activity = new JsonlLog(dir, 'activity.jsonl')
+  const model = new JsonlLog(dir, 'model.jsonl')
   const fire = (log: JsonlLog, record: Record<string, unknown>): void => {
     void log.append(record)
   }
@@ -145,6 +155,7 @@ export function createProfiler(dir: string): Profiler {
     engine: (record) => fire(engine, record),
     session: (record) => fire(session, record),
     activity: (record) => fire(activity, record),
+    model: (record) => fire(model, record),
     traceHttp(handler) {
       return (req, res) => {
         const started = Date.now()
@@ -191,11 +202,7 @@ export function dropSessionProfiler(sessionFolder: string, sessionId: string): v
 
 /** GET /logs → listing; GET /logs/:name?tail=N → the last lines. Read-only. */
 export function createLogsHandler(profiler: Profiler): (req: IncomingMessage, res: ServerResponse) => void {
-  const logs: Record<LogName, JsonlLog> = {
-    'engine.jsonl': new JsonlLog(profiler.dir, 'engine.jsonl'),
-    'session.jsonl': new JsonlLog(profiler.dir, 'session.jsonl'),
-    'activity.jsonl': new JsonlLog(profiler.dir, 'activity.jsonl'),
-  }
+  const logs = Object.fromEntries(LOG_NAMES.map((n) => [n, new JsonlLog(profiler.dir, n)])) as Record<LogName, JsonlLog>
 
   function send(res: ServerResponse, status: number, body: unknown): void {
     if (res.writableEnded) return

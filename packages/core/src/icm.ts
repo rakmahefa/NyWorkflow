@@ -47,8 +47,9 @@ export interface TreeEntry {
 /** Tree walk caps — a runaway workspace must not saturate the prompt. */
 export const TREE_MAX_ENTRIES = 500
 export const TREE_MAX_DEPTH = 6
-/** CONTEXT.md caps: at most 8 files, 32 KiB each. */
-export const CONTEXT_MAX_FILES = 8
+/** CONTEXT.md caps: at most 12 files, 32 KiB each (M16: the scaffold
+ * spends 9 — harness/ and tools/ charters joined the base ICM). */
+export const CONTEXT_MAX_FILES = 12
 export const CONTEXT_MAX_CHARS = 32_768
 /** Folders never walked — never part of the ICM. */
 export const TREE_SKIP_DIRS = new Set(['.git', 'node_modules', '.nyworkflow', '.logs', 'dist', 'playwright-report', 'test-results'])
@@ -207,17 +208,21 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
     ].join('\n'),
   )
 
-  // 1bis. M15 — the two-phase response protocol: the SAME contract for every
-  // model, whatever its native thinking channel. The harness parses the
-  // titled tag out of the content stream; the block shows to the pilot as a
-  // collapsible titled card, the work that follows is the visible answer.
+  // 1bis. M16 — the THREE-step response protocol: the SAME contract for
+  // every model, whatever its native thinking channel. (1) The titled
+  // thought process opens EVERY response; (2) the action — parallel,
+  // titled tool_calls, then the response STOPS; (3) the observation — the
+  // harness returns the WHOLE group's results in a defined format, and
+  // only then does a new protocol start. The harness parses the titled
+  // tag out of the content stream; the block shows to the pilot as a
+  // collapsible card, the work that follows is the visible answer.
   sections.push(
     [
-      '# Protocole de réponse — deux temps, à CHAQUE réponse',
+      '# Protocole de réponse — trois temps, à CHAQUE réponse',
       '',
-      'Chaque réponse que tu émets suit TOUJOURS cet ordre, sans exception :',
+      'Chaque réponse que tu émets suit TOUJOURS cet ordre, sans exception — et la boucle se répète tant que le travail n’est pas fini :',
       '',
-      '1. **Le temps du thought process, en premier.** Tu dialogues d’abord avec toi-même dans un bloc unique et titré :',
+      '1. **Le temps du thinking, en premier.** Tu dialogues d’abord avec toi-même dans un bloc unique et titré :',
       '',
       '```',
       '<thinking title="titre court de l’étape en cours">',
@@ -225,14 +230,23 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
       '</thinking>',
       '```',
       '',
-      '2. **Puis tu bascules hors du thought process et tu procèdes au travail** : prose pour le pilote et/ou tool_calls pour agir. ' +
-        'Chaque tool_call remplit son argument `title` (≤ 60 caractères) — c’est le titre que le pilote voit sur la ligne de l’appel.',
+      '2. **Le temps de l’action.** Tu bascules hors du thought process et tu procèdes au travail :',
+      '   - soit la réponse finale en prose pour le pilote (quand aucun outil n’est nécessaire) ;',
+      '   - soit des tool_calls pour agir — tous les appels INDÉPENDANTS ENSEMBLE dans la même réponse (le harness les exécute en parallèle), chacun avec son argument `title` (≤ 60 caractères). Puis tu TERMINES ta réponse : jamais de texte après les tool_calls, jamais de résultat annoncé avant de l’avoir reçu.',
+      '',
+      '3. **Le temps de l’observation.** Tu ATTENDS. Le harness exécute le groupe entier (en parallèle et en arrière-plan) et te renvoie, à la fin du protocole, TOUTES les réponses du groupe, une par appel, dans ce format :',
+      '',
+      '```',
+      '{"tool": "read", "title": "Lire la charte", "ok": true, "result": "…"}',
+      '{"tool": "shell", "title": "Compiler", "ok": false, "error": "…"}',
+      '```',
+      '',
+      '   C’est en recevant ces réponses qu’un NOUVEAU protocole démarre — retour au temps 1 : thinking, puis la suite du travail (nouveaux tool_calls, ou réponse finale). Un appel qui DÉPEND du résultat d’un autre attend le protocole suivant.',
       '',
       'Règles du protocole :',
       '- Le bloc `<thinking>` ouvre la réponse, une seule fois, AVANT tout le reste — jamais de prose visible avant lui.',
       '- `title` dit l’étape (« Comprendre la demande », « Planifier le tour », « Vérifier le résultat ») : le pilote le lit replié.',
       '- Dans le thought process : sois franc, méthodique, bref — ce que tu sais déjà par l’ICM, ce qui manque, ce que tu fais ce tour.',
-      '- Hors du thought process : le travail utile — jamais de bavardage. Un tool_call sans `title` reste valide mais appauvrit le suivi.',
       '- N’écris JAMAIS la balise `<thinking>` en prose visible (le harness la parserait comme un vrai bloc).',
       '- Ton thought process t’appartient : le pilotage du pilote vit dans la prose et les tool_calls.',
     ].join('\n'),
@@ -247,7 +261,8 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
         ? [
             '- **Racine de la session** : le dossier du projet du pilote — ses fichiers sont ton matériau de travail.',
             `- **\`${ICM_DIR}/\`** : ton ICM, l’arbre caché qui t’appartient — charte, plan, tâches, journal, décisions, recherche, mémoire, livrables. C’est là que tu t’organises.`,
-            '- **`.logs/`** : logs de profilage du harness — ne lis ni ne modifie jamais ce dossier.',
+            `- **\`${ICM_DIR}/harness/\`** : la documentation de ton harness (charte chargée à chaque tour, moteur en profondeur) — \`${ICM_DIR}/tools/\` : le protocole trois temps (chargé) et la fiche rigoureuse de chaque outil.`,
+            '- **`.logs/`** : logs de profilage du harness (dont tes propres réponses) — ne lis ni ne modifie jamais ce dossier.',
           ].join('\n')
         : [
             '- **Racine de la session** : le dossier du workspace — ses fichiers (charte comprise) sont ton terrain.',

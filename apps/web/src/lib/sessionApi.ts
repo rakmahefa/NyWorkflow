@@ -117,9 +117,46 @@ export function postTurn(id: string, turn: TurnSummary): Promise<void> {
   }).then(() => undefined)
 }
 
-// --- M13 : logs de profilage (lecture seule) ----------------------------------
+/** One tool call as the model made it (M16 model log). */
+export interface ResponseToolCall {
+  tool: string
+  title?: string
+  args?: unknown
+}
 
-/** GET /logs — the profiling trio, as listed. */
+/** One round's MODEL RESPONSE — logged to model.jsonl (M16): what the
+ * model actually said, plus what the server needs to compute protocol
+ * compliance (firstEvent, thinkingTitles, titles on the calls). */
+export interface ModelResponseSummary {
+  model: string
+  round: number
+  ms: number
+  outcome: 'ok' | 'tool_calls' | 'stopped' | 'error'
+  /** Kind of the FIRST streamed event — the thinking-first check. */
+  firstEvent: 'thinking' | 'text' | 'tool_calls' | 'none'
+  systemChars: number
+  messages: number
+  thinkingChars: number
+  textChars: number
+  thinkingTitles: string[]
+  thinking?: string
+  text?: string
+  toolCalls: ResponseToolCall[]
+  error?: string
+}
+
+/** M16 — logs one round's model response (model.jsonl, 4th profiling log). */
+export function postResponse(id: string, response: ModelResponseSummary): Promise<void> {
+  return jsonFetch<unknown>(`/sessions/${encodeURIComponent(id)}/response`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify(response),
+  }).then(() => undefined)
+}
+
+// --- M13/M16 : logs de profilage (lecture seule) ----------------------------------
+
+/** GET /logs — the profiling quartet (engine, session, activity, model), as listed. */
 export interface LogsDto {
   dir: string
   files: { name: string; bytes: number; lines: number }[]

@@ -341,8 +341,8 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           ) : (
             <>
               <p className="diag-line" data-test="logs-dir">
-                Dossier : <code>{logs.dir}</code> — trois journaux JSONL, rotation à 8 Mio. Copiez-les dans le dépôt
-                pour améliorer et peaufiner le harness.
+                Dossier : <code>{logs.dir}</code> — quatre journaux JSONL (engine, session, activity, model), rotation à 8&nbsp;Mio.
+                Copiez-les dans le dépôt pour améliorer et peaufiner le harness.
               </p>
               <table className="journal" data-test="logs-table">
                 <thead>

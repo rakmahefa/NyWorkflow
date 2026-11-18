@@ -25,7 +25,7 @@ describe('toAgentMessages (M11)', () => {
     ])
   })
 
-  it('ligne outil réglée → appel assistant (tool_calls) + résultat tool (round-trip standard)', () => {
+  it('ligne outil réglée → appel assistant (tool_calls) + résultat tool au format protocole', () => {
     const input = [
       msg('1', 'user', 'lis la carte'),
       toolRow('2', 'read', { path: 'CONTEXT.md' }, true, 'read « CONTEXT.md » — 10 caractères', { path: 'CONTEXT.md', content: '# Carte' }),
@@ -40,18 +40,58 @@ describe('toAgentMessages (M11)', () => {
           { id: 'call-2', type: 'function', function: { name: 'read', arguments: '{"path":"CONTEXT.md"}' } },
         ],
       },
-      { role: 'tool', tool_call_id: 'call-2', content: '{"ok":true,"result":{"path":"CONTEXT.md","content":"# Carte"}}' },
+      { role: 'tool', tool_call_id: 'call-2', content: '{"tool":"read","title":"","ok":true,"result":{"path":"CONTEXT.md","content":"# Carte"}}' },
       { role: 'assistant', content: 'Voici la carte.' },
     ])
   })
 
-  it('refus → résultat {ok:false, error:summary}, sans data', () => {
+  it('M16 — groupe ADJACENT : UNE message assistant avec TOUS les appels, puis chaque résultat — le groupe revient ENTIER', () => {
+    const input = [
+      msg('1', 'user', 'lis tout'),
+      toolRow('2', 'read', { path: 'a.md', title: 'Lire a' }, true, 'ok a', 'CONTENU A'),
+      toolRow('3', 'ls', { path: '.', title: 'Lister' }, true, 'ok ls', ['a.md', 'b.md']),
+      toolRow('4', 'write', { path: 'c.md', title: 'Écrire c' }, false, 'refusé par le pilote'),
+      msg('5', 'assistant', 'Voilà.'),
+    ]
+    const out = toAgentMessages(input)
+    // Une seule message assistant pour le groupe entier — les appels comme le modèle les a faits.
+    expect(out).toHaveLength(6)
+    expect(out[1]).toEqual({
+      role: 'assistant',
+      content: '',
+      tool_calls: [
+        { id: 'call-2', type: 'function', function: { name: 'read', arguments: '{"path":"a.md","title":"Lire a"}' } },
+        { id: 'call-3', type: 'function', function: { name: 'ls', arguments: '{"path":".","title":"Lister"}' } },
+        { id: 'call-4', type: 'function', function: { name: 'write', arguments: '{"path":"c.md","title":"Écrire c"}' } },
+      ],
+    })
+    // Puis chaque résultat, au format du protocole — l’écho outil+title permet la corrélation.
+    expect(out[2]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call-2',
+      content: '{"tool":"read","title":"Lire a","ok":true,"result":"CONTENU A"}',
+    })
+    expect(out[3]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call-3',
+      content: '{"tool":"ls","title":"Lister","ok":true,"result":["a.md","b.md"]}',
+    })
+    expect(out[4]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call-4',
+      content: '{"tool":"write","title":"Écrire c","ok":false,"error":"refusé par le pilote"}',
+    })
+    // La prose finale suit le groupe.
+    expect(out[5]).toEqual({ role: 'assistant', content: 'Voilà.' })
+  })
+
+  it('refus → résultat {tool,title,ok:false,error}, sans data', () => {
     const input = [toolRow('7', 'write', { path: 'a' }, false, 'refusé par l\'utilisateur : write « a »')]
     const out = toAgentMessages(input)
     expect(out[1]).toEqual({
       role: 'tool',
       tool_call_id: 'call-7',
-      content: '{"ok":false,"error":"refusé par l\'utilisateur : write « a »"}',
+      content: '{"tool":"write","title":"","ok":false,"error":"refusé par l\'utilisateur : write « a »"}',
     })
   })
 

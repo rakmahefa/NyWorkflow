@@ -217,19 +217,20 @@ it(
       body: JSON.stringify({ model: 'gemini-2.5-flash', rounds: 1, ms: 900, outcome: 'ok', toolCalls: 1, thinkingChars: 0, textChars: 50 }),
     })
 
-    // Le listing /logs : les trois journaux, le dossier, des lignes.
+    // Le listing /logs : les quatre journaux (M16 : model.jsonl s'ajoute), le dossier, des lignes.
     const logs = await api(base, '/logs')
     expect(logs.status).toBe(200)
     expect(logs.body.dir).toContain('.logs')
     const names: string[] = logs.body.files.map((f: any) => f.name)
-    expect(names).toEqual(['engine.jsonl', 'session.jsonl', 'activity.jsonl'])
+    expect(names).toEqual(['engine.jsonl', 'session.jsonl', 'activity.jsonl', 'model.jsonl'])
     const byName = Object.fromEntries(logs.body.files.map((f: any) => [f.name, f]))
     expect(byName['engine.jsonl'].lines).toBeGreaterThan(0) // requêtes HTTP tracées
     expect(byName['session.jsonl'].lines).toBeGreaterThanOrEqual(2) // created + message
     expect(byName['activity.jsonl'].lines).toBeGreaterThanOrEqual(3) // scaffold + write + tour
 
-    // Les fichiers existent bel et bien, en JSONL daté.
-    for (const name of names) {
+    // Les fichiers existent bel et bien, en JSONL daté (model.jsonl n'est
+    // écrit qu'à la première réponse de modèle — prouvé dans m16.test.ts).
+    for (const name of names.filter((n) => n !== 'model.jsonl')) {
       const raw = readFileSync(join(home, '.logs', name), 'utf8')
       for (const line of raw.split('\n').filter((l) => l.trim() !== '')) {
         expect(JSON.parse(line).at).toBeDefined()
@@ -249,7 +250,7 @@ it(
     expect(tail.status).toBe(200)
     expect(tail.body.tail.split('\n')).toHaveLength(2)
 
-    // Lecture seule : un nom hors des trois journaux est refusé, le POST aussi.
+    // Lecture seule : un nom hors des quatre journaux est refusé, le POST aussi.
     const nope = await api(base, '/logs/other.jsonl')
     expect(nope.status).toBe(404)
     const noWrite = await api(base, '/logs/engine.jsonl', { method: 'POST', body: '{}' })

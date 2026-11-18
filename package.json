@@ -1,7 +1,7 @@
 {
   "name": "nyworkflow",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Harness web d'agent conversationnel ICM — sessions ancrées dans un dossier obligatoire : ICM complète dans le .workspace/ caché (charte, plan, mémoire), logs de profilage par session dans .logs/<session>/, niveaux de sécurité par session, protocole deux temps modèle-agnostique (thought process titré ouvrant chaque réponse, tool_calls groupés et titrés), propulsées par Gemini via la passerelle webapi intégrée (@nyworkflow/webapi)",
   "license": "MIT",
   "packageManager": "pnpm@12.21.0",

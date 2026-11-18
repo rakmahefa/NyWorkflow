@@ -77,12 +77,13 @@ describe('JsonlLog', () => {
 })
 
 describe('createProfiler + /logs (lecture seule)', () => {
-  it('les trois journaux grandissent séparément ; le handler liste et sert la queue', async () => {
+  it('les quatre journaux grandissent séparément ; le handler liste et sert la queue', async () => {
     const dir = tmpDir()
     const profiler = createProfiler(dir)
     profiler.engine({ kind: 'boot' })
     profiler.session({ kind: 'session.created', sessionId: 's1' })
     profiler.activity({ kind: 'tool.call', tool: 'read' })
+    profiler.model({ kind: 'model.response', sessionId: 's1', model: 'gemini-3.5-flash', round: 1 })
     await new Promise((r) => setTimeout(r, 50)) // appends are fire-and-forget
 
     for (const name of LOG_NAMES) {
@@ -101,7 +102,12 @@ describe('createProfiler + /logs (lecture seule)', () => {
     expect(tailRes.status).toBe(200)
     expect(JSON.parse(tailRes.body).tail).toContain('session.created')
 
-    // Hors des trois journaux : 404, quelle que soit la méthode.
+    // M16 — le journal du modèle se queue comme les autres.
+    const modelTail = await call(handler, 'GET', '/model.jsonl?tail=5')
+    expect(modelTail.status).toBe(200)
+    expect(JSON.parse(modelTail.body).tail).toContain('model.response')
+
+    // Hors des quatre journaux : 404, quelle que soit la méthode.
     expect((await call(handler, 'GET', '/secret.jsonl')).status).toBe(404)
     expect((await call(handler, 'GET', '/../session.jsonl')).status).toBe(404)
     expect((await call(handler, 'POST', '/engine.jsonl')).status).toBe(404)
