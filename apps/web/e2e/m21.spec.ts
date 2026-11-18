@@ -27,9 +27,11 @@ test('no_tool : la réponse finale sans outil est signée, exécutée et journal
   await expect(row).toHaveAttribute('data-state', 'ok', { timeout: 10_000 })
   await expect(page.locator('.msg.assistant').last()).toContainText('SANSTOOL RÉPONDU', { timeout: 10_000 })
 
-  // Le journal a gardé l'appel : après rechargement, la ligne no_tool est
-  // toujours là (le contrat signé survit au tour).
+  // Le journal a gardé l'appel : après rechargement (on RE-SÉLECTIONNE
+  // notre session — les workers parallèles partagent le serveur), la ligne
+  // no_tool est toujours là (le contrat signé survit au tour).
   await page.reload()
+  await page.locator('[data-test="session-item"]').filter({ hasText: title }).click()
   const replayed = page.locator('[data-test="tool-row"]', { hasText: 'no_tool' }).first()
   await expect(replayed).toHaveAttribute('data-state', 'ok', { timeout: 10_000 })
 
@@ -104,8 +106,11 @@ test('arbre : le thinking titré porte son groupe d’appels niché dessous (liv
   await expect(tree.locator('[data-test="tool-row"]')).toHaveCount(2)
 
   // Après rechargement : le thinking n'est pas journalisé, mais le round
-  // et son arbre groupé subsistent (le journal est la vérité).
+  // et son arbre groupé subsistent (le journal est la vérité). On
+  // RE-SÉLECTIONNE notre session par son titre — les workers parallèles
+  // partagent le serveur, l'app ouvre la plus récente (m15 le fait pareil).
   await page.reload()
+  await page.locator('[data-test="session-item"]').filter({ hasText: title }).click()
   const replayed = page.locator('[data-test="agent-round"]').first()
   await expect(replayed).toBeVisible({ timeout: 10_000 })
   await expect(replayed.locator('[data-test="round-tree"]')).toBeVisible()

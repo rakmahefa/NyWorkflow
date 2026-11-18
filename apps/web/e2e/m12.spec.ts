@@ -205,25 +205,34 @@ test('renommage inline + niveau de réflexion persistés', async ({ page }) => {
   await page.goto('/')
   const title = `Renomme ${Date.now()}`
   const item = await newSessionViaDialog(page, title)
+  // Le nouveau titre est UNIQUE par run : les suites parallèles partagent le
+  // serveur (et les runs successifs accumulent leurs sessions) — un titre
+  // fixe rendrait le filtre ambigu (strict mode).
+  const renamed = `Nouveau nom ${Date.now()}`
 
   // Renommage inline depuis la rangée — l'input remplace le titre, on le
   // vise globalement (une seule édition à la fois).
   const row = page.locator('.session-row').filter({ hasText: title })
   await row.locator('[data-test="rename-btn"]').click()
   const input = page.locator('[data-test="session-rename-input"]')
-  await input.fill('Nouveau nom de session')
+  await input.fill(renamed)
   await input.press('Enter')
-  await expect(page.locator('.main-head h2')).toContainText('Nouveau nom de session')
+  await expect(page.locator('.main-head h2')).toContainText(renamed)
 
-  // Le titre survit au rechargement (session.renamed au journal).
+  // Le titre survit au rechargement (session.renamed au journal) — on
+  // RE-SÉLECTIONNE notre session par son titre : les workers parallèles
+  // partagent le serveur, l'app ouvre la plus récente qui peut être
+  // celle d'un autre test.
   await page.reload()
-  await expect(page.locator('.main-head h2')).toContainText('Nouveau nom de session')
+  await page.locator('[data-test="session-item"]').filter({ hasText: renamed }).click()
+  await expect(page.locator('.main-head h2')).toContainText(renamed)
 
   // Le niveau de réflexion est proposé et persiste.
   const think = page.locator('[data-test="think-select"]')
   await expect(think).toBeEnabled()
   await think.selectOption('2')
   await page.reload()
+  await page.locator('[data-test="session-item"]').filter({ hasText: renamed }).click()
   await expect(page.locator('[data-test="think-select"]')).toHaveValue('2')
 })
 

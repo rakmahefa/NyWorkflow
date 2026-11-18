@@ -12,6 +12,14 @@ export default defineConfig({
   outputDir: 'test-results',
   globalSetup: 'e2e/global-setup.mjs',
   reporter: [['list'], ['html', { open: 'never' }]],
+  // M22 — en CI, la charge (serveur + maquette + workers sur 2 vCPU) fait
+  // fluctuer les délais : un échec est rejoué une fois avant de compter —
+  // localement, aucun retry, un échec reste un échec.
+  retries: process.env.CI ? 1 : 0,
+  // M22 — la maquette SSE et le serveur de sessions sont PARTAGÉS entre les
+  // workers : deux workers suffisent en CI (la parallélisation agressive
+  // saturait la machine et rendait les tours agents instables).
+  workers: process.env.CI ? 2 : undefined,
   use: { baseURL: 'http://127.0.0.1:3080' },
   webServer: {
     command: 'pnpm dev',
