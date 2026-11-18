@@ -20,22 +20,55 @@ const FIXED_REPLY =
 // <thinking title="…">…</thinking> DANS LE CONTENU (le canal natif
 // reasoning_content reste pour PENSE), et chaque tool_call porte son
 // argument `title` (PROTOCOLITRE vérifie le tout de bout en bout).
+// M21 : LE CONTRAT D'APPELS — le thinking se TERMINE par l'annonce
+// PLAN: N tool_calls — [titres] (auto-générée conforme aux appels émis,
+// sauf scénario expressément déviant) ; `fixed` décrit la variante
+// CONFORME qu'une maquette corrigeée émet après un rappel du harness.
 const TOOL_SCENARIOS = {
   AGENTLIT: {
     name: 'read',
     arguments: { title: 'Lire la carte du workspace', path: '.workspace/CONTEXT.md' },
     final: 'LIVRABLE FINAL AGENT — la carte est lue.',
   },
-  // M20 — le scénario NON CONFORME, calqué sur les écarts des logs réels
-  // (rounds 3 et 5 de la session arcade : thinking sauté, appel sans
-  // titre) : il déclenche le MENTOR de l'app, qui doit renvoyer un
-  // rappel [HARNESS — protocole] au round suivant — le test e2e m20 le
-  // vérifie sur les requêtes enregistrées ci-dessous.
+  // M20/M21 — le scénario NON CONFORME, calqué sur les écarts des logs réels
+  // (rounds 3 et 5 de la session arcade : thinking sauté, appel sans titre,
+  // et M21 : pas d'annonce PLAN) : il déclenche le REFUS du groupe (le
+  // contrat d'appels de l'app), qui renvoie la note [HARNESS — protocole]
+  // au round suivant — la maquette se CORRIGE alors (variante fixed) et le
+  // test e2e m20 vérifie le rappel SUR LE FIL, dans l'UI et dans model.jsonl.
   AGENTNONCONFORME: {
     name: 'ls',
     arguments: { path: '.' },
     noThinking: true,
     final: 'NONCONFORME FAIT — la racine est listée, sans protocole.',
+    fixed: {
+      thinkTitle: 'Reprendre le protocole',
+      thinkBody: 'Correction du rappel : thinking titré, annonce conforme.\nPLAN: 1 tool_calls — [Lister la racine]',
+      arguments: { title: 'Lister la racine', path: '.' },
+    },
+  },
+  // M21 — le contrat tenu sans outil : la réponse finale en prose est
+  // PRÉCÉDÉE de l'appel unique no_tool, dans la MÊME réponse (l'exception
+  // assumée du protocole — rien à attendre).
+  AGENTSANSTOOL: {
+    name: 'no_tool',
+    arguments: { title: 'Réponse finale sans outil', reason: 'La présentation ne nécessite aucun outil' },
+    thinkTitle: 'Répondre sans outil',
+    thinkBody: 'Rien à lire ni écrire : je réponds directement.\nPLAN: no_tool',
+    final: 'SANSTOOL RÉPONDU — la présentation sans aucun appel réel.',
+  },
+  // M21 — le compte annoncé ≠ groupe émis (annoncé 2, émis 1) : le groupe
+  // est REFUSÉ, puis réémis conforme après le rappel (variante fixed).
+  AGENTCOMPTEFAUX: {
+    name: 'ls',
+    arguments: { title: 'Lister la racine', path: '.' },
+    thinkTitle: 'Planifier le listing',
+    thinkBody: 'Deux appels prévus — mais un seul partira.\nPLAN: 2 tool_calls — [Lister la racine] [Relire la charte]',
+    final: 'COMPTE CORRIGÉ — le groupe annoncé est enfin émis.',
+    fixed: {
+      thinkTitle: 'Reprendre le plan',
+      thinkBody: 'Relu : le listing seul suffit.\nPLAN: 1 tool_calls — [Lister la racine]',
+    },
   },
   AGENTECRIT: {
     name: 'write',
@@ -65,7 +98,7 @@ const TOOL_SCENARIOS = {
       { name: 'glob', arguments: { title: 'Cartographier les notes', pattern: '**/*.md' } },
     ],
     thinkTitle: 'Planifier le tour',
-    thinkBody: 'Deux lectures indépendantes — je les lance ensemble.',
+    thinkBody: 'Deux lectures indépendantes — je les lance ensemble.\nPLAN: 2 tool_calls — [Relire la charte] [Cartographier les notes]',
     final: 'PROTOCOLE TROIS TEMPS — thinking titré, appels groupés et titrés, observation du groupe entier.',
   },
 }
@@ -79,8 +112,16 @@ function scenarioFor(messages) {
   const users = (messages ?? []).filter((m) => m?.role === 'user')
   const lastUser = [...users].reverse().find((m) => typeof m?.content === 'string' && !m.content.startsWith('[HARNESS — '))?.content
   const text = typeof lastUser === 'string' ? lastUser : ''
+  // M21 — le harness a parlé (rappel mentor ou refus de contrat) : la
+  // maquette émet la variante CONFORME du scénario (fixed) — le vrai
+  // modèle corrige, la maquette aussi.
+  const harnessSpoke = (messages ?? []).some(
+    (m) => m?.role === 'user' && typeof m?.content === 'string' && m.content.startsWith('[HARNESS — '),
+  )
   for (const [marker, sc] of Object.entries(TOOL_SCENARIOS)) {
-    if (text.includes(marker)) return { marker, ...sc }
+    if (text.includes(marker)) {
+      return harnessSpoke && sc.fixed ? { marker, ...sc, noThinking: false, ...sc.fixed } : { marker, ...sc }
+    }
   }
   // SUIVIJOB : shell_output sur le jobId rendu par un arrière-plan précédent
   // — le jobId vit dans les résultats d'outils de TOUT l'historique (le
@@ -249,13 +290,19 @@ export function startMockGateway(port) {
           // thinking titré dans le contenu, puis les appels (titrés, leur
           // argument `title` voyagera jusqu'à la ligne du pilote).
           // M20 — AGENTNONCONFORME saute le thinking (l'écart réel des logs).
+          // M21 — le thinking se TERMINE par l'annonce PLAN:, conforme au
+          // groupe émis (auto-générée quand le scénario ne l'écrit pas).
+          const calls = scenario.twoCalls ?? (scenario.name ? [scenario] : [])
           if (!scenario.noThinking) {
             const title = scenario.thinkTitle ?? 'Agir sur le workspace'
-            const body = scenario.thinkBody ?? 'Je lance les actions de ce tour.'
+            const body =
+              scenario.thinkBody ??
+              `Je lance les actions de ce tour.\nPLAN: ${calls.length} tool_calls — [${calls
+                .map((c) => c.arguments?.title ?? c.name)
+                .join('] [')}]`
             chunk({ content: `<thinking title="${title}">` })
             chunk({ content: `${body}</thinking>` })
           }
-          const calls = scenario.twoCalls ?? (scenario.name ? [scenario] : [])
           calls.forEach((c, i) => {
             chunk({
               tool_calls: [
@@ -268,6 +315,16 @@ export function startMockGateway(port) {
               ],
             })
           })
+          // M21 — no_tool SEUL : la prose finale suit l'appel dans la MÊME
+          // réponse (l'exception assumée du protocole — rien à attendre),
+          // puis le flux se termine normalement.
+          if (calls.length === 1 && calls[0].name === 'no_tool') {
+            chunk({ content: scenario.final })
+            chunk({}, 'stop')
+            res.write('data: [DONE]\n\n')
+            res.end()
+            return
+          }
           chunk({}, 'tool_calls')
           res.write('data: [DONE]\n\n')
           res.end()

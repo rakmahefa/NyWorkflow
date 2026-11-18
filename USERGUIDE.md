@@ -132,7 +132,7 @@ Le bouton **Nouvelle session** (ou `/new`) ouvre un dialogue avec **trois onglet
 
 - **Existant** — un workspace déjà connu (ceux d'`examples/workspaces/`, ou votre dossier via `NYW_WORKSPACES`, ou un dossier déjà enregistré — badge « dossier ») ;
 - **Créer** — un workspace neuf : l'ICM complète naît dans son `.workspace/` caché (voir §5) ;
-- **Dossier du disque** (M12, M17) — **l'un de vos propres dossiers**, navigué (chemin collable, dossiers seuls, départ au home) ou choisi par le bouton **« Explorer… »** (M17) qui ouvre la **boîte de navigation native du navigateur** (Chrome/Edge) : le dossier choisi y est résolu en chemin serveur (le web cache le chemin par conception — le harness cherche le dossier par son nom depuis le home du serveur, borné et rapide ; un seul trouvé → tout se remplit seul, plusieurs → cliquez le bon, zéro → collez le chemin à la main). Le dossier est ensuite enregistré : le dossier caché **`.workspace/`** (l'ICM de l'agent) y est créé — **vos fichiers restent intacts**. L'inscription vit dans `examples/workspaces/workspaces.json` (une donnée — éditable à la main, relue à chaud).
+- **Dossier du disque** (M12, M17, M21) — **l'un de vos propres dossiers**, navigué (chemin collable, dossiers seuls, départ au home) ou choisi par le bouton **« Explorer… »** qui ouvre la boîte de sélection de dossier : **native** sur Chrome/Edge, **la sélection de dossier du navigateur** sur Firefox/Safari (M21 — le bouton marche partout désormais) ; le dossier choisi y est résolu en chemin serveur (le web cache le chemin par conception — le harness cherche le dossier par son nom depuis le home du serveur, borné et rapide ; un seul trouvé → tout se remplit seul, plusieurs → cliquez le bon, zéro → collez le chemin à la main). Le dossier est ensuite enregistré : le dossier caché **`.workspace/`** (l'ICM de l'agent) y est créé — **vos fichiers restent intacts**. L'inscription vit dans `examples/workspaces/workspaces.json` (une donnée — éditable à la main, relue à chaud).
 
 Le dernier workspace utilisé est retenu pour la prochaine fois. Le dialogue choisit aussi le **niveau de sécurité** de la session (voir ci-dessous — le défaut se règle dans les Paramètres, et le nom du workspace créé se propose automatiquement à partir du titre). Le bandeau sous l'en-tête rappelle le workspace de la session active (`ICM · nom — API v1beta`) porte le **sélecteur de sécurité** et les **onglets Conversation / Activité**.
 
@@ -190,6 +190,24 @@ Les écarts qui déclenchent un rappel :
 - **réponse vide** — ni texte ni tool_calls : le mentor exige une vraie réponse **une fois**, puis le tour se termine honnêtement.
 
 **Silence total quand le protocole est suivi** — un modèle conforme n'est jamais interrompu. Le rappel est *transient* : il ne s'affiche pas comme un message du chat (le vôtre reste le dernier mot du pilote) ; il se lit à trois endroits : sur la **carte du round** dans l'onglet Activité (bloc « Rappel de protocole renvoyé au modèle »), dans **`model.jsonl`** (champ `feedback` de l'observation — le journal garde les deux sens du fil), et dans le comportement du round suivant. Le prompt système enseigne parallèlement **la barre d'un travail professionnel** : économie d'appels (jamais deux fois le même), `plan.md`/`tasks.md` mis à jour **par incréments**, livrables **vérifiés avant d'être annoncés**, `inbox/` vérifié en premier, bilan final avec chemins exacts.
+
+### Le contrat d'appels — l'annonce PLAN engage, no_tool signe la fin (M21)
+
+Le mentor corrige la forme ; le contrat verrouille le **lien annonce → groupe**. Le thinking de chaque round se termine par une ligne d'annonce :
+
+```
+PLAN: 3 tool_calls — [Lire le plan] [Lister inbox] [Vérifier uv]
+PLAN: no_tool
+```
+
+- **Le compte annoncé ENGAGE le groupe émis.** Le harness compare l'annonce aux appels réellement émis : une annonce absente, un compte différent, un `no_tool` mélangé à de vrais appels — le groupe **n'est PAS exécuté**. Le modèle reçoit l'écart exact au round suivant (« Ton plan annonçait 2 tool_calls et tu en as émis 1 — le compte annoncé et le groupe émis doivent coïncider EXACTEMENT »), **relit ce qu'il a fait et RÉÉMET le groupe complet**. Deux refus par tour au plus ; ensuite la boucle exécute malgré tout et journalise l'écart — **la logique du tour ne casse jamais**.
+- **`no_tool` signe la réponse finale sans outil.** Même sans rien à faire, le modèle émet son unique tool_call `no_tool` (avec `title` et une `reason` courte) : le format « thinking puis tool_calls » reste constant, le journal garde la trace du choix. C'est l'exception assumée du protocole : la prose finale **suit l'appel dans la même réponse** (rien à attendre), et le tour se termine proprement — la ligne se lit dans le chat (« aucun outil — réponse finale »). Un `no_tool` sans prose est réclamé une fois, puis le tour se termine honnêtement.
+- **Le refus est observable partout** : un message système dans le chat (« Groupe d'appels refusé — contrat non tenu »), la note mot pour mot sur la carte du round dans l'onglet Activité, et le champ `feedback` de la `model.response` dans `model.jsonl` (la note journalisée AVEC la réponse fautive).
+- En session « **aucun outil** », le contrat est suspendu (aucun tool_call n'est déclaré, `no_tool` compris) — la note de sécurité le dit au modèle.
+
+### L'arbre par round — la conversation façon Z.ai (M21)
+
+Dans le chat, chaque round de l'agent est **un bloc arborescent** : la carte de réflexion titrée qui a ouvert le round en tête, et **ses tool_calls nichés dessous** (rail vertical, carte de groupe repliable — « 2 fichiers lus · 1 dossier listé », statuts en direct pendant l'exécution, repli automatique une fois le groupe terminé). Le plan se lit au-dessus de son exécution. Après un rechargement, la réflexion n'est plus là (jamais journalisée — choix M12), mais les rounds et leurs groupes restent structurés pareil.
 
 ### L'onglet Activité — le tracking façon harness (M12, élargi M17)
 

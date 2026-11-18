@@ -28,8 +28,29 @@ import type { ScopeResolution } from './scope.ts'
 import { runWebsearch } from './websearch.ts'
 import type { ShellJobRegistry } from './shelljobs.ts'
 
-export type ToolName = 'read' | 'write' | 'ls' | 'glob' | 'mkdir' | 'shell' | 'websearch' | 'shell_output' | 'shell_kill'
-export const TOOL_NAMES: readonly ToolName[] = ['read', 'write', 'ls', 'glob', 'mkdir', 'shell', 'websearch', 'shell_output', 'shell_kill']
+export type ToolName =
+  | 'read'
+  | 'write'
+  | 'ls'
+  | 'glob'
+  | 'mkdir'
+  | 'shell'
+  | 'websearch'
+  | 'shell_output'
+  | 'shell_kill'
+  | 'no_tool'
+export const TOOL_NAMES: readonly ToolName[] = [
+  'read',
+  'write',
+  'ls',
+  'glob',
+  'mkdir',
+  'shell',
+  'websearch',
+  'shell_output',
+  'shell_kill',
+  'no_tool',
+]
 
 /** A tool call as the model expresses it (validated here, journaled verbatim). */
 export interface ToolCall {
@@ -186,6 +207,15 @@ export async function checkToolCall(root: string, call: ToolCall): Promise<ToolC
       return { ok: false, approval: false, refusal: refusal('invalid_args', '« websearch » : query OU url, pas les deux') }
     }
   }
+  // M21 — no_tool : le garde-fou du contrat d'appels. Arguments libres
+  // (title + reason), AUCUN chemin : l'appel ne touche rien, il signe la
+  // réponse finale en prose du tour.
+  if (call.tool === 'no_tool') {
+    const reason = argString(args, 'reason')
+    if (reason !== undefined && reason.length > 200) {
+      return { ok: false, approval: false, refusal: refusal('invalid_args', '« no_tool » : reason trop long (max 200 caractères)') }
+    }
+  }
   if (call.tool === 'write') {
     if (typeof args.content !== 'string') {
       return { ok: false, approval: false, refusal: refusal('invalid_args', '« write » attend un contenu (content) textuel') }
@@ -244,7 +274,22 @@ async function runTool(root: string, call: ToolCall, runtime?: ToolRuntime): Pro
     case 'shell_output':
     case 'shell_kill':
       return runJobTool(call, runtime)
+    case 'no_tool':
+      return runNoTool(call.args)
   }
+}
+
+/** M21 — no_tool : le pivot du contrat d'appels. Le modèle qui n'a besoin
+ * d'aucun outil émet QUAND MÊME son unique tool_call no_tool : la boucle
+ * garde un format constant (thinking → tool_calls), le journal garde la
+ * trace du choix, et le compte annoncé « PLAN: no_tool » vérifie. */
+function runNoTool(args: Record<string, unknown>): Promise<ToolOutcome> {
+  const reason = argString(args, 'reason')
+  return Promise.resolve({
+    ok: true,
+    summary: reason !== undefined && reason.trim() !== '' ? `no_tool — ${reason.trim()}` : 'no_tool — aucun outil ce tour, réponse finale en prose',
+    data: { noTool: true, reason: reason ?? '' },
+  })
 }
 
 /** shell_output / shell_kill — free tools over the agent's own jobs (M12). */

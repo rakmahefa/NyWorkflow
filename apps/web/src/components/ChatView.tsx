@@ -6,7 +6,7 @@ import type { ChatMsg, ThinkingBlock } from '../lib/types'
 function targetOf(args: unknown): string {
   if (args !== null && typeof args === 'object' && !Array.isArray(args)) {
     const a = args as Record<string, unknown>
-    for (const key of ['path', 'pattern', 'command', 'query', 'url', 'jobId']) {
+    for (const key of ['path', 'pattern', 'command', 'query', 'url', 'jobId', 'reason']) {
       const v = a[key]
       if (typeof v === 'string' && v !== '') return v
     }
@@ -25,6 +25,7 @@ const TOOL_GLYPH: Record<string, string> = {
   websearch: '🌐',
   shell_output: '📡',
   shell_kill: '🛑',
+  no_tool: '🚫',
 }
 
 /**
@@ -43,10 +44,13 @@ const TOOL_GROUP_LABEL: Record<string, (n: number) => string> = {
   websearch: (n) => (n === 1 ? '1 recherche web' : `${n} recherches web`),
   shell_output: (n) => (n === 1 ? '1 job suivi' : `${n} jobs suivis`),
   shell_kill: (n) => (n === 1 ? '1 job arrêté' : `${n} jobs arrêtés`),
+  no_tool: () => 'aucun outil — réponse finale',
 }
 
 /** The aggregated head line of a group: « 2 fichiers lus · 1 dossier listé ». */
 function groupSummary(rows: readonly ChatMsg[]): string {
+  // M21 — no_tool seul : le libellé dédié, pas un compte d'appels.
+  if (rows.length > 0 && rows.every((r) => r.tool === 'no_tool')) return TOOL_GROUP_LABEL.no_tool!(1)
   const counts = new Map<string, number>()
   for (const r of rows) counts.set(r.tool ?? '', (counts.get(r.tool ?? '') ?? 0) + 1)
   const parts: string[] = []
@@ -199,11 +203,33 @@ function ToolGroup({ rows }: { rows: readonly ChatMsg[] }) {
 }
 
 /**
- * The session stream (M11, M12, M15, M18): chat messages (with their titled
- * thinking cards), and the agent's tool activity — the calls of one round
- * grouped into a single collapsible card, in journal order. The USER speaks
- * from the right; EVERYTHING the agent produces (thinking, actions, text)
- * stays on the left. The caret marks an ongoing stream.
+ * M21 — ONE ROUND of the agent's turn, as a TREE (the Z.ai look): the titled
+ * thinking that opened the round sits at the top, and the round's tool calls
+ * hang NESTED beneath it — one visual block per protocol step, the plan above
+ * its execution. After a reload the thinking is gone (never journaled): the
+ * tree then stands on the tool group alone, grouped the same way.
+ */
+function RoundBlock({ head, rows }: { head?: ChatMsg; rows: ChatMsg[] }) {
+  const hasThinking = head !== undefined && head.thinking !== undefined && head.thinking !== ''
+  return (
+    <div className="agent-round" data-test="agent-round">
+      {hasThinking ? <ThinkingBlocks m={head} /> : null}
+      {rows.length > 0 ? (
+        <div className="round-tree" data-test="round-tree">
+          <ToolGroup rows={rows} />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * The session stream (M11, M12, M15, M18, M21): chat messages, and the
+ * agent's rounds — each round is ONE tree block: the titled thinking that
+ * opened it, then its tool calls grouped in a single collapsible card,
+ * nested beneath. The USER speaks from the right; EVERYTHING the agent
+ * produces (thinking, actions, text) stays on the left. The caret marks
+ * an ongoing stream.
  */
 export function ChatView({ messages }: { messages: readonly ChatMsg[] }) {
   if (messages.length === 0) {
@@ -230,24 +256,48 @@ export function ChatView({ messages }: { messages: readonly ChatMsg[] }) {
       </div>
     )
   }
-  // M15 — consecutive tool rows form ONE group: the calls of a round arrive
-  // together (parallel dispatch) and replay together (journal order), so
-  // adjacency IS the grouping — live and after a reload alike.
-  const rendered: Array<{ kind: 'msg'; m: ChatMsg } | { kind: 'group'; rows: ChatMsg[] }> = []
-  for (const m of messages) {
-    const last = rendered[rendered.length - 1]
+  // M21 — the stream is cut into ROUNDS. A round opens on a thinking-only
+  // assistant message (the live protocol head) and swallows the tool rows
+  // that follow it; tool rows without a head (journal replay — the thinking
+  // is never journaled) form their own round. M15's adjacency survives:
+  // the calls of a round arrive together and replay together, so
+  // consecutive tool rows ARE one group — live and after a reload alike.
+  const rendered: Array<
+    { kind: 'round'; head?: ChatMsg; rows: ChatMsg[] } | { kind: 'msg'; m: ChatMsg }
+  > = []
+  let i = 0
+  while (i < messages.length) {
+    const m = messages[i]!
     if (m.role === 'tool') {
-      if (last !== undefined && last.kind === 'group') last.rows.push(m)
-      else rendered.push({ kind: 'group', rows: [m] })
+      const rows: ChatMsg[] = []
+      while (i < messages.length && messages[i]!.role === 'tool') {
+        rows.push(messages[i]!)
+        i++
+      }
+      rendered.push({ kind: 'round', rows })
+    } else if (
+      m.role === 'assistant' &&
+      m.text.trim() === '' &&
+      (m.thinking ?? '') !== ''
+    ) {
+      // The live protocol head: thinking only, its tools follow.
+      i++
+      const rows: ChatMsg[] = []
+      while (i < messages.length && messages[i]!.role === 'tool') {
+        rows.push(messages[i]!)
+        i++
+      }
+      rendered.push({ kind: 'round', head: m, rows })
     } else {
       rendered.push({ kind: 'msg', m })
+      i++
     }
   }
   return (
     <div className="chat">
-      {rendered.map((item, i) =>
-        item.kind === 'group' ? (
-          <ToolGroup key={`g${item.rows[0]?.id ?? i}`} rows={item.rows} />
+      {rendered.map((item, k) =>
+        item.kind === 'round' ? (
+          <RoundBlock key={`r${item.rows[0]?.id ?? item.head?.id ?? k}`} head={item.head} rows={item.rows} />
         ) : (
           <div key={item.m.id} className={`msg ${item.m.role}`}>
             {item.m.role === 'assistant' && item.m.thinking !== undefined && item.m.thinking !== '' ? (

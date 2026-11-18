@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   EMPTY_RESPONSE_NUDGE,
+  NO_TOOL_EMPTY_PROSE_NUDGE,
   normalizeIcmPath,
+  parseCallPlan,
+  planRedoNote,
   ProtocolMemory,
   protocolFeedback,
   type RoundProtocol,
@@ -18,12 +21,14 @@ const call = (over: Partial<RoundToolCall> = {}): RoundToolCall => ({
   ...over,
 })
 
-/** A compliant round — thinking first, titled, one titled valid call. */
+/** A compliant round — thinking first, titled, one titled valid call, and
+ * the M21 PLAN announcement closing the thinking (contract held). */
 const round = (over: Partial<RoundProtocol> = {}): RoundProtocol => ({
   round: 1,
   firstEvent: 'thinking',
   thinkingChars: 250,
   thinkingTitles: ['Explorer la racine'],
+  thinking: 'Je liste la racine pour comprendre le workspace.\nPLAN: 1 tool_calls — [Lister la racine]',
   text: '',
   toolCalls: [call()],
   ...over,
@@ -43,7 +48,7 @@ describe('protocolFeedback — le mentor M20', () => {
   })
 
   it('réclame le thinking quand la réponse commence par les tool_calls (le cas des logs, rounds 3 et 5)', () => {
-    const fb = protocolFeedback(round({ firstEvent: 'tool_calls', thinkingChars: 0, thinkingTitles: [] }), new ProtocolMemory(), [])
+    const fb = protocolFeedback(round({ firstEvent: 'tool_calls', thinkingChars: 0, thinkingTitles: [], thinking: '' }), new ProtocolMemory(), [])
     expect(fb).toContain('[HARNESS — protocole, round 1]')
     expect(fb).toContain('S’OUVRIR par un bloc <thinking> titré')
     expect(fb).toContain('tool_calls')
@@ -116,7 +121,7 @@ describe('protocolFeedback — le mentor M20', () => {
     const memory = new ProtocolMemory()
     memory.remember(1, [call()])
     const fb = protocolFeedback(
-      round({ round: 2, firstEvent: 'tool_calls', thinkingChars: 0, thinkingTitles: [], text: 'Voilà.', toolCalls: [call({ title: '' }), call()] }),
+      round({ round: 2, firstEvent: 'tool_calls', thinkingChars: 0, thinkingTitles: [], thinking: '', text: 'Voilà.', toolCalls: [call({ title: '' }), call()] }),
       memory,
       [],
     )
@@ -126,6 +131,113 @@ describe('protocolFeedback — le mentor M20', () => {
     expect(fb).toContain('au round 1 de CE tour')
     expect(fb!.split('\n')[0]).toBe('[HARNESS — protocole, round 2]')
     expect(fb!.split('\n').at(-1)).toContain('Reprends le protocole')
+  })
+})
+
+describe('parseCallPlan — le contrat d’appels M21', () => {
+  it('lit l’annonce en fin de thinking : compte + titres entre crochets', () => {
+    const plan = parseCallPlan('Analyse.\nPLAN: 3 tool_calls — [Lire le plan] [Lister inbox] [Vérifier uv]')
+    expect(plan).toEqual({ kind: 'calls', count: 3, titles: ['Lire le plan', 'Lister inbox', 'Vérifier uv'] })
+  })
+
+  it('lit l’annonce sans outil', () => {
+    expect(parseCallPlan('Réflexion.\nPLAN: no_tool')).toEqual({ kind: 'no_tool' })
+  })
+
+  it('tolère les variations d’écriture (espaces, « appels », tirets, majuscules)', () => {
+    expect(parseCallPlan('PLAN : 2 appels - [A] [B]')).toEqual({ kind: 'calls', count: 2, titles: ['A', 'B'] })
+    expect(parseCallPlan('plan: No_Tool — réponse finale')).toEqual({ kind: 'no_tool' })
+    expect(parseCallPlan('PLAN:1 tool_calls—[Seul]')).toEqual({ kind: 'calls', count: 1, titles: ['Seul'] })
+  })
+
+  it('prend la DERNIÈRE ligne PLAN: du thinking (une annonce corrigée gagne)', () => {
+    const plan = parseCallPlan('PLAN: 2 tool_calls — [A] [B]\nFinalement.\nPLAN: 1 tool_calls — [A]')
+    expect(plan).toEqual({ kind: 'calls', count: 1, titles: ['A'] })
+  })
+
+  it('rend null sans annonce, sur un thinking vide ou une annonce illisible', () => {
+    expect(parseCallPlan('')).toBeNull()
+    expect(parseCallPlan('Aucun plan ici.')).toBeNull()
+    expect(parseCallPlan('PLAN: bientôt')).toBeNull()
+  })
+})
+
+describe('protocolFeedback — le contrat d’appels M21', () => {
+  it('se tait quand l’annonce tient le groupe (compte exact, titres listés)', () => {
+    const memory = new ProtocolMemory()
+    const fb = protocolFeedback(
+      round({ thinking: 'Deux lectures.\nPLAN: 2 tool_calls — [Lister la racine] [Lister inbox]', toolCalls: [call(), call({ title: 'Lister inbox', args: { path: 'inbox' }, rawArgs: '{"path":"inbox"}' })] }),
+      memory,
+      [],
+    )
+    expect(fb).toBeNull()
+  })
+
+  it('se tait pour un no_tool SEUL (la signature de la réponse finale)', () => {
+    const fb = protocolFeedback(
+      round({
+        thinking: 'La réponse vient de l’ICM.\nPLAN: no_tool',
+        toolCalls: [call({ tool: 'no_tool', title: 'Réponse finale', args: { reason: 'ICM déjà chargé' }, rawArgs: '{"reason":"ICM déjà chargé"}' })],
+        text: 'Voilà la réponse finale.',
+      }),
+      new ProtocolMemory(),
+      [],
+    )
+    expect(fb).toBeNull()
+  })
+
+  it('réclame l’annonce absente (thinking sans ligne PLAN:)', () => {
+    const fb = protocolFeedback(round({ thinking: 'Je réfléchis sans annoncer.' }), new ProtocolMemory(), [])
+    expect(fb).toContain('ne se termine pas par l’annonce du plan')
+    expect(fb).toContain('PLAN: 3 tool_calls')
+  })
+
+  it('signale le compte non tenu (annoncé 3, émis 2)', () => {
+    const fb = protocolFeedback(
+      round({ thinking: 'PLAN: 3 tool_calls — [A] [B] [C]', toolCalls: [call(), call({ title: 'B', args: { path: 'b' }, rawArgs: '{"path":"b"}' })] }),
+      new ProtocolMemory(),
+      [],
+    )
+    expect(fb).toContain('annonçait 3 tool_calls et tu en as émis 2')
+  })
+
+  it('signale le no_tool annoncé puis trahi par de vrais appels', () => {
+    const fb = protocolFeedback(round({ thinking: 'PLAN: no_tool' }), new ProtocolMemory(), [])
+    expect(fb).toContain('no_tool » puis émis 1 tool_call')
+  })
+
+  it('signale le no_tool mélangé à de vrais appels', () => {
+    const fb = protocolFeedback(
+      round({
+        thinking: 'PLAN: 2 tool_calls — [Lister] [Signer]',
+        toolCalls: [call(), call({ tool: 'no_tool', title: 'Signer', args: {}, rawArgs: '{}' })],
+      }),
+      new ProtocolMemory(),
+      [],
+    )
+    expect(fb).toContain('no_tool` est mélangé')
+  })
+
+  it('signale l’annonce sans titres entre crochets', () => {
+    const fb = protocolFeedback(round({ thinking: 'PLAN: 1 tool_calls' }), new ProtocolMemory(), [])
+    expect(fb).toContain('ne liste pas les titres')
+  })
+})
+
+describe('planRedoNote — le refus du groupe non conforme', () => {
+  it('porte l’en-tête HARNESS, les écarts du round, et l’ordre de réémettre', () => {
+    const note = planRedoNote(2, ['Ton plan annonçait 3 tool_calls et tu en as émis 2.', '1 tool_call est sans argument `title`'])
+    expect(note.split('\n')[0]).toBe('[HARNESS — protocole, round 2]')
+    expect(note).toContain('- Ton plan annonçait 3 tool_calls')
+    expect(note).toContain('n’a PAS été exécuté')
+    expect(note).toContain('RÉÉMETS le groupe complet')
+  })
+})
+
+describe('NO_TOOL_EMPTY_PROSE_NUDGE', () => {
+  it('réclame la prose finale qui doit accompagner no_tool', () => {
+    expect(NO_TOOL_EMPTY_PROSE_NUDGE.startsWith('[HARNESS — protocole]')).toBe(true)
+    expect(NO_TOOL_EMPTY_PROSE_NUDGE).toContain('SANS la prose finale')
   })
 })
 

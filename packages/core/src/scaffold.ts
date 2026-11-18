@@ -57,8 +57,8 @@ export const ICM_DIR = '.workspace'
 /** The nine role folders of a working session — free tree, sane defaults. */
 export const SCAFFOLD_FOLDERS = ['harness', 'tools', 'skills', 'inbox', 'notes', 'research', 'memory', 'outputs', 'archive'] as const
 
-/** The nine agent tools, in catalog order (one fiche each under tools/). */
-export const TOOL_NAMES = ['read', 'write', 'ls', 'glob', 'mkdir', 'shell', 'websearch', 'shell_output', 'shell_kill'] as const
+/** The ten agent tools, in catalog order (one fiche each under tools/). */
+export const TOOL_NAMES = ['read', 'write', 'ls', 'glob', 'mkdir', 'shell', 'websearch', 'shell_output', 'shell_kill', 'no_tool'] as const
 
 /** Every file the scaffold writes, relative to the `.workspace/` root. */
 export const SCAFFOLD_FILES = [
@@ -315,7 +315,7 @@ l’ICM ne les montre même pas.
 function toolsContext(): string {
   return `# tools/ — le protocole d’utilisation des outils
 
-Neuf outils, un seul contrat. Le protocole trois temps ci-dessous régit
+Dix outils, un seul contrat. Le protocole trois temps ci-dessous régit
 CHAQUE réponse ; les fiches (\`read.md\`, \`write.md\`, …) documentent chaque
 outil rigoureusement — lis une fiche avant ta première utilisation de
 l’outil, ou quand un appel échoue.
@@ -324,12 +324,15 @@ l’outil, ou quand un appel échoue.
 
 1. **Thinking** — d’abord, toujours : tu dialogues avec toi-même dans ton
    thought process titré (ce que l’ICM sait, ce qui manque, le plan de CE
-   tour). Voir le protocole de réponse dans le prompt système.
+   tour), qui se TERMINE par l’annonce \`PLAN:\`. Voir le protocole de
+   réponse dans le prompt système.
 2. **Action** — tu émets tes tool_calls : les appels **indépendants
    ENSEMBLE** dans la même réponse (le engine les exécute en parallèle),
-   chacun avec son \`title\`. Puis tu **TERMINES ta réponse** — jamais de
-   texte après les tool_calls, jamais de résultat annoncé avant de
-   l’avoir reçu.
+   chacun avec son \`title\`, en nombre EXACTEMENT égal à ton annonce
+   \`PLAN:\`. Puis tu **TERMINES ta réponse** — jamais de texte après les
+   tool_calls, jamais de résultat annoncé avant de l’avoir reçu.
+   Sans outil : \`PLAN: no_tool\`, puis l’appel unique \`no_tool\` accompagne
+   ta prose finale dans la même réponse.
 3. **Observation** — tu **ATTENDS**. Le engine exécute le groupe entier
    et te renvoie, à la fin du protocole, TOUTES les réponses du groupe,
    une par appel, dans ce format :
@@ -342,6 +345,23 @@ l’outil, ou quand un appel échoue.
 C’est en recevant ces réponses qu’un **NOUVEAU protocole démarre** :
 retour au temps 1 — thinking, puis la suite (nouveaux tool_calls, ou la
 réponse finale si le travail est fini).
+
+## Le contrat d’appels — l’annonce PLAN:
+
+La dernière ligne de ton thinking ENGAGE ta réponse :
+
+\`\`\`
+PLAN: 3 tool_calls — [Lire le plan] [Lister inbox] [Vérifier uv]
+PLAN: no_tool
+\`\`\`
+
+- Le **nombre annoncé** doit être le **nombre d’appels émis** — le engine
+  vérifie la correspondance et REFUSE le groupe non conforme (tu devras
+  le réémettre complet) : ni appel oublié, ni appel surprise.
+- Les **titres entre crochets** disent l’intention de chaque appel —
+  l’ordre annoncé est l’ordre émis.
+- \`no_tool\` s’émet **SEUL** : c’est la signature de la réponse finale
+  sans outil, jamais mélangé à de vrais appels.
 
 ## Règles de lancement
 
@@ -370,6 +390,7 @@ réponse finale si le travail est fini).
 | websearch | recherche ou page nettoyée | oui | \`tools/websearch.md\` |
 | shell_output | suivre un job d’arrière-plan | oui | \`tools/shell_output.md\` |
 | shell_kill | arrêter un job d’arrière-plan | oui | \`tools/shell_kill.md\` |
+| no_tool | signer la réponse finale sans outil | oui | \`tools/no_tool.md\` |
 
 « Libre » = sans approbation du pilote. Le niveau de sécurité de la
 session (ask / accept / no-tools) prime — voir \`harness/ENGINE.md\`.
@@ -722,6 +743,26 @@ function toolFiches(): Record<string, string> {
         'Tuer n’efface pas ce qui a déjà été produit (fichiers écrits, sortie accumulée) : vérifie avec shell_output avant de conclure.',
       ],
       related: '`shell` (lancer), `shell_output` (voir ce qu’il a produit avant de tuer).',
+    },
+    {
+      name: 'no_tool',
+      role: 'signer la réponse finale sans outil (M21 — le contrat d’appels)',
+      args: [
+        ['title', false, 'Titre court pour le pilote — ex. « Réponse finale sans outil »'],
+        ['reason', false, 'Pourquoi aucun outil n’est nécessaire ce tour (une ligne, ≤ 200 caractères)'],
+      ],
+      patterns: [
+        'PLAN: no_tool',
+        'no_tool {"title": "Réponse finale sans outil", "reason": "La réponse vient de l’ICM déjà chargé"}',
+      ],
+      parallel:
+        'JAMAIS parallélisable : no_tool s’émet SEUL, comme unique tool_call de sa réponse — il accompagne la prose finale et signe la fin du tour. Sa « prose suit l’appel » est l’exception assumée du protocole : no_tool n’a aucun résultat à attendre.',
+      errors: [
+        'Mélanger no_tool à de vrais appels rompt le contrat — le groupe entier est refusé, tu dois le réémettre.',
+        'Émettre no_tool SANS la prose finale laisse le tour sans réponse : l’appel accompagne ta réponse, dans la même réponse.',
+        'Annoncer `PLAN: 2 tool_calls` puis émettre no_tool (ou l’inverse) rompt le contrat — l’annonce et le groupe doivent coïncider.',
+      ],
+      related: '`tools/CONTEXT.md` (le contrat d’appels PLAN:), le protocole de réponse du prompt système.',
     },
   ]
   const out: Record<string, string> = {}

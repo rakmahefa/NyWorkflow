@@ -273,6 +273,24 @@ describe('buildIcmSystemPrompt — identité harness (M14)', () => {
     expect(prompt).toContain('harness/')
     expect(prompt).toContain('tools/')
   })
+
+  it('M21 — le contrat d’appels : l’annonce PLAN clôt le thinking et engage le groupe, no_tool signe la fin', async () => {
+    const root = tmp()
+    await ensureIcmTree(root)
+    const prompt = buildIcmSystemPrompt(await loadIcm(root))
+    // L’annonce montrée au modèle, dans le gabarit du thinking.
+    expect(prompt).toContain('PLAN: 3 tool_calls — [Lire le plan] [Lister inbox] [Vérifier uv]')
+    expect(prompt).toContain('PLAN: no_tool')
+    expect(prompt).toContain('L’annonce `PLAN:` ENGAGE ta réponse')
+    // Le refus du groupe non conforme est annoncé au modèle.
+    expect(prompt).toContain('n’est PAS exécuté')
+    expect(prompt).toContain('réémettre conforme')
+    // no_tool : la signature de la réponse finale sans outil.
+    expect(prompt).toContain('l’appel unique `no_tool`')
+    expect(prompt).toContain('SEUL, jamais mélangé')
+    // Le compte annoncé engage : EXACTEMENT.
+    expect(prompt).toContain('EXACTEMENT égal à ton annonce PLAN')
+  })
 })
 
 describe('scaffoldAgenticWorkspace (M14 — arbre dans .workspace/)', () => {
@@ -341,12 +359,12 @@ describe('scaffoldAgenticWorkspace (M14 — arbre dans .workspace/)', () => {
     expect(icm.tree).toContain('├── _MODELE.md')
   })
 
-  it('scaffoldFiles : la carte est pure et exhaustive — 28 fichiers, 10 CONTEXT.md', () => {
+  it('scaffoldFiles : la carte est pure et exhaustive — 29 fichiers, 10 CONTEXT.md', () => {
     const files = scaffoldFiles('demo')
     expect(Object.keys(files).sort()).toEqual([...SCAFFOLD_FILES].sort())
     expect(SCAFFOLD_FILES.filter((f) => f.endsWith('CONTEXT.md'))).toHaveLength(10)
     expect(SCAFFOLD_FOLDERS).toHaveLength(9)
-    // M16 — une fiche rigoureuse par outil, au catalogue complet.
+    // M16 — une fiche rigoureuse par outil, au catalogue complet (M21 : no_tool compris).
     for (const tool of TOOL_NAMES) {
       expect(files[`tools/${tool}.md`], tool).toBeDefined()
       const fiche = files[`tools/${tool}.md`] as string
@@ -361,6 +379,11 @@ describe('scaffoldAgenticWorkspace (M14 — arbre dans .workspace/)', () => {
     // Le protocole trois temps est chargé à chaque tour.
     expect(files['tools/CONTEXT.md']).toContain('Le protocole trois temps')
     expect(files['tools/CONTEXT.md']).toContain('{"tool": "read", "title": "Lire la charte", "ok": true, "result": "…"}')
+    // M21 — le contrat d’appels et la fiche no_tool.
+    expect(files['tools/CONTEXT.md']).toContain('Le contrat d’appels')
+    expect(files['tools/CONTEXT.md']).toContain('PLAN: 3 tool_calls — [Lire le plan] [Lister inbox] [Vérifier uv]')
+    expect(files['tools/CONTEXT.md']).toContain('| no_tool | signer la réponse finale sans outil | oui |')
+    expect(files['tools/no_tool.md']).toContain('SEUL')
     // M19 — l'arsenal : charte chargée (évaluation + registre) et gabarit à la demande.
     expect(files['skills/CONTEXT.md']).toContain('Le protocole d’évaluation')
     expect(files['skills/CONTEXT.md']).toContain('Registre des skills')

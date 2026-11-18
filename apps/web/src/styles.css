@@ -906,6 +906,29 @@ button { font: inherit; color: inherit; }
   flex-direction: column;
   gap: 2px;
 }
+/* ===== M21 : l'arbre par round (façon Z.ai) ================================= */
+/* Un round = le thinking titré qui l'a ouvert, et l'arbre de SES appels
+ * niché dessous — le plan au-dessus de son exécution, reliés par un rail. */
+.agent-round {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-self: flex-start;
+  max-width: 100%;
+  min-width: 0;
+}
+.agent-round .thinking { margin: 2px 0 0; }
+.round-tree {
+  margin-left: 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line-2);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.round-tree .tool-group,
+.round-tree .msg.tool { margin: 0; }
 /* M18 — la ligne d'appel n'est plus un bouton : une ligne de l'arbre. */
 .msg.tool .tool-label {
   display: flex;
@@ -1200,6 +1223,8 @@ button { font: inherit; color: inherit; }
   white-space: nowrap;
 }
 .folder-bar .folder-explorer:disabled { opacity: 0.6; cursor: default; }
+/* M21 — le repli Firefox/Safari : l'entrée de sélection de dossier. */
+.folder-input-hidden { display: none; }
 .folder-picked { color: var(--ok); }
 .locate-candidates { display: flex; flex-direction: column; gap: 4px; }
 .locate-candidate {

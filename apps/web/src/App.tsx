@@ -9,13 +9,13 @@ import { NewSessionDialog } from './components/NewSessionDialog'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Sidebar } from './components/Sidebar'
 import { ToolApprovalCard } from './components/ToolApprovalCard'
-import { AGENT_TOOLS, isDangerousTool, parseToolArgs, parseToolArgsStrict, titleOfArgs } from './lib/agentTools'
+import { AGENT_TOOLS, NO_TOOL, isDangerousTool, parseToolArgs, parseToolArgsStrict, titleOfArgs } from './lib/agentTools'
 import { parseInput, runCommand } from './lib/commands'
 import { fakeReply, streamText } from './lib/fakeLLM'
 import { useGatewayStatus } from './lib/gateway'
 import { toAgentMessages } from './lib/history'
 import { baseModelOf, withThinkLevel } from './lib/modelMeta'
-import { EMPTY_RESPONSE_NUDGE, ProtocolMemory, protocolFeedback } from './lib/protocol'
+import { EMPTY_RESPONSE_NUDGE, NO_TOOL_EMPTY_PROSE_NUDGE, ProtocolMemory, parseCallPlan, planRedoNote, protocolFeedback, protocolLines } from './lib/protocol'
 import { loadDefaultSecurity, SECURITY_HINT, SECURITY_LABEL } from './lib/security'
 import { applyTheme, loadTheme } from './lib/theme'
 import * as api from './lib/sessionApi'
@@ -25,7 +25,7 @@ import type { ChatMsg, RequestTrace, SecurityLevel, SessionInfo } from './lib/ty
 import { APP_VERSION } from './lib/version'
 
 const WELCOME =
-  `Bienvenue dans NyWorkflow (v${APP_VERSION}). Sessions ICM agentiques — chaque session vit dans SON dossier (obligatoire) : l’ICM complet naît dans le dossier caché .workspace/ (charte, plan, tâches, journal, décisions, recherche, mémoire, skills, livrables) et ses logs de profilage dans .logs/<session>/ au même endroit (quatuor : engine, session, activity, model). Le modèle sait qu’il tourne dans ce harness et agit avec ses outils (read, write, ls, glob, mkdir, shell + arrière-plan, websearch, shell_output, shell_kill) — il évalue ses moyens et construit dans skills/ les compétences qui manquent : l’arsenal grandit d’une tâche à l’autre. Le harness est aussi son mentor : un écart de protocole (thinking manquant, appel sans titre, arguments mal formés, appel redondant) lui est renvoyé au round suivant, et le niveau d’exigence est celui d’un travail professionnel. Niveau de sécurité par session (demander / accepter / aucun outil). Le chat reste épuré : vos messages à droite, l’activité de l’agent à gauche en groupes repliés titrés (« N fichiers lus · N commandes lancées ») ; l’onglet Activité profile chaque tour (rounds, appels, payloads exacts, rappels du mentor, journaux de la session).`
+  `Bienvenue dans NyWorkflow (v${APP_VERSION}). Sessions ICM agentiques — chaque session vit dans SON dossier (obligatoire) : l’ICM complet naît dans le dossier caché .workspace/ (charte, plan, tâches, journal, décisions, recherche, mémoire, skills, livrables) et ses logs de profilage dans .logs/<session>/ au même endroit (quatuor : engine, session, activity, model). Le modèle sait qu’il tourne dans ce harness et agit avec ses outils (read, write, ls, glob, mkdir, shell + arrière-plan, websearch, shell_output, shell_kill, no_tool) — il évalue ses moyens et construit dans skills/ les compétences qui manquent : l’arsenal grandit d’une tâche à l’autre. Le protocole trois temps est un CONTRAT : le thinking se termine par l’annonce PLAN: N tool_calls — [titres] (ou PLAN: no_tool), le compte annoncé ENGAGE le groupe — un groupe non conforme n’est pas exécuté, le modèle relit et réémet ; une réponse finale sans outil est signée par l’appel no_tool. Le harness est aussi son mentor : un écart de protocole (thinking manquant, appel sans titre, arguments mal formés, appel redondant) lui est renvoyé au round suivant, et le niveau d’exigence est celui d’un travail professionnel. Niveau de sécurité par session (demander / accepter / aucun outil). Le chat reste épuré : vos messages à droite, l’activité de l’agent à gauche en ARBRES PAR ROUND (le thinking titré, ses appels groupés nichés dessous — « N fichiers lus · N commandes lancées ») ; l’onglet Activité profile chaque tour (rounds, appels, payloads exacts, rappels du mentor et refus de contrat, journaux de la session).`
 const GATEWAY_DOWN =
   'Passerelle webapi absente — réponses simulées. Elle démarre normalement avec l’application ; ouvrez Paramètres → Passerelle pour le diagnostic, ou vérifiez NYW_WEBAPI_EMBED (0 = désactivée).'
 const MEMORY_FALLBACK =
@@ -33,6 +33,9 @@ const MEMORY_FALLBACK =
 const SERVER_REQUIRED =
   'Aucun dossier de session disponible — le dossier étant obligatoire, aucune session n’a été créée : ouvrez « Nouvelle session » pour en lier un (le serveur doit tourner : pnpm dev).'
 const MAX_ROUNDS = 12
+/** M21 — plan contract redos per turn: two refusals, then the loop executes
+ * anyway (with the deviation journalized) — the logic never breaks. */
+const MAX_PLAN_REDOS = 2
 const THINK_KEY = 'nyworkflow.thinkLevel'
 type Mode = 'booting' | 'server' | 'memory'
 type Tab = 'chat' | 'activity'
@@ -428,6 +431,9 @@ export default function App() {
       const turnMemory = new ProtocolMemory()
       let mentorNote: string | null = null
       let emptyNudged = false
+      // M21 — LE CONTRAT D’APPELS : combien de groupes ce tour a déjà vu
+      // refusés pour contrat non tenu (annonce PLAN ≠ groupe émis).
+      let planRedos = 0
       // M13 — the turn summary, posted to the journal (turn.completed) when
       // the turn ends, whatever the exit path: durable activity traces.
       const turn = {
@@ -485,7 +491,7 @@ export default function App() {
           // la réponse vient de l'ICM et de la conversation.
           if (!toolsOn) {
             system +=
-              '\n\n## Niveau de sécurité de la session\nLes outils sont DÉSACTIVÉS pour cette session (niveau « aucun outil ») : n’émet aucun tool_call, réponds à partir de l’ICM ci-dessus et de la conversation.'
+              '\n\n## Niveau de sécurité de la session\nLes outils sont DÉSACTIVÉS pour cette session (niveau « aucun outil ») : n’émet aucun tool_call (no_tool compris — le contrat PLAN: est suspendu ici), réponds à partir de l’ICM ci-dessus et de la conversation.'
           }
           if (aborted()) return
 
@@ -632,16 +638,33 @@ export default function App() {
           // total quand le protocole est suivi — un modèle conforme n'est
           // jamais sermonné. La mémoire du tour se remplit APRÈS le verdict :
           // un appel ne peut pas être déclaré répété contre lui-même.
+          //
+          // M21 — LE CONTRAT D'APPELS : l'annonce PLAN du thinking ENGAGE le
+          // groupe. Un groupe qui ne la tient pas (annonce absente, compte
+          // différent, no_tool incohérent) n'est PAS exécuté : le modèle
+          // relit ce qu'il a fait et RÉÉMET le groupe complet — deux refus
+          // par tour au plus, puis la boucle exécute malgré tout et journalise
+          // l'écart : la logique du tour ne casse jamais.
           const roundCalls = responseToolCalls()
-          const mentor =
-            calls.length > 0
-              ? protocolFeedback(
-                  { round, firstEvent, thinkingChars: thinking.length, thinkingTitles, text, toolCalls: roundCalls },
-                  turnMemory,
-                  icmContextPaths,
-                )
-              : null
-          if (calls.length > 0) turnMemory.remember(round, roundCalls)
+          const realCount = roundCalls.filter((c) => c.tool !== NO_TOOL).length
+          const hasNoTool = roundCalls.some((c) => c.tool === NO_TOOL)
+          const onlyNoTool = hasNoTool && realCount === 0
+          const callPlan = parseCallPlan(thinking)
+          const planBroken =
+            toolsOn &&
+            calls.length > 0 &&
+            !onlyNoTool &&
+            (callPlan === null || callPlan.kind === 'no_tool' || hasNoTool || callPlan.count !== realCount)
+          const roundProtocol = {
+            round,
+            firstEvent,
+            thinkingChars: thinking.length,
+            thinkingTitles,
+            thinking,
+            text,
+            toolCalls: roundCalls,
+          }
+          const mentor = calls.length > 0 ? protocolFeedback(roundProtocol, turnMemory, icmContextPaths) : null
           mentorNote = mentor
 
           if (aborted()) {
@@ -661,6 +684,59 @@ export default function App() {
             store.appendMessage(session.id, 'system', 'Tour interrompu — le texte reçu est conservé.')
             return
           }
+
+          // M21 — LE CONTRAT REFUSÉ : le groupe n'est PAS exécuté. La note de
+          // refus part au round suivant (comme celle du mentor), la trace et
+          // model.jsonl gardent l'écart, et le modèle RÉÉMET un groupe
+          // conforme — le thinking du round refusé reste affiché (le pilote
+          // lit ce qui avait été annoncé).
+          if (planBroken && planRedos < MAX_PLAN_REDOS && round < MAX_ROUNDS) {
+            planRedos++
+            const redoNote = planRedoNote(round, protocolLines(roundProtocol, turnMemory, icmContextPaths))
+            mentorNote = redoNote
+            store.settleTrace(traceId, {
+              ms: Date.now() - startedAt,
+              outcome: 'tool_calls',
+              thinkingChars: thinking.length,
+              textChars: text.length,
+              firstEvent,
+              thinkingTitles: [...thinkingTitles],
+              thinking: excerpt(thinking),
+              text: excerpt(text),
+              toolCalls: responseToolCalls().map((c) => ({ tool: c.tool, title: c.title, argsOk: c.argsOk })),
+              systemChars: system.length,
+              feedback: redoNote,
+            })
+            if (mode === 'server') {
+              void api
+                .postResponse(session.id, {
+                  model,
+                  round,
+                  ms: Date.now() - startedAt,
+                  outcome: 'tool_calls',
+                  firstEvent,
+                  systemChars: system.length,
+                  messages: messages.length,
+                  thinkingChars: thinking.length,
+                  textChars: text.length,
+                  thinkingTitles,
+                  thinking,
+                  text,
+                  toolCalls: responseToolCalls(),
+                  // M21 — le refus journalisé AVEC la réponse fautive : la
+                  // note exacte que le round suivant lit.
+                  feedback: redoNote,
+                })
+                .catch(() => undefined) // jamais bloquant
+            }
+            store.appendMessage(
+              session.id,
+              'system',
+              `Groupe d’appels refusé — contrat non tenu (annonce PLAN ≠ groupe émis) : rappel renvoyé au modèle (${planRedos}/${MAX_PLAN_REDOS}).`,
+            )
+            continue
+          }
+          if (calls.length > 0) turnMemory.remember(round, roundCalls)
 
           store.settleTrace(traceId, {
             ms: Date.now() - startedAt,
@@ -722,6 +798,70 @@ export default function App() {
               }
             }
             return // réponse finale — tour terminé
+          }
+
+          // M21 — no_tool SEUL : la signature de la réponse finale sans
+          // outil. La prose finale est déjà dans le placeholder (elle suit
+          // l'appel dans la même réponse — l'exception assumée du protocole :
+          // no_tool n'a aucun résultat à attendre). L'appel part au serveur
+          // (journalisé, jamais dangereux), son observation part au journal,
+          // et le tour se termine proprement.
+          if (onlyNoTool) {
+            // no_tool SANS prose : le modèle a signé la fin sans écrire la
+            // réponse — réclamée une fois, puis tour terminé honnêtement.
+            if (text.trim() === '') {
+              if (!emptyNudged && round < MAX_ROUNDS) {
+                emptyNudged = true
+                mentorNote = NO_TOOL_EMPTY_PROSE_NUDGE
+                store.removeMessage(placeholder.id)
+                store.settleTrace(traceId, { feedback: NO_TOOL_EMPTY_PROSE_NUDGE })
+                store.appendMessage(session.id, 'system', 'no_tool sans prose finale — rappel renvoyé au modèle.')
+                continue
+              }
+              store.removeMessage(placeholder.id)
+              store.appendMessage(session.id, 'system', 'no_tool sans prose malgré le rappel — tour terminé.')
+              return
+            }
+            turn.toolCalls += 1
+            const noToolStartedAt = Date.now()
+            const noToolArgs = parseToolArgs(calls[0]!.function.arguments)
+            const noToolRow = store.appendToolCall(session.id, NO_TOOL, noToolArgs, titleOfArgs(noToolArgs))
+            try {
+              const res = await api.runTool(workspace, session.id, NO_TOOL, noToolArgs)
+              if (res.status === 'executed') store.resolveToolCall(noToolRow.id, res.outcome)
+              else store.resolveToolCall(noToolRow.id, { ok: false, summary: 'refusé par le serveur' })
+            } catch (err) {
+              const why = err instanceof Error ? err.message : String(err)
+              store.resolveToolCall(noToolRow.id, { ok: true, summary: `no_tool — serveur injoignable (${why}), tour terminé` })
+            }
+            // L'observation part au journal (les deux sens du fil) — le tour
+            // se termine ici ; au tour suivant, l'historique rendra au modèle
+            // son no_tool honoré (appel + résultat, comme un vrai groupe).
+            if (mode === 'server' && store.findSessionById(session.id) !== undefined) {
+              const settled = store.listMessages(session.id).find((r) => r.id === noToolRow.id)
+              if (settled !== undefined && settled.ok !== undefined) {
+                const payload = settled.ok === true ? settled.data ?? settled.summary : settled.summary ?? 'refusé'
+                void api
+                  .postObservation(session.id, {
+                    model,
+                    round,
+                    fedToRound: round + 1,
+                    ms: Date.now() - noToolStartedAt,
+                    results: [
+                      {
+                        tool: NO_TOOL,
+                        title: settled.title ?? '',
+                        ok: settled.ok === true,
+                        ...(settled.ok === true
+                          ? { result: typeof payload === 'string' ? payload : JSON.stringify(payload ?? null) }
+                          : { error: typeof payload === 'string' ? payload : 'refusé' }),
+                      },
+                    ],
+                  })
+                  .catch(() => undefined) // jamais bloquant
+              }
+            }
+            return // prose finale déjà reçue — tour terminé
           }
           turn.toolCalls += calls.length
 

@@ -9,8 +9,14 @@ const LAST_WS_KEY = 'nyworkflow.lastWorkspace'
  * M17 — the browser's NATIVE directory picker (File System Access API,
  * Chromium). The web platform deliberately hides the absolute path of a
  * picked folder: the handle's only server-usable piece is its NAME, which
- * GET /workspaces/locate turns into candidate paths. Feature-detected: the
- * button appears only where the API exists (Chrome/Edge).
+ * GET /workspaces/locate turns into candidate paths.
+ *
+ * M21 — FIREFOX COMPATIBILITY: `showDirectoryPicker` is Chromium-only, so
+ * the Explorer button now ALWAYS shows. Where the API is missing (Firefox,
+ * Safari…), the click opens the standard folder-selection input
+ * (`<input type="file" webkitdirectory>`): the browser's own dialog, the
+ * picked folder's NAME read back from the first file's relative path —
+ * same locate resolution, same candidates flow.
  */
 type DirectoryPicker = (options?: { mode?: 'read' | 'readwrite' }) => Promise<{ name: string }>
 const nativePicker = (): DirectoryPicker | undefined => {
@@ -31,7 +37,7 @@ interface NewSessionDialogProps {
 }
 
 /**
- * New agentic session (M11–M14, M17): a title, where the session — and the
+ * New agentic session (M11–M14, M17, M21): a title, where the session — and the
  * model — will live, and the security level of its tools. The session
  * folder is MANDATORY (M14): three ways to bind one —
  *   - a fresh scaffold — the DEFAULT when the registry is empty: the
@@ -43,6 +49,8 @@ interface NewSessionDialogProps {
  *     pilot's own files are never touched elsewhere. M17: the « Explorer… »
  *     button opens the browser's NATIVE directory dialog (Chromium) and
  *     resolves the picked folder into a server path (/workspaces/locate).
+ *     M21: on Firefox/Safari the same button opens the browser's standard
+ *     folder selection (webkitdirectory input) — same resolution.
  * Every session folder carries its `.logs/<sessionId>/` profiling quartet
  * (M14, M16). The last used workspace and the security level are remembered.
  * Without the server API there is NO session: the folder is mandatory.
@@ -76,6 +84,8 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
   /** Confirmation line of a resolved pick ('' = nothing to say). */
   const [picked, setPicked] = useState('')
   const picker = nativePicker()
+  /** M21 — the hidden folder-selection input (Firefox/Safari fallback). */
+  const folderInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (mode !== 'server') return
@@ -146,30 +156,23 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
     loadBrowse(path)
   }
 
-  /** M17 — the Explorer button: opens the browser's NATIVE directory dialog,
-   * then resolves the picked name into a server path via /workspaces/locate
-   * (the web platform hides the path — the name is all it gives). */
-  const pickNativeFolder = (): void => {
-    if (picker === undefined || exploring) return
+  /** M17/M21 — resolves a picked folder NAME into a server path via
+   * /workspaces/locate (the web platform hides the path — the name is all
+   * it gives, whichever picker produced it). */
+  const resolvePickedName = (name: string): void => {
+    if (exploring) return
     setError('')
     setPicked('')
     setLocateCandidates([])
+    setExploring(true)
     void (async () => {
-      let name = ''
-      try {
-        const handle = await picker({ mode: 'read' })
-        name = handle.name
-      } catch {
-        return // dialogue annulé — silencieux, jamais une erreur
-      }
-      setExploring(true)
       try {
         const res = await api.locateFolders(name)
         if (res.candidates.length === 1) {
           applyPickedFolder(res.candidates[0] as string, name)
         } else if (res.candidates.length === 0) {
           setError(
-            `« ${name} » est introuvable depuis le dossier personnel du serveur — le sélecteur natif ne transmet pas le chemin. Collez-le ci-contre, ou naviguez avec la liste.`,
+            `« ${name} » est introuvable depuis le dossier personnel du serveur — le sélecteur ne transmet pas le chemin. Collez-le ci-contre, ou naviguez avec la liste.`,
           )
         } else {
           setLocateCandidates(res.candidates)
@@ -180,6 +183,45 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
       } finally {
         setExploring(false)
       }
+    })()
+  }
+
+  /** M21 — the Firefox/Safari path: the standard folder-selection input.
+   * The dialog is the browser's own; the folder's name comes back from the
+   * first file's relative path ("myFolder/sub/file.txt" → "myFolder"). */
+  const onFolderInput = (e: React.ChangeEvent<HTMLInputElement>): void => {
+    // The File must be captured BEFORE the value reset — the FileList is a
+    // LIVE view of the input, clearing the value empties it.
+    const first = e.target.files?.[0] as (File & { webkitRelativePath?: string }) | undefined
+    e.target.value = '' // re-picking the same folder must re-fire the change
+    if (first === undefined) return
+    const rel = first.webkitRelativePath ?? ''
+    const name = rel.split('/')[0] ?? ''
+    if (name === '' || name === '.') {
+      setError('Dossier illisible — choisissez un dossier contenant au moins un fichier, ou naviguez avec la liste.')
+      return
+    }
+    resolvePickedName(name)
+  }
+
+  /** M17/M21 — the Explorer button: NATIVE dialog where the File System
+   * Access API exists (Chrome/Edge), the browser's folder selection
+   * everywhere else (Firefox…) — the same locate resolution follows. */
+  const pickNativeFolder = (): void => {
+    if (exploring) return
+    if (picker === undefined) {
+      folderInputRef.current?.click()
+      return
+    }
+    void (async () => {
+      let name = ''
+      try {
+        const handle = await picker({ mode: 'read' })
+        name = handle.name
+      } catch {
+        return // dialogue annulé — silencieux, jamais une erreur
+      }
+      resolvePickedName(name)
     })()
   }
 
@@ -338,29 +380,41 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
                     placeholder="chemin absolu du dossier"
                     aria-label="Chemin du dossier"
                   />
-                  {/* M17 — le sélecteur NATIF du navigateur (Chrome/Edge) :
-                      la boîte de navigation de l'OS, puis résolution du nom
-                      en chemin serveur via /workspaces/locate. */}
-                  {picker !== undefined ? (
-                    <button
-                      type="button"
-                      className="folder-explorer"
-                      data-test="folder-explorer"
-                      disabled={exploring}
-                      onClick={pickNativeFolder}
-                      title="Ouvre la boîte de navigation du navigateur"
-                    >
-                      {exploring ? 'Recherche…' : 'Explorer…'}
-                    </button>
-                  ) : null}
+                  {/* M17/M21 — le bouton Explorer : boîte de navigation
+                      native (Chrome/Edge) ou sélection de dossier du
+                      navigateur (Firefox…) — puis résolution du nom en
+                      chemin serveur via /workspaces/locate. */}
+                  <button
+                    type="button"
+                    className="folder-explorer"
+                    data-test="folder-explorer"
+                    disabled={exploring}
+                    onClick={pickNativeFolder}
+                    title="Ouvre la boîte de sélection de dossier (native ou navigateur)"
+                  >
+                    {exploring ? 'Recherche…' : 'Explorer…'}
+                  </button>
                   <button type="button" data-test="folder-go" onClick={() => loadBrowse(browsePath.trim() || undefined)} disabled={browsing}>
                     {browsing ? '…' : 'Ouvrir'}
                   </button>
                 </div>
+                {/* M21 — le repli Firefox/Safari : l’entrée de sélection de
+                    dossier du navigateur (webkitdirectory) ne vit que là où
+                    l’API native manque — même bouton, même résolution. */}
                 {picker === undefined ? (
-                  <p className="hint" data-test="folder-explorer-unsupported">
-                    Le sélecteur natif « Explorer » exige Chrome ou Edge — la liste ci-dessous navigue dans tous les cas.
-                  </p>
+                  <>
+                    <input
+                      ref={folderInputRef}
+                      type="file"
+                      className="folder-input-hidden"
+                      data-test="folder-input"
+                      onChange={onFolderInput}
+                      {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+                    />
+                    <p className="hint" data-test="folder-explorer-unsupported">
+                      Sélecteur natif indisponible dans ce navigateur — « Explorer… » ouvre la sélection de dossier du navigateur (choisissez un dossier contenant au moins un fichier), et la liste ci-dessous navigue dans tous les cas.
+                    </p>
+                  </>
                 ) : null}
                 {picked !== '' ? (
                   <p className="hint folder-picked" data-test="folder-picked">

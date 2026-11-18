@@ -210,29 +210,36 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
 
   // 1bis. M16 — the THREE-step response protocol: the SAME contract for
   // every model, whatever its native thinking channel. (1) The titled
-  // thought process opens EVERY response; (2) the action — parallel,
-  // titled tool_calls, then the response STOPS; (3) the observation — the
-  // harness returns the WHOLE group's results in a defined format, and
-  // only then does a new protocol start. The harness parses the titled
-  // tag out of the content stream; the block shows to the pilot as a
-  // collapsible card, the work that follows is the visible answer.
+  // thought process opens EVERY response and CLOSES with the PLAN
+  // announcement (M21 — le contrat d'appels); (2) the action — parallel,
+  // titled tool_calls that MUST hold the announced plan, then the response
+  // STOPS; (3) the observation — the harness returns the WHOLE group's
+  // results in a defined format, and only then does a new protocol start.
+  // The harness parses the titled tag out of the content stream; the block
+  // shows to the pilot as a collapsible card, the work that follows is the
+  // visible answer.
   sections.push(
     [
       '# Protocole de réponse — trois temps, à CHAQUE réponse',
       '',
       'Chaque réponse que tu émets suit TOUJOURS cet ordre, sans exception — et la boucle se répète tant que le travail n’est pas fini :',
       '',
-      '1. **Le temps du thinking, en premier.** Tu dialogues d’abord avec toi-même dans un bloc unique et titré :',
+      '1. **Le temps du thinking, en premier.** Tu dialogues d’abord avec toi-même dans un bloc unique et titré, qui se TERMINE par l’annonce de ton plan d’appels (le CONTRAT du tour) :',
       '',
       '```',
       '<thinking title="titre court de l’étape en cours">',
       '… ton dialogue interne : ce que l’ICM sait déjà, ce qui manque, le plan de CE tour …',
+      'PLAN: 3 tool_calls — [Lire le plan] [Lister inbox] [Vérifier uv]',
       '</thinking>',
       '```',
       '',
+      '   L’annonce `PLAN:` ENGAGE ta réponse : le harness compare le nombre annoncé au nombre d’appels réellement émis —',
+      '   un groupe qui ne tient pas son annonce n’est PAS exécuté, et on te demande de le réémettre conforme. Sans outil :',
+      '   `PLAN: no_tool`, puis l’appel unique `no_tool` accompagne ta prose finale.',
+      '',
       '2. **Le temps de l’action.** Tu bascules hors du thought process et tu procèdes au travail :',
-      '   - soit la réponse finale en prose pour le pilote (quand aucun outil n’est nécessaire) ;',
-      '   - soit des tool_calls pour agir — tous les appels INDÉPENDANTS ENSEMBLE dans la même réponse (le harness les exécute en parallèle), chacun avec son argument `title` (≤ 60 caractères). Puis tu TERMINES ta réponse : jamais de texte après les tool_calls, jamais de résultat annoncé avant de l’avoir reçu.',
+      '   - soit des tool_calls pour agir — tous les appels INDÉPENDANTS ENSEMBLE dans la même réponse (le harness les exécute en parallèle), chacun avec son argument `title` (≤ 60 caractères), en nombre EXACTEMENT égal à ton annonce PLAN. Puis tu TERMINES ta réponse : jamais de texte après les tool_calls, jamais de résultat annoncé avant de l’avoir reçu ;',
+      '   - soit la réponse finale en prose pour le pilote, quand aucun outil n’est nécessaire — précédée de l’appel unique `no_tool` (SEUL, jamais mélangé à d’autres appels) : c’est l’exception assumée du protocole, no_tool n’a aucun résultat à attendre, ta prose suit l’appel dans la même réponse ;',
       '',
       '3. **Le temps de l’observation.** Tu ATTENDS. Le harness exécute le groupe entier (en parallèle et en arrière-plan) et te renvoie, à la fin du protocole, TOUTES les réponses du groupe, une par appel, dans ce format :',
       '',
@@ -246,6 +253,8 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
       'Règles du protocole :',
       '- Le bloc `<thinking>` ouvre la réponse, une seule fois, AVANT tout le reste — jamais de prose visible avant lui.',
       '- `title` dit l’étape (« Comprendre la demande », « Planifier le tour », « Vérifier le résultat ») : le pilote le lit replié.',
+      '- `PLAN: N tool_calls — [titres]` clôt le thinking : N et les titres annoncés ENGAGENT ta réponse — le harness vérifie la correspondance et REFUSE le groupe non conforme.',
+      '- `no_tool` s’émet SEUL (jamais mélangé à de vrais appels) : c’est la signature d’une réponse finale sans outil.',
       '- Dans le thought process : sois franc, méthodique, bref — ce que tu sais déjà par l’ICM, ce qui manque, ce que tu fais ce tour.',
       '- N’écris JAMAIS la balise `<thinking>` en prose visible (le harness la parserait comme un vrai bloc).',
       '- Ton thought process t’appartient : le pilotage du pilote vit dans la prose et les tool_calls.',

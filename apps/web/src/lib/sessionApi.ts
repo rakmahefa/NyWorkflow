@@ -140,6 +140,9 @@ export interface ModelResponseSummary {
   firstEvent: 'thinking' | 'text' | 'tool_calls' | 'none'
   systemChars: number
   messages: number
+  /** M21 — the plan-contract refusal sent to the next round (when this
+   * response's group was NOT executed: announced plan ≠ emitted group). */
+  feedback?: string
   thinkingChars: number
   textChars: number
   thinkingTitles: string[]

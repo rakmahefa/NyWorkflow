@@ -162,6 +162,21 @@ export const AGENT_TOOLS: readonly ToolDeclaration[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'no_tool',
+      description:
+        'M21 — le garde-fou du contrat d’appels : quand ta réponse est la prose finale et qu’AUCUN outil n’est nécessaire, émets CE tool_call unique (jamais mélangé à d’autres appels). Il signe la fin du tour sans rien exécuter — le format « thinking puis tool_calls » reste constant.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: TITLE_ARG,
+          reason: { type: 'string', description: 'Pourquoi aucun outil n’est nécessaire ce tour (une ligne, optionnel)' },
+        },
+      },
+    },
+  },
 ]
 
 /** Parses the arguments string of a tool call (JSON) — {} when unreadable. */
@@ -201,3 +216,8 @@ export function titleOfArgs(args: unknown): string {
 export function isDangerousTool(name: string): boolean {
   return name === 'write' || name === 'shell'
 }
+
+/** M21 — the contract sentinel: the call that signs a tool-less final
+ * answer. Alone in its group, it ends the turn; mixed with real calls it
+ * is a protocol violation the mentor corrects. */
+export const NO_TOOL = 'no_tool'

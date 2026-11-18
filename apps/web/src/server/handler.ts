@@ -464,6 +464,9 @@ export function createSessionsHandler(
       text: str(body.text, 32_768),
       toolCalls,
       protocol,
+      // M21 — le refus de contrat d'appels (groupe non exécuté) : la note
+      // exacte que le round suivant lira, journalisée avec la réponse fautive.
+      ...(typeof body.feedback === 'string' && body.feedback !== '' ? { feedback: body.feedback.slice(0, 2000) } : {}),
       ...(typeof body.error === 'string' && body.error !== '' ? { error: body.error.slice(0, 300) } : {}),
     }
     profiler?.model(record)

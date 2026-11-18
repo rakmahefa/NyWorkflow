@@ -30,6 +30,12 @@ jobs:
 
       - run: pnpm build
 
+      # M21 — artefact du PROJET : l'archive source complète (git archive,
+      # hors node_modules et dist — le dépôt tenu par git), téléchargeable
+      # depuis l'onglet Actions à chaque exécution.
+      - name: Artefact — archive du projet (source)
+        run: git archive --format=zip -o nyworkflow-source.zip HEAD
+
       - name: Vitest (junit + console)
         run: pnpm -r --if-present test:ci
 
@@ -38,6 +44,13 @@ jobs:
         with:
           name: web-dist
           path: apps/web/dist
+
+      - name: Artefact — projet (source zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-source
+          path: nyworkflow-source.zip
+          if-no-files-found: error
 
       - name: Artefact — rapports Vitest
         uses: actions/upload-artifact@v4
