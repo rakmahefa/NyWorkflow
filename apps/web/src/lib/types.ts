@@ -101,6 +101,9 @@ export interface RequestTrace {
   toolCalls?: { tool: string; title: string; argsOk: boolean }[]
   /** M17 — the ICM system prompt's size (the context drift, per request). */
   systemChars?: number
+  /** M20 — the mentor's protocol reminder sent to the NEXT round (what was
+   * corrected, exactly as the model read it). */
+  feedback?: string
   /** M18 — true when this trace is a journaled turn.completed (the TURN's
    * summary, not one round's): the activity tab groups by turn and closes
    * a block on it. */

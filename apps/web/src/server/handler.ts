@@ -529,6 +529,10 @@ export function createSessionsHandler(
       // happened (7 ok, 1 error).
       okCalls: results.filter((r) => r.ok).length,
       errCalls: results.filter((r) => !r.ok).length,
+      // M20 — the mentor's reminder that rode with this observation: the
+      // log keeps BOTH directions of the wire, corrections included (the
+      // exact text the next round reads; absent when the protocol held).
+      ...(typeof body.feedback === 'string' && body.feedback !== '' ? { feedback: str(body.feedback, 2048) } : {}),
       results,
     }
     profiler?.model(record)

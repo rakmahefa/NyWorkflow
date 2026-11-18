@@ -182,6 +182,12 @@ function ResponseView({ trace }: { trace: RequestTrace }) {
         ) : null}
         {trace.systemChars !== undefined ? <span className="tag">ICM {trace.systemChars.toLocaleString('fr-FR')} car.</span> : null}
       </p>
+      {trace.feedback !== undefined && trace.feedback !== '' ? (
+        <>
+          <p className="act-sub">Rappel de protocole renvoyé au modèle (mentor)</p>
+          <pre className="act-mentor" data-test="act-mentor">{trace.feedback}</pre>
+        </>
+      ) : null}
       {trace.thinkingTitles !== undefined && trace.thinkingTitles.length > 0 ? (
         <>
           <p className="act-sub">Titres du thinking</p>

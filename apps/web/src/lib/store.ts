@@ -177,11 +177,15 @@ export class SessionStore {
   }
 
   /** M12 — settles a trace (duration, outcome, received chars — M17: the
-   * response itself: first event, titles, excerpts, tool calls). */
+   * response itself: first event, titles, excerpts, tool calls; M20: the
+   * mentor's protocol reminder that was sent to the next round). */
   settleTrace(
     id: string,
     patch: Partial<
-      Pick<RequestTrace, 'ms' | 'outcome' | 'error' | 'thinkingChars' | 'textChars' | 'firstEvent' | 'thinkingTitles' | 'thinking' | 'text' | 'toolCalls' | 'systemChars'>
+      Pick<
+        RequestTrace,
+        | 'ms' | 'outcome' | 'error' | 'thinkingChars' | 'textChars' | 'firstEvent' | 'thinkingTitles' | 'thinking' | 'text' | 'toolCalls' | 'systemChars' | 'feedback'
+      >
     >,
   ): boolean {
     let hit = false

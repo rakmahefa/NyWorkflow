@@ -219,6 +219,35 @@ describe('buildIcmSystemPrompt — identité harness (M14)', () => {
     expect(prompt).toContain('CONTEXT.md')
   })
 
+  it('M20 — le niveau d’exigence : la barre professionnelle, l’économie d’appels et l’inbox en premier', async () => {
+    const root = tmp()
+    await ensureIcmTree(root)
+    const prompt = buildIcmSystemPrompt(await loadIcm(root))
+    // La section dédiée — la barre d'un travail professionnel.
+    expect(prompt).toContain('Le niveau d’exigence — un travail professionnel')
+    // L'ICM est un avantage exploité, pas un décor (les leçons des logs :
+    // « hi » = 8 tool_calls, `ls .` ×3, gabarits relus).
+    expect(prompt).toContain('L’ICM est ton avantage, pas un décor')
+    expect(prompt).toContain('ne paie pas deux fois la même')
+    // L'économie : pas d'appel quand l'info est déjà là, jamais de doublon.
+    expect(prompt).toContain('Économe et net')
+    expect(prompt).toContain('Jamais deux fois le même appel')
+    // plan.md/tasks.md évoluent par incréments, jamais réécrits de zéro.
+    expect(prompt).toContain('Mise à jour, jamais réécriture')
+    expect(prompt).toContain('PAR INCRÉMENTS')
+    // Un livrable est vérifié avant d'être annoncé.
+    expect(prompt).toContain('Vérifié avant d’être annoncé')
+    expect(prompt).toContain('n’est pas une livraison')
+    // Le bilan final au pilote.
+    expect(prompt).toContain('Bilan final au pilote')
+    // L'inbox : le premier réflexe du tour (le modèle la cherchait à la racine).
+    expect(prompt).toContain('inbox/')
+    expect(prompt).toContain('vérifie-le EN PREMIER')
+    // Le mentor : le modèle sait que le harness peut lui parler protocole.
+    expect(prompt).toContain('[HARNESS — protocole]')
+    expect(prompt).toContain('corrige immédiatement')
+  })
+
   it('M16 — le protocole trois temps : thinking titré, action parallèle, observation du groupe entier', async () => {
     const root = tmp()
     await ensureIcmTree(root)

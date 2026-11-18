@@ -15,6 +15,7 @@ import { fakeReply, streamText } from './lib/fakeLLM'
 import { useGatewayStatus } from './lib/gateway'
 import { toAgentMessages } from './lib/history'
 import { baseModelOf, withThinkLevel } from './lib/modelMeta'
+import { EMPTY_RESPONSE_NUDGE, ProtocolMemory, protocolFeedback } from './lib/protocol'
 import { loadDefaultSecurity, SECURITY_HINT, SECURITY_LABEL } from './lib/security'
 import { applyTheme, loadTheme } from './lib/theme'
 import * as api from './lib/sessionApi'
@@ -24,7 +25,7 @@ import type { ChatMsg, RequestTrace, SecurityLevel, SessionInfo } from './lib/ty
 import { APP_VERSION } from './lib/version'
 
 const WELCOME =
-  `Bienvenue dans NyWorkflow (v${APP_VERSION}). Sessions ICM agentiques — chaque session vit dans SON dossier (obligatoire) : l’ICM complet naît dans le dossier caché .workspace/ (charte, plan, tâches, journal, décisions, recherche, mémoire, skills, livrables) et ses logs de profilage dans .logs/<session>/ au même endroit (quatuor : engine, session, activity, model). Le modèle sait qu’il tourne dans ce harness et agit avec ses outils (read, write, ls, glob, mkdir, shell + arrière-plan, websearch, shell_output, shell_kill) — il évalue ses moyens et construit dans skills/ les compétences qui manquent : l’arsenal grandit d’une tâche à l’autre. Niveau de sécurité par session (demander / accepter / aucun outil). Le chat reste épuré : vos messages à droite, l’activité de l’agent à gauche en groupes repliés titrés (« N fichiers lus · N commandes lancées ») ; l’onglet Activité profile chaque tour (rounds, appels, payloads exacts, journaux de la session).`
+  `Bienvenue dans NyWorkflow (v${APP_VERSION}). Sessions ICM agentiques — chaque session vit dans SON dossier (obligatoire) : l’ICM complet naît dans le dossier caché .workspace/ (charte, plan, tâches, journal, décisions, recherche, mémoire, skills, livrables) et ses logs de profilage dans .logs/<session>/ au même endroit (quatuor : engine, session, activity, model). Le modèle sait qu’il tourne dans ce harness et agit avec ses outils (read, write, ls, glob, mkdir, shell + arrière-plan, websearch, shell_output, shell_kill) — il évalue ses moyens et construit dans skills/ les compétences qui manquent : l’arsenal grandit d’une tâche à l’autre. Le harness est aussi son mentor : un écart de protocole (thinking manquant, appel sans titre, arguments mal formés, appel redondant) lui est renvoyé au round suivant, et le niveau d’exigence est celui d’un travail professionnel. Niveau de sécurité par session (demander / accepter / aucun outil). Le chat reste épuré : vos messages à droite, l’activité de l’agent à gauche en groupes repliés titrés (« N fichiers lus · N commandes lancées ») ; l’onglet Activité profile chaque tour (rounds, appels, payloads exacts, rappels du mentor, journaux de la session).`
 const GATEWAY_DOWN =
   'Passerelle webapi absente — réponses simulées. Elle démarre normalement avec l’application ; ouvrez Paramètres → Passerelle pour le diagnostic, ou vérifiez NYW_WEBAPI_EMBED (0 = désactivée).'
 const MEMORY_FALLBACK =
@@ -421,6 +422,12 @@ export default function App() {
       stopRef.current = controller
       setAgentRun({ sessionId: session.id })
       const turnStartedAt = Date.now()
+      // M20 — LE MENTOR : la mémoire des appels de CE tour (l'anti-boucle du
+      // rappel de protocole) et le rappel en attente, injecté au round
+      // suivant. Une réponse VIDE est réclamée une fois, pas douze.
+      const turnMemory = new ProtocolMemory()
+      let mentorNote: string | null = null
+      let emptyNudged = false
       // M13 — the turn summary, posted to the journal (turn.completed) when
       // the turn ends, whatever the exit path: durable activity traces.
       const turn = {
@@ -459,9 +466,14 @@ export default function App() {
           const aborted = (): boolean => controller.signal.aborted
 
           // L'ICM vers le modèle — rechargé à chaque tour (l'arbre a pu grandir).
+          // M20 — les CHEMINS des contexts chargés servent au mentor : une
+          // relecture de fichier déjà dans le prompt est un écart protocole.
           let system = ''
+          let icmContextPaths: string[] = []
           try {
-            system = (await api.getIcm(workspace)).system
+            const icm = await api.getIcm(workspace)
+            system = icm.system
+            icmContextPaths = icm.contexts.map((c) => c.path)
           } catch (err) {
             const why = err instanceof Error ? err.message : String(err)
             store.appendMessage(session.id, 'system', `ICM inaccessible (${why}) — réponse sans contexte du workspace.`)
@@ -479,7 +491,16 @@ export default function App() {
 
           const model = effectiveModel(gw.selected)
           turn.model = model
-          const messages = [{ role: 'system' as const, content: system }, ...toAgentMessages(store.listMessages(session.id))]
+          const messages = [
+            { role: 'system' as const, content: system },
+            ...toAgentMessages(store.listMessages(session.id)),
+            // M20 — le rappel de protocole du round précédent part en DERNIER :
+            // c'est le harness qui parle (préfixe [HARNESS — protocole]), juste
+            // après l'observation qu'il corrige. Transient : jamais journalisé
+            // comme un message du pilote — sa trace vit dans model.jsonl
+            // (champ feedback de l'observation) et sur la trace du round.
+            ...(mentorNote !== null ? [{ role: 'user' as const, content: mentorNote }] : []),
+          ]
           turn.messages = messages.length
           turn.tools = toolsOn ? AGENT_TOOLS.length : 0
           const traceId = `tr-${crypto.randomUUID().slice(0, 8)}`
@@ -605,6 +626,24 @@ export default function App() {
           turn.thinkingChars += thinking.length
           turn.textChars += text.length
 
+          // M20 — LE MENTOR, temps 3 qui parle : le verdict de CE round part au
+          // round suivant (message [HARNESS — protocole]) et se lit sur la trace
+          // et dans model.jsonl (champ feedback de l'observation). Silence
+          // total quand le protocole est suivi — un modèle conforme n'est
+          // jamais sermonné. La mémoire du tour se remplit APRÈS le verdict :
+          // un appel ne peut pas être déclaré répété contre lui-même.
+          const roundCalls = responseToolCalls()
+          const mentor =
+            calls.length > 0
+              ? protocolFeedback(
+                  { round, firstEvent, thinkingChars: thinking.length, thinkingTitles, text, toolCalls: roundCalls },
+                  turnMemory,
+                  icmContextPaths,
+                )
+              : null
+          if (calls.length > 0) turnMemory.remember(round, roundCalls)
+          mentorNote = mentor
+
           if (aborted()) {
             turn.outcome = 'stopped'
             store.settleTrace(traceId, {
@@ -630,12 +669,14 @@ export default function App() {
             textChars: text.length,
             // M17 — the response rides on the trace: the activity tab SHOWS
             // what the model said (first event, titles, excerpts, calls).
+            // M20 — the mentor's reminder rides with it (what was corrected).
             firstEvent,
             thinkingTitles: [...thinkingTitles],
             thinking: excerpt(thinking),
             text: excerpt(text),
             toolCalls: responseToolCalls().map((c) => ({ tool: c.tool, title: c.title, argsOk: c.argsOk })),
             systemChars: system.length,
+            ...(mentor !== null ? { feedback: mentor } : {}),
           })
 
           // M16 — la réponse du modèle de CE round part dans model.jsonl : le
@@ -662,7 +703,26 @@ export default function App() {
               .catch(() => undefined) // jamais bloquant
           }
 
-          if (calls.length === 0) return // réponse finale — tour terminé
+          if (calls.length === 0) {
+            // M20 — une réponse VIDE (ni texte, ni appels : le tool_calls
+            // MANQUANT) n'est pas une réponse : le mentor la réclame une
+            // fois, puis le tour se termine honnêtement — jamais de boucle.
+            if (text.trim() === '' && thinking.trim() === '') {
+              if (!emptyNudged && round < MAX_ROUNDS) {
+                emptyNudged = true
+                mentorNote = EMPTY_RESPONSE_NUDGE
+                store.removeMessage(placeholder.id)
+                store.settleTrace(traceId, { feedback: EMPTY_RESPONSE_NUDGE })
+                store.appendMessage(session.id, 'system', 'Réponse vide — rappel de protocole renvoyé au modèle.')
+                continue
+              }
+              store.removeMessage(placeholder.id)
+              if (emptyNudged) {
+                store.appendMessage(session.id, 'system', 'Le modèle reste vide malgré le rappel — tour terminé.')
+              }
+            }
+            return // réponse finale — tour terminé
+          }
           turn.toolCalls += calls.length
 
           // Toutes les lignes d'abord (l'ordre du modèle est l'ordre du flux)…
@@ -727,6 +787,11 @@ export default function App() {
                   round,
                   fedToRound: round + 1,
                   ms: Date.now() - groupStartedAt,
+                  // M20 — le rappel du mentor part avec l'observation qu'il
+                  // corrige : model.jsonl garde les DEUX sens du fil, rappel
+                  // compris (ce qui a été dit au modèle, pas seulement ce
+                  // qu'il a dit).
+                  ...(mentor !== null ? { feedback: mentor } : {}),
                   results: settled.map((r) => {
                     const row = r as (typeof settled)[number] & { tool?: string; title?: string; ok?: boolean; summary?: string; data?: unknown }
                     // EXACTLY what toAgentMessages feeds the model (M16):

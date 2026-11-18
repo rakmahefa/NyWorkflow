@@ -170,6 +170,9 @@ export interface ObservationSummary {
   fedToRound: number
   ms: number
   results: ObservationResult[]
+  /** M20 — the mentor's protocol reminder that rides with this observation
+   * (the exact text the next round reads). */
+  feedback?: string
 }
 
 /** M16 — logs one round's model response (model.jsonl, 4th profiling log). */

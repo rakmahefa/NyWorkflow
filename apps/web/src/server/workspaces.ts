@@ -645,31 +645,39 @@ export function createWorkspacesHandler(
     // The check runs BEFORE the call is journaled: a crash here leaves no
     // open call behind (a pending dangerous call would block the session).
     const check = await checkToolCall(root, call)
-    await appendEvent(file, { type: 'tool.call', at: nowIso(), tool: call.tool, args: call.args, callId })
-    profiler?.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security, ...meta })
-    sp.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security, ...meta })
-    if (!check.ok) {
-      const refusal = check.refusal as ToolRefusal
-      await appendEvent(file, { type: 'tool.result', at: nowIso(), ok: false, summary: refusal.summary, callId })
-      profiler?.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: refusal.code, ...meta })
-      sp.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: refusal.code, ...meta })
-      return { status: 'executed', callId, outcome: refusal }
-    }
-    if (check.approval && security === 'ask') {
-      // Dangerous (write, shell — background or not): the human decides —
-      // the journal keeps the call open (no tool.result), the UI shows the
-      // approval card.
-      return { status: 'pending', callId, call: { tool: call.tool, args: call.args } }
-    }
-    // 'accept' (M13): the dangerous call runs right away, approval skipped.
-    // M18 — mark it EXECUTING for the whole run: its journal entry stays
-    // open until the result lands, and the siblings of the same parallel
-    // round must not read that window as « waiting for a human ».
-    if (check.approval) executingDangerous.add(callId)
-    let outcome: ToolOutcome
-    const started = Date.now()
+    // M20 — the callId joins executingDangerous BEFORE the journal entry
+    // lands. The M18 window (appendEvent resolved → set registration) was
+    // still readable by the guards of the parallel siblings: between the
+    // journal append and the .add, a sibling's waitingApproval saw the open
+    // dangerous call as « waiting for a human » and died to an unfair 409 —
+    // seen in the wild (2026-11-18-ebbe, round 5: seven parallel calls
+    // under « accept », one write lost while a sibling sat exactly in that
+    // window). Registered FIRST: once the entry is visible, it is already
+    // « executing »; on any failure the finally removes the callId and the
+    // journal keeps no orphan open call.
+    const autoApproved = check.approval === true && security === 'accept'
+    if (autoApproved) executingDangerous.add(callId)
     try {
-      outcome = await executeToolCall(root, call, check.approval, { workspace: name, jobs })
+      await appendEvent(file, { type: 'tool.call', at: nowIso(), tool: call.tool, args: call.args, callId })
+      profiler?.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security, ...meta })
+      sp.activity({ kind: 'tool.call', sessionId, workspace: name, tool: call.tool, callId, security, ...meta })
+      if (!check.ok) {
+        const refusal = check.refusal as ToolRefusal
+        await appendEvent(file, { type: 'tool.result', at: nowIso(), ok: false, summary: refusal.summary, callId })
+        profiler?.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: refusal.code, ...meta })
+        sp.activity({ kind: 'tool.result', sessionId, workspace: name, tool: call.tool, callId, ok: false, code: refusal.code, ...meta })
+        return { status: 'executed', callId, outcome: refusal }
+      }
+      if (check.approval && security === 'ask') {
+        // Dangerous (write, shell — background or not): the human decides —
+        // the journal keeps the call open (no tool.result), the UI shows the
+        // approval card. autoApproved is false here by construction.
+        return { status: 'pending', callId, call: { tool: call.tool, args: call.args } }
+      }
+      // 'accept' (M13): the dangerous call runs right away, approval
+      // skipped — its callId is already registered as EXECUTING above.
+      const started = Date.now()
+      const outcome = await executeToolCall(root, call, check.approval, { workspace: name, jobs })
       await appendEvent(file, {
         type: 'tool.result',
         at: nowIso(),
@@ -678,36 +686,36 @@ export function createWorkspacesHandler(
         ...(outcome.ok ? { data: outcome.data } : {}),
         callId,
       })
+      const ms = Date.now() - started
+      profiler?.activity({
+        kind: 'tool.result',
+        sessionId,
+        workspace: name,
+        tool: call.tool,
+        callId,
+        ok: outcome.ok,
+        code: outcome.ok ? undefined : outcome.code,
+        security,
+        ms,
+        ...meta,
+      })
+      sp.activity({
+        kind: 'tool.result',
+        sessionId,
+        workspace: name,
+        tool: call.tool,
+        callId,
+        ok: outcome.ok,
+        code: outcome.ok ? undefined : outcome.code,
+        security,
+        ms,
+        ...meta,
+      })
+      sp.engine({ kind: 'tool.exec', sessionId, tool: call.tool, callId, ok: outcome.ok, ms, ...meta })
+      return { status: 'executed', callId, outcome }
     } finally {
-      if (check.approval) executingDangerous.delete(callId)
+      if (autoApproved) executingDangerous.delete(callId)
     }
-    const ms = Date.now() - started
-    profiler?.activity({
-      kind: 'tool.result',
-      sessionId,
-      workspace: name,
-      tool: call.tool,
-      callId,
-      ok: outcome.ok,
-      code: outcome.ok ? undefined : outcome.code,
-      security,
-      ms,
-      ...meta,
-    })
-    sp.activity({
-      kind: 'tool.result',
-      sessionId,
-      workspace: name,
-      tool: call.tool,
-      callId,
-      ok: outcome.ok,
-      code: outcome.ok ? undefined : outcome.code,
-      security,
-      ms,
-      ...meta,
-    })
-    sp.engine({ kind: 'tool.exec', sessionId, tool: call.tool, callId, ok: outcome.ok, ms, ...meta })
-    return { status: 'executed', callId, outcome }
   }
 
   /** POST /workspaces/:name/tool/decision — resolve the paused call (M5 pattern). */

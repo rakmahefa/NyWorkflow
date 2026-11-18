@@ -26,6 +26,17 @@ const TOOL_SCENARIOS = {
     arguments: { title: 'Lire la carte du workspace', path: '.workspace/CONTEXT.md' },
     final: 'LIVRABLE FINAL AGENT — la carte est lue.',
   },
+  // M20 — le scénario NON CONFORME, calqué sur les écarts des logs réels
+  // (rounds 3 et 5 de la session arcade : thinking sauté, appel sans
+  // titre) : il déclenche le MENTOR de l'app, qui doit renvoyer un
+  // rappel [HARNESS — protocole] au round suivant — le test e2e m20 le
+  // vérifie sur les requêtes enregistrées ci-dessous.
+  AGENTNONCONFORME: {
+    name: 'ls',
+    arguments: { path: '.' },
+    noThinking: true,
+    final: 'NONCONFORME FAIT — la racine est listée, sans protocole.',
+  },
   AGENTECRIT: {
     name: 'write',
     arguments: { title: 'Écrire le livrable', path: 'outputs/agent-e2e.md', content: 'CONTENU AGENT E2E' },
@@ -60,7 +71,13 @@ const TOOL_SCENARIOS = {
 }
 
 function scenarioFor(messages) {
-  const lastUser = [...(messages ?? [])].reverse().find((m) => m?.role === 'user')?.content
+  // M20 — le mentor du harness parle AUSSI en rôle user (préfixe
+  // [HARNESS — protocole]) : ce n'est pas le pilote. Le marqueur de
+  // scénario vit dans le dernier message utilisateur du PILOTE — les
+  // rappels du mentor s'ignorent ici (une maquette ne « lit » pas, elle
+  // pattern-matche ; le vrai modèle, lui, corrige — c'est le but).
+  const users = (messages ?? []).filter((m) => m?.role === 'user')
+  const lastUser = [...users].reverse().find((m) => typeof m?.content === 'string' && !m.content.startsWith('[HARNESS — '))?.content
   const text = typeof lastUser === 'string' ? lastUser : ''
   for (const [marker, sc] of Object.entries(TOOL_SCENARIOS)) {
     if (text.includes(marker)) return { marker, ...sc }
@@ -71,7 +88,10 @@ function scenarioFor(messages) {
   if (text.includes('SUIVIJOB')) {
     const jobJson = JSON.stringify((messages ?? []).filter((m) => m?.role === 'tool').map((m) => m?.content ?? ''))
     const m = jobJson.match(/job-[a-z0-9-]+/)
-    if (m) return { marker: 'SUIVIJOB', name: 'shell_output', arguments: { jobId: m[0] }, final: 'SUIVI FAIT — le job est visible.' }
+    // M20 — l'appel est TITRÉ : la maquette joue un modèle conforme au
+    // protocole (le mentor de l'app corrige les appels sans title — sans
+    // ce titre, ce test e2e recevrait lui-même un rappel).
+    if (m) return { marker: 'SUIVIJOB', name: 'shell_output', arguments: { title: 'Suivre le job en arrière-plan', jobId: m[0] }, final: 'SUIVI FAIT — le job est visible.' }
   }
   return null
 }
@@ -90,6 +110,11 @@ function json(res, status, obj) {
 }
 
 let chatCount = 0
+// M20 — les requêtes chat reçues (les messages, seuls) : le test e2e du
+// mentor y vérifie que le rappel [HARNESS — protocole] est bien PARTI au
+// round suivant d'un écart — fenêtre bornée, mémoire bornée.
+const recorded = []
+const RECORDED_MAX = 40
 
 /**
  * Starts the mock gateway on 127.0.0.1:<port>.
@@ -100,6 +125,12 @@ let chatCount = 0
 export function startMockGateway(port) {
   const server = createServer((req, res) => {
     const url = req.url ?? '/'
+
+    // M20 — les requêtes enregistrées, pour le test e2e du mentor.
+    if (req.method === 'GET' && url === '/__requests') {
+      json(res, 200, { requests: recorded })
+      return
+    }
 
     // Diagnostic GET / — la forme de la passerelle webapi réelle (M8 + M9) :
     // comptes avec session /u/N et expiration, stats par compte, proxy,
@@ -183,11 +214,18 @@ export function startMockGateway(port) {
         } catch {
           parsed = {}
         }
+        // M20 — enregistrement (messages seuls, fenêtre bornée).
+        recorded.push({ at: new Date().toISOString(), messages: parsed.messages ?? [] })
+        if (recorded.length > RECORDED_MAX) recorded.splice(0, recorded.length - RECORDED_MAX)
         const model = typeof parsed.model === 'string' ? parsed.model : 'unknown'
         const messages = parsed.messages ?? []
         let lastUserIdx = -1
         for (let i = messages.length - 1; i >= 0; i--) {
-          if (messages[i]?.role === 'user') {
+          const c = messages[i]?.content
+          // M20 — les rappels du mentor ([HARNESS — …]) ne sont pas des
+          // messages du pilote : ils ne comptent ni comme « dernier
+          // utilisateur », ni pour l'écho de réponse.
+          if (messages[i]?.role === 'user' && typeof c === 'string' && !c.startsWith('[HARNESS — ')) {
             lastUserIdx = i
             break
           }
@@ -210,10 +248,13 @@ export function startMockGateway(port) {
           // M15 — le protocole deux temps ouvre AUSSI le tour d'outils :
           // thinking titré dans le contenu, puis les appels (titrés, leur
           // argument `title` voyagera jusqu'à la ligne du pilote).
-          const title = scenario.thinkTitle ?? 'Agir sur le workspace'
-          const body = scenario.thinkBody ?? 'Je lance les actions de ce tour.'
-          chunk({ content: `<thinking title="${title}">` })
-          chunk({ content: `${body}</thinking>` })
+          // M20 — AGENTNONCONFORME saute le thinking (l'écart réel des logs).
+          if (!scenario.noThinking) {
+            const title = scenario.thinkTitle ?? 'Agir sur le workspace'
+            const body = scenario.thinkBody ?? 'Je lance les actions de ce tour.'
+            chunk({ content: `<thinking title="${title}">` })
+            chunk({ content: `${body}</thinking>` })
+          }
           const calls = scenario.twoCalls ?? (scenario.name ? [scenario] : [])
           calls.forEach((c, i) => {
             chunk({

@@ -249,6 +249,7 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
       '- Dans le thought process : sois franc, méthodique, bref — ce que tu sais déjà par l’ICM, ce qui manque, ce que tu fais ce tour.',
       '- N’écris JAMAIS la balise `<thinking>` en prose visible (le harness la parserait comme un vrai bloc).',
       '- Ton thought process t’appartient : le pilotage du pilote vit dans la prose et les tool_calls.',
+      '- Le harness peut te rappeler le protocole (messages préfixés `[HARNESS — protocole]`, après l’observation) : c’est le temps 3 qui te parle — corrige immédiatement et reprends le travail, sans t’en excuser longuement.',
     ].join('\n'),
   )
 
@@ -261,6 +262,7 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
         ? [
             '- **Racine de la session** : le dossier du projet du pilote — ses fichiers sont ton matériau de travail.',
             `- **\`${ICM_DIR}/\`** : ton ICM, l’arbre caché qui t’appartient — charte, plan, tâches, journal, décisions, recherche, mémoire, skills, livrables. C’est là que tu t’organises — et que tu construis ton arsenal.`,
+            `- **\`${ICM_DIR}/inbox/\`** : ce que le pilote dépose pour toi (consignes, documents) — vérifie-le EN PREMIER au début d’un tour, et dépouille-le au fil du travail (resume, déplace, traite).`,
             `- **\`${ICM_DIR}/harness/\`** : la documentation de ton harness (charte chargée à chaque tour, moteur en profondeur) — \`${ICM_DIR}/tools/\` : le protocole trois temps (chargé) et la fiche rigoureuse de chaque outil.`,
             `- **\`${ICM_DIR}/skills/\`** : ton arsenal — le protocole d’évaluation et le registre des skills (chargés à chaque tour) ; une skill est un dossier \`skills/<nom>/SKILL.md\` lu à la demande.`,
             '- **`.logs/`** : logs de profilage du harness (dont tes propres réponses) — ne lis ni ne modifie jamais ce dossier.',
@@ -328,6 +330,32 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
         '- **L’ICM elle-même s’améliore** : chartes, mémoire, structure — ce que tu écris dans `.workspace/` est vu au',
         '  tour suivant. Élève l’outil de travail (dense : tout ce qui est chargé se relit à chaque tour) et journalise',
         '  ce que tu changes. Harness + ICM = un arsenal qui grandit à chaque tâche — la qualité du travail avec.',
+      ].join('\n'),
+    )
+
+    // 3ter. M20 — the QUALITY BAR, taught where it hurts (real logs: « hi »
+    // cost 8 tool_calls — `ls .` three times, templates re-read; plan.md
+    // rewritten from scratch; work announced without verification). The
+    // pilot asked for PROFESSIONAL work: the prompt now says what that
+    // means, in the harness's own voice.
+    sections.push(
+      [
+        '# Le niveau d’exigence — un travail professionnel',
+        '',
+        'Ton travail est jugé à la barre d’un professionnel, pas à celle d’une démo :',
+        '',
+        '- **L’ICM est ton avantage, pas un décor** : inbox lu en premier, registre consulté, plan et tâches tenus PENDANT',
+        '  le travail, mémoire enrichie au fil. Un professionnel sait ce qu’il sait DÉJÀ — et ne paie pas deux fois la même',
+        '  information.',
+        '- **Économe et net** : avant chaque appel, demande-toi si l’information est DÉJÀ dans ton prompt (ICM chargée) ou',
+        '  dans une observation précédente de CE tour — si oui, n’appelle pas. Jamais deux fois le même appel (même outil,',
+        '  mêmes arguments) dans un tour : le résultat ne changera pas.',
+        '- **Mise à jour, jamais réécriture** : `notes/plan.md` et `notes/tasks.md` évoluent PAR INCRÉMENTS (une case cochée,',
+        '  une ligne ajoutée) — les réécrire de zéro efface l’historique et brûle un tour pour rien.',
+        '- **Vérifié avant d’être annoncé** : un livrable est compilé, testé ou relu AVANT d’être déclaré fini —',
+        '  « ça devrait marcher » n’est pas une livraison. Une commande qui échoue se corrige, elle ne se masque pas.',
+        '- **Bilan final au pilote** : ce qui est fait, OÙ (chemins exacts), comment le vérifier, ce qui reste —',
+        '  le pilote reprend ton travail les yeux ouverts.',
       ].join('\n'),
     )
   }

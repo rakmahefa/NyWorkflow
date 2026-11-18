@@ -173,11 +173,29 @@ Les **neuf outils** (tous fonctionnels, périmètre = la racine du dossier de se
 
 Tout est journalisé : messages, appels d'outils, refus (`tool.call` / `tool.result` en append-only sous `.nyworkflow/sessions/`, un JSONL par session) — **appariés par `callId`** depuis la M12, pour que les appels parallèles gardent chacun son résultat (les anciens journaux se lisent pareil). Un chemin hors workspace est refusé **et tracé**, jamais silencieux.
 
+### Le mentor — le harness corrige le modèle (M20)
+
+Le protocole trois temps est un contrat ; le mentor veille à ce qu'il soit tenu. **Après chaque round**, le harness calcule la conformité (les mêmes critères que les badges de l'onglet Activité) et, si le modèle s'en est écarté, lui **renvoie un rappel au round suivant** — un message court préfixé `[HARNESS — protocole]`, juste après l'observation des résultats. Le modèle est prévenu par le prompt système : « corrige immédiatement et reprends le travail ».
+
+Les écarts qui déclenchent un rappel :
+
+- **thinking manquant ou mal placé** — la réponse commence par du texte ou des tool_calls au lieu du bloc `<thinking>` titré ;
+- **thinking sans titre** — le bloc existe mais son `title` manque ;
+- **tool_calls sans `title`** — un ou plusieurs appels de groupe ne portent pas leur titre ;
+- **arguments mal formés** — un appel dont les arguments ne sont pas un JSON objet valide (le texte brut fautif est cité dans le rappel) ;
+- **outil inconnu** — la liste des outils déclarés est rappelée ;
+- **prose mêlée aux tool_calls** — la réponse doit s'arrêter après les appels ;
+- **appels dupliqués** — le même appel deux fois dans le groupe, ou déjà exécuté à un round précédent **du même tour** (résultat identique garanti) ;
+- **relecture d'un `CONTEXT.md` déjà chargé** — son contenu est déjà dans le prompt système ;
+- **réponse vide** — ni texte ni tool_calls : le mentor exige une vraie réponse **une fois**, puis le tour se termine honnêtement.
+
+**Silence total quand le protocole est suivi** — un modèle conforme n'est jamais interrompu. Le rappel est *transient* : il ne s'affiche pas comme un message du chat (le vôtre reste le dernier mot du pilote) ; il se lit à trois endroits : sur la **carte du round** dans l'onglet Activité (bloc « Rappel de protocole renvoyé au modèle »), dans **`model.jsonl`** (champ `feedback` de l'observation — le journal garde les deux sens du fil), et dans le comportement du round suivant. Le prompt système enseigne parallèlement **la barre d'un travail professionnel** : économie d'appels (jamais deux fois le même), `plan.md`/`tasks.md` mis à jour **par incréments**, livrables **vérifiés avant d'être annoncés**, `inbox/` vérifié en premier, bilan final avec chemins exacts.
+
 ### L'onglet Activité — le tracking façon harness (M12, élargi M17)
 
 Le bandeau de la session porte deux onglets : **Conversation** (le chat) et **Activité** — la trace complète, chronologique :
 
-- chaque **requête modèle** : horodatage, modèle demandé (suffixe de réflexion compris), nombre de messages et de déclarations d'outils envoyées, durée, résultat (réponse / appels d'outils / erreur / interrompu), caractères de réflexion et de réponse reçus — dépliable pour le détail **et, depuis la M17, pour la RÉPONSE elle-même** : conformité au protocole en un regard (badges **thinking d'abord ?** / **thinking titré ?** / **arguments valides ?** + taille du prompt ICM), titres du thinking, extraits du thinking et du texte, tool_calls émis avec leur verdict — un appel aux arguments mal formés porte son badge rouge ;
+- chaque **requête modèle** : horodatage, modèle demandé (suffixe de réflexion compris), nombre de messages et de déclarations d'outils envoyées, durée, résultat (réponse / appels d'outils / erreur / interrompu), caractères de réflexion et de réponse reçus — dépliable pour le détail **et, depuis la M17, pour la RÉPONSE elle-même** : conformité au protocole en un regard (badges **thinking d'abord ?** / **thinking titré ?** / **arguments valides ?** + taille du prompt ICM), titres du thinking, extraits du thinking et du texte, tool_calls émis avec leur verdict — un appel aux arguments mal formés porte son badge rouge ; **depuis la M20, le rappel du mentor** (s'il y en eut un) s'affiche sous les badges, mot pour mot ;
 - chaque **appel d'outil** : arguments et résultat exact renvoyé au modèle (payload JSON dépliable), statut ok/refusé/en approbation ;
 - **les journaux DE LA SESSION (M17)** — en bas de l'onglet, une section lit le quatuor `.logs/<sessionId>/` DANS le dossier de la session : les quatre journaux avec leurs tailles, un bouton **Voir** sert les 50 dernières lignes de chacun. **`model.jsonl` de CETTE session** — les réponses du modèle tour par tour, ce qu'on lui a répondu, la conformité calculée serveur — se lit sans quitter l'UI.
 
