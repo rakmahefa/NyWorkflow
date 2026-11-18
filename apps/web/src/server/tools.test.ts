@@ -110,7 +110,7 @@ it(
     expect(icm.body.system).toContain('# loutres — ICM du workspace')
     expect(icm.body.system).toContain('ICM chargé — arbre du workspace')
     expect(icm.body.system).toContain('.workspace/')
-    expect(icm.body.contexts).toHaveLength(9) // M16 : + harness/ et tools/ charters
+    expect(icm.body.contexts).toHaveLength(10) // M16 : + harness/ et tools/ ; M19 : + skills/ (arsenal)
 
     // Création d'une session liée au workspace (via /sessions).
     const session = await api(base, '/sessions', { method: 'POST', body: JSON.stringify({ title: 'Agent loutres', workspace: 'loutres' }) })

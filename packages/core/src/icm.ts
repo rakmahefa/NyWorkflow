@@ -260,8 +260,9 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
       icm.icmDir
         ? [
             '- **Racine de la session** : le dossier du projet du pilote — ses fichiers sont ton matériau de travail.',
-            `- **\`${ICM_DIR}/\`** : ton ICM, l’arbre caché qui t’appartient — charte, plan, tâches, journal, décisions, recherche, mémoire, livrables. C’est là que tu t’organises.`,
+            `- **\`${ICM_DIR}/\`** : ton ICM, l’arbre caché qui t’appartient — charte, plan, tâches, journal, décisions, recherche, mémoire, skills, livrables. C’est là que tu t’organises — et que tu construis ton arsenal.`,
             `- **\`${ICM_DIR}/harness/\`** : la documentation de ton harness (charte chargée à chaque tour, moteur en profondeur) — \`${ICM_DIR}/tools/\` : le protocole trois temps (chargé) et la fiche rigoureuse de chaque outil.`,
+            `- **\`${ICM_DIR}/skills/\`** : ton arsenal — le protocole d’évaluation et le registre des skills (chargés à chaque tour) ; une skill est un dossier \`skills/<nom>/SKILL.md\` lu à la demande.`,
             '- **`.logs/`** : logs de profilage du harness (dont tes propres réponses) — ne lis ni ne modifie jamais ce dossier.',
           ].join('\n')
         : [
@@ -298,10 +299,35 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
         '',
         '1. **Comprendre** — les CONTEXT.md ci-dessus sont DÉJÀ chargés dans ce prompt : **ne les relis pas** avec `read`' +
           ' (leur contenu est déjà sous tes yeux). Explore le reste de l’arbre (ls, glob, read) seulement quand la tâche l’exige.',
-        '2. **Planifier** — consigne ton plan et tes hypothèses dans `notes/` (crée-le s’il n’existe pas, mkdir) : une tâche non triviale commence par une entrée de plan.',
-        '3. **Agir** — exécute avec tes outils : read, write, ls, glob, mkdir, shell, websearch. Les écritures (write, shell) attendent l’approbation du pilote selon le niveau de sécurité : propose-les quand même, c’est le flux normal.',
-        '4. **Livrer** — les livrables finaux vont dans `outputs/` ; les lectures web nettoyées dans `research/`.',
-        '5. **Retenir** — un fait durable va dans `memory/core.md`, une erreur évitable dans `memory/lessons.md`, une décision dans `notes/decisions.md` : la mémoire se met à jour PENDANT le travail.',
+        '2. **Évaluer** — la tâche nécessite-t-elle une compétence ou un outillage spécifique ? Le registre des skills (chargé) dit ce qui existe ; ce qui manque se CONSTRUIT — voir la section Arsenal ci-dessous.',
+        '3. **Planifier** — consigne ton plan et tes hypothèses dans `notes/` (crée-le s’il n’existe pas, mkdir) : une tâche non triviale commence par une entrée de plan.',
+        '4. **Agir** — exécute avec tes outils : read, write, ls, glob, mkdir, shell, websearch. Les écritures (write, shell) attendent l’approbation du pilote selon le niveau de sécurité : propose-les quand même, c’est le flux normal.',
+        '5. **Livrer** — les livrables finaux vont dans `outputs/` ; les lectures web nettoyées dans `research/`.',
+        '6. **Retenir** — un fait durable va dans `memory/core.md`, une erreur évitable dans `memory/lessons.md`, une décision dans `notes/decisions.md` : la mémoire se met à jour PENDANT le travail.',
+      ].join('\n'),
+    )
+
+    // 3bis. M19 — the ARSENAL: evaluate the means, build what's missing
+    // from the base tools, improve the skills AND the ICM itself. Harness
+    // + ICM become the agent's growing toolkit — quality compounds.
+    sections.push(
+      [
+        '# Évalue tes moyens — l’arsenal',
+        '',
+        'Tes outils de base sont peu nombreux mais COMPLETS : avec read, write, ls, glob, mkdir, shell, websearch,',
+        'tu construis ce qui manque à la tâche — et ce que tu construis RESTE (l’ICM se recharge au tour suivant).',
+        '',
+        '- **Évalue avant d’agir** (tâche non triviale) : de quoi a-t-elle besoin — compétence métier, format de livrable,',
+        '  outillage spécifique ? Le registre des skills (`.workspace/skills/CONTEXT.md`, chargé) dit ce qui existe :',
+        '  une skill qui couvre le besoin se SUIT (lis son `SKILL.md` d’abord), elle ne se réinvente pas.',
+        '- **Construis le manque** : cherche ce qu’il faut savoir (websearch, read), écris la skill sur le modèle',
+        '  `skills/_MODELE.md`, joins scripts et gabarits utiles (appelés par shell — tes outils spécialisés), teste,',
+        '  inscris-la au registre. La même procédure improvisée deux fois est une skill qui manque.',
+        '- **Améliore après usage** : l’étape qui a coincé se précise DANS la skill ; l’échec se corrige et nourrit',
+        '  `memory/lessons.md` — une leçon qui revient est une skill à écrire.',
+        '- **L’ICM elle-même s’améliore** : chartes, mémoire, structure — ce que tu écris dans `.workspace/` est vu au',
+        '  tour suivant. Élève l’outil de travail (dense : tout ce qui est chargé se relit à chaque tour) et journalise',
+        '  ce que tu changes. Harness + ICM = un arsenal qui grandit à chaque tâche — la qualité du travail avec.',
       ].join('\n'),
     )
   }

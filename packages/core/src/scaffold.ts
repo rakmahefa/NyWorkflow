@@ -1,5 +1,5 @@
 /**
- * Scaffold v4 (M16) — the COMPLETE agentic ICM tree, living in the HIDDEN
+ * Scaffold v5 (M19) — the COMPLETE agentic ICM tree, living in the HIDDEN
  * `.workspace/` folder inside the session's folder (the project).
  *
  * The layout follows the modern agent-config pattern (`.git`, `.claude`,
@@ -11,6 +11,7 @@
  *   │   ├── CONTEXT.md       la charte — mission, méthode, règles
  *   │   ├── harness/         la doc du harness : charte chargée + moteur
  *   │   ├── tools/           le protocole trois temps + une fiche par outil
+ *   │   ├── skills/          l'arsenal : évaluation + registre (M19)
  *   │   ├── inbox/           entrées du pilote
  *   │   ├── notes/           plan, tâches, journal, décisions
  *   │   ├── research/        lectures web + registre des sources
@@ -32,9 +33,18 @@
  * fiche per tool — exact arguments, correct launch patterns, common
  * errors — read on demand, keeping the prompt bounded).
  *
+ * M19 — the base ICM teaches the ARSENAL (pilot-driven): the `skills/`
+ * folder carries the capability-evaluation protocol and the skill
+ * REGISTRY, both loaded each turn — the agent evaluates whether a task
+ * needs skills or specific tooling it lacks, then BUILDS them from its
+ * base tools (research → `skills/<nom>/SKILL.md` + helper scripts →
+ * registry), uses them, and improves both the skills and the ICM itself.
+ * A skill folder is read ON DEMAND (SKILL.md, never a CONTEXT.md — the
+ * prompt stays bounded; only the registry is always loaded).
+ *
  * Everything is plain Markdown, ready to use. The tree stays FREE — the
  * agent grows it with mkdir; the loader caps at 12 CONTEXT.md files, and
- * this scaffold spends exactly 9, leaving three for the agent.
+ * this scaffold spends exactly 10, leaving two for the agent.
  */
 import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -44,8 +54,8 @@ import { workspaceName } from './icm.ts'
 /** The hidden folder, at the session folder's root, holding the whole ICM. */
 export const ICM_DIR = '.workspace'
 
-/** The eight role folders of a working session — free tree, sane defaults. */
-export const SCAFFOLD_FOLDERS = ['harness', 'tools', 'inbox', 'notes', 'research', 'memory', 'outputs', 'archive'] as const
+/** The nine role folders of a working session — free tree, sane defaults. */
+export const SCAFFOLD_FOLDERS = ['harness', 'tools', 'skills', 'inbox', 'notes', 'research', 'memory', 'outputs', 'archive'] as const
 
 /** The nine agent tools, in catalog order (one fiche each under tools/). */
 export const TOOL_NAMES = ['read', 'write', 'ls', 'glob', 'mkdir', 'shell', 'websearch', 'shell_output', 'shell_kill'] as const
@@ -57,6 +67,8 @@ export const SCAFFOLD_FILES = [
   'harness/ENGINE.md',
   'tools/CONTEXT.md',
   ...TOOL_NAMES.map((t) => `tools/${t}.md`),
+  'skills/CONTEXT.md',
+  'skills/_MODELE.md',
   'inbox/CONTEXT.md',
   'notes/CONTEXT.md',
   'notes/plan.md',
@@ -89,12 +101,17 @@ l'agent lit. Remplace ce paragraphe, puis supprime cette parenthèse.)
 
 1. **Comprendre** — les CONTEXT.md sont DÉJÀ chargés dans ton prompt ;
    explore le reste de l'arbre (ls, glob, read) selon le besoin.
-2. **Planifier** — écrire le plan dans \`.workspace/notes/plan.md\`, les
+2. **Évaluer** — la tâche nécessite-t-elle une compétence ou un outillage
+   spécifique ? Le registre des skills (chargé) dit ce qui existe ; ce
+   qui manque se CONSTRUIT — le protocole d'évaluation vit dans
+   \`.workspace/skills/CONTEXT.md\`.
+3. **Planifier** — écrire le plan dans \`.workspace/notes/plan.md\`, les
    tâches dans \`.workspace/notes/tasks.md\`.
-3. **Agir** — tes outils : read, write, ls, glob, mkdir, shell, websearch.
-4. **Livrer** — les livrables finaux dans \`.workspace/outputs/\`.
-5. **Retenir** — mettre à jour \`.workspace/memory/\` : ce qui est vrai
-   reste, ce qui a été appris s'écrit.
+4. **Agir** — tes outils : read, write, ls, glob, mkdir, shell, websearch.
+5. **Livrer** — les livrables finaux dans \`.workspace/outputs/\`.
+6. **Retenir** — mettre à jour \`.workspace/memory/\` : ce qui est vrai
+   reste, ce qui a été appris s'écrit — et l'arsenal aussi : une leçon
+   qui revient devient une skill.
 
 ## Carte de l’arbre
 
@@ -103,6 +120,7 @@ l'agent lit. Remplace ce paragraphe, puis supprime cette parenthèse.)
 | \`.workspace/CONTEXT.md\` | cette charte — mission, méthode, règles |
 | \`.workspace/harness/\` | la doc du harness : charte chargée à chaque tour + le moteur en profondeur |
 | \`.workspace/tools/\` | le protocole trois temps (chargé) + une fiche rigoureuse par outil |
+| \`.workspace/skills/\` | ton arsenal : le protocole d'évaluation + le registre des skills (chargés) ; une skill = un dossier lu à la demande |
 | \`.workspace/inbox/\` | entrées déposées par le pilote (à lire, puis à vider) |
 | \`.workspace/notes/plan.md\` | le plan vivant : objectif, étapes, statut |
 | \`.workspace/notes/tasks.md\` | la file de tâches : à faire / en cours / fait |
@@ -119,7 +137,9 @@ l'agent lit. Remplace ce paragraphe, puis supprime cette parenthèse.)
 L'arbre est **libre** : crée les dossiers dont tu as besoin (mkdir), dans
 \`.workspace/\` pour ton organisation, à la racine pour les livrables du
 pilote. Un sous-dossier qui acquiert un rôle mérite son propre
-\`CONTEXT.md\` (au plus 12 sont chargés — ce scaffold en dépense 9).
+\`CONTEXT.md\` (au plus 12 sont chargés — ce scaffold en dépense 10 ;
+une skill, elle, se lit à la demande : son dossier porte un SKILL.md,
+jamais un CONTEXT.md).
 
 ## Outils
 
@@ -154,6 +174,10 @@ périmètre » sont définitifs : ne réessaie pas le même chemin.
   \`.workspace/memory/lessons.md\`.
 - **Hygiène** : \`.workspace/inbox/\` se vide, \`.workspace/outputs/\` ne
   contient que du final, l'archivé va dans \`.workspace/archive/\`.
+- **L'arsenal grandit** : une procédure refaite deux fois devient une
+  skill inscrite au registre ; l'ICM elle-même s'améliore (chartes plus
+  justes, mémoire plus dense) — chaque changement s'explique dans
+  \`.workspace/notes/journal.md\`.
 - Les livrables sont des fichiers Markdown nommés clairement
   (\`.workspace/outputs/rapport.md\`, pas \`final_v2_CORRECT.md\`).
 `
@@ -349,6 +373,126 @@ réponse finale si le travail est fini).
 
 « Libre » = sans approbation du pilote. Le niveau de sécurité de la
 session (ask / accept / no-tools) prime — voir \`harness/ENGINE.md\`.
+`
+}
+
+/**
+ * `skills/CONTEXT.md` — the ARSENAL charter, LOADED each turn (M19): the
+ * capability-evaluation protocol (does the task need a skill or specific
+ * tooling? what exists? what must be BUILT from the base tools?), the
+ * improvement loop (use → observe → refine; lessons that repeat become
+ * skills), the right to improve the ICM itself, and the REGISTRY — the
+ * one table the next turn reads to know what exists without opening a
+ * single skill folder.
+ */
+function skillsContext(): string {
+  return `# skills/ — ton arsenal : les compétences que tu construis
+
+Tes neuf outils de base sont fixes — mais COMPLETS : avec read, write,
+ls, glob, mkdir, shell et websearch, tu construis ce qui manque à la
+tâche. Une **skill** est cette construction : un dossier
+\`skills/<nom>/\` avec un \`SKILL.md\` (mission, déclencheurs, procédure,
+commandes exactes, pièges) et, au besoin, des scripts ou gabarits — tes
+outils spécialisés, faits par toi, réutilisables. Le gabarit d’une
+skill vit dans \`skills/_MODELE.md\`.
+
+## Le protocole d’évaluation — avant toute tâche non triviale
+
+1. **De quoi la tâche a-t-elle besoin ?** — compétence métier, format de
+   livrable, recherche, outillage spécifique.
+2. **Une skill du registre la couvre-t-elle ?** — lis son \`SKILL.md\` et
+   suis-la ; elle ne se réinvente pas.
+3. **Manque ?** — CONSTRUIS la compétence avant d’improviser :
+   - cherche ce qu’il faut savoir (websearch, read sur le projet) ;
+   - crée \`skills/<nom>/SKILL.md\` sur le modèle de \`_MODELE.md\` ;
+   - écris les scripts et gabarits utiles, teste-les (shell) ;
+   - INSCRIS-la au registre ci-dessous, consigne les sources dans
+     \`research/sources.md\` et la décision dans \`notes/decisions.md\`.
+4. **Jamais deux fois** — la même procédure improvisée deux fois est une
+   skill qui manque : écris-la.
+
+## La boucle d’amélioration — après chaque usage
+
+- **Ça a marché** — renforce la skill : précise l’étape qui a coincé, la
+  commande exacte qui a passé.
+- **Ça a échoué** — corrige la skill ET consigne la leçon dans
+  \`memory/lessons.md\` : une leçon qui revient est une skill à écrire.
+- **C’est obsolète** — la skill part en \`archive/\` et quitte le
+  registre.
+
+## L’ICM elle-même s’améliore
+
+Les chartes (CONTEXT.md) sont des FICHIERS que tu écris : ce que tu
+améliores dedans est chargé au tour suivant. Une règle fausse se
+corrige, une information manquante s’ajoute (dense — tout ce qui est
+chargé se relit à chaque tour), un rôle récurrent mérite son dossier
+avec son CONTEXT.md. Note ce que tu changes dans \`notes/journal.md\` :
+l’arsenal est vivant, pas figé.
+
+## Registre des skills
+
+> LA table à tenir à jour : une ligne par skill, tout ce que le tour
+> suivant doit savoir sans ouvrir le dossier. Un dossier de skill ne
+> porte PAS de CONTEXT.md (il serait chargé à chaque tour) — son
+> SKILL.md se lit à la demande.
+
+| Skill | Ce qu’elle fait | Statut |
+|---|---|---|
+| (aucune — la première que tu construis s’inscrit ici) | | |
+`
+}
+
+/**
+ * `skills/_MODELE.md` — the template of a SKILL.md, read on demand: copy,
+ * fill, delete the banner. A skill relits in thirty seconds and runs
+ * without hesitation — dense, exact, actionable.
+ */
+function skillsTemplate(): string {
+  return `# _MODELE — le gabarit d’une skill
+
+> Copie ce fichier dans \`skills/<nom>/SKILL.md\` et remplis chaque
+> section. Une skill se relit en 30 secondes et s’exécute sans
+> hésitation : dense, exacte, actionnable. Supprime ce bandeau une fois
+> rempli, puis inscris la skill au registre de \`skills/CONTEXT.md\`.
+
+# <nom> — <ce qu’elle fait en une ligne>
+
+## Mission
+
+(Le résultat que cette skill produit, et pour qui.)
+
+## Quand l’utiliser (déclencheurs)
+
+(Les signaux qui font choisir CETTE skill — types de tâches, mots du
+pilote, formats attendus. Et quand NE PAS l’utiliser.)
+
+## Prérequis
+
+(Ce qui doit exister avant : fichiers, dossiers, outils, connaissances.)
+
+## Procédure
+
+1. (Étape exacte — commande ou outil précis, entrée, sortie attendue.)
+2. …
+
+## Commandes & outils exacts
+
+\`\`\`\nc’est ici que vivent les commandes shell éprouvées, les motifs
+\`\`\`
+
+## Pièges connus
+
+- (Ce qui a coincé, et la parade — alimenté par la boucle
+  d’amélioration.)
+
+## Provenance
+
+- (Sources consultées — reportées dans \`research/sources.md\` ; date.)
+
+## Historique
+
+- v1 (date) — créée parce que …
+- (v2 (date) — améliorée après … : ce qui a coincé.)
 `
 }
 
@@ -594,6 +738,9 @@ export function scaffoldFiles(name: string): Record<string, string> {
     'harness/ENGINE.md': harnessEngine(),
     'tools/CONTEXT.md': toolsContext(),
     ...toolFiches(),
+    // M19 — the base ICM teaches the arsenal: evaluate, build, improve.
+    'skills/CONTEXT.md': skillsContext(),
+    'skills/_MODELE.md': skillsTemplate(),
     'inbox/CONTEXT.md': folderContext(
       'inbox',
       'Les entrées du pilote : fichiers, briefs, consignes déposés ici AVANT le travail. Le workspace commence souvent par vider cette boîte.',

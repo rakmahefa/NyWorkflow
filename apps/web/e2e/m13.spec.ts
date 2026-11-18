@@ -173,13 +173,14 @@ test('le scaffold complet naît avec le workspace, tout .md prêt DANS .workspac
   expect(mine).toBeDefined()
   expect(existsSync(join(root, '.logs', mine.id, 'session.jsonl'))).toBe(true)
 
-  // L'ICM charge les 7 CONTEXT.md : le modèle voit toute la carte, et sait
-  // qu'il tourne dans le harness (M14).
+  // L'ICM charge les 10 CONTEXT.md : le modèle voit toute la carte, sait
+  // qu'il tourne dans le harness (M14) et connaît son arsenal (M19).
   const icm = await page.request.get(`/workspaces/${name}/icm`)
   expect(icm.ok()).toBe(true)
   const icmBody = await icm.json()
-  expect(icmBody.contexts).toHaveLength(9)
+  expect(icmBody.contexts).toHaveLength(10)
   expect(icmBody.system).toContain('harness NyWorkflow')
   expect(icmBody.system).toContain('.workspace/')
   expect(icmBody.system).toContain('.workspace/notes/plan.md')
+  expect(icmBody.system).toContain('Évalue tes moyens — l’arsenal')
 })

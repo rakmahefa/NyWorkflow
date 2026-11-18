@@ -184,6 +184,35 @@ describe('buildIcmSystemPrompt — identité harness (M14)', () => {
     expect(prompt).toContain('Explore sans demander')
   })
 
+  it('M19 — l’arsenal : évaluer ses moyens, construire le manque, améliorer l’ICM', async () => {
+    const root = tmp()
+    await ensureIcmTree(root)
+    const prompt = buildIcmSystemPrompt(await loadIcm(root))
+    // La section dédiée, après la méthode ICM.
+    expect(prompt).toContain('Évalue tes moyens — l’arsenal')
+    // Évaluer : le registre dit ce qui existe, une skill couvrante se SUIT.
+    expect(prompt).toContain('Évalue avant d’agir')
+    expect(prompt).toContain('registre des skills')
+    expect(prompt).toContain('elle ne se réinvente pas')
+    // Construire : depuis les outils de base, le gabarit, le registre.
+    expect(prompt).toContain('Construis le manque')
+    expect(prompt).toContain('skills/_MODELE.md')
+    expect(prompt).toContain('inscris-la au registre')
+    expect(prompt).toContain('La même procédure improvisée deux fois est une skill qui manque')
+    // Améliorer : la boucle après usage, et l’ICM elle-même.
+    expect(prompt).toContain('Améliore après usage')
+    expect(prompt).toContain('L’ICM elle-même s’améliore')
+    expect(prompt).toContain('un arsenal qui grandit à chaque tâche')
+    // La méthode ICM porte le temps Évaluer (6 temps désormais).
+    expect(prompt).toContain('2. **Évaluer**')
+    expect(prompt).toContain('6. **Retenir**')
+    // L’environnement montre le dossier skills/.
+    expect(prompt).toContain('skills/<nom>/SKILL.md')
+    // La charte de l’arsenal est chargée depuis l’arbre (pas juste citée).
+    expect(prompt).toContain('Le protocole d’évaluation — avant toute tâche non triviale')
+    expect(prompt).toContain('La boucle d’amélioration — après chaque usage')
+  })
+
   it('workspace vierge : invite à écrire le CONTEXT.md', () => {
     const prompt = buildIcmSystemPrompt({ name: 'vierge', tree: '(arbre vide)', contexts: [], icmDir: false })
     expect(prompt).toContain('aucun — ce workspace est vierge')
@@ -254,7 +283,7 @@ describe('scaffoldAgenticWorkspace (M14 — arbre dans .workspace/)', () => {
     expect(readFileSync(join(root, ICM_DIR, 'memory', 'lessons.md'), 'utf8')).toContain('Leçons')
     expect(readFileSync(join(root, ICM_DIR, 'research', 'sources.md'), 'utf8')).toContain('Registre des sources')
 
-    // L'ICM charge ce workspace fraîchement scaffoldé : 9 CONTEXT.md (≤ cap),
+    // L'ICM charge ce workspace fraîchement scaffoldé : 10 CONTEXT.md (≤ cap),
     // l'arbre .workspace/ complet, et le prompt porte la charte.
     const icm = await loadIcm(root)
     expect(icm.icmDir).toBe(true)
@@ -263,8 +292,9 @@ describe('scaffoldAgenticWorkspace (M14 — arbre dans .workspace/)', () => {
     expect(icm.tree).toContain('├── inbox/')
     expect(icm.tree).toContain('├── memory/')
     expect(icm.tree).toContain('├── notes/')
+    expect(icm.tree).toContain('├── skills/')
     expect(icm.tree).toContain('├── tools/')
-    expect(icm.contexts).toHaveLength(9)
+    expect(icm.contexts).toHaveLength(10)
     expect(icm.contexts.length).toBeLessThanOrEqual(CONTEXT_MAX_FILES)
     const prompt = buildIcmSystemPrompt(icm)
     expect(prompt).toContain('# mon-agent — ICM du workspace')
@@ -272,16 +302,21 @@ describe('scaffoldAgenticWorkspace (M14 — arbre dans .workspace/)', () => {
     // M16 — la charte du harness et le protocole des outils sont chargés.
     expect(prompt).toContain('# harness/ — le harness NyWorkflow')
     expect(prompt).toContain('# tools/ — le protocole d’utilisation des outils')
+    // M19 — la charte de l’arsenal (évaluation + registre) est chargée.
+    expect(prompt).toContain('# skills/ — ton arsenal : les compétences que tu construis')
+    expect(prompt).toContain('Registre des skills')
     // Les fiches rigoureuses existent dans l'arbre (lus à la demande).
     expect(icm.tree).toContain('├── read.md')
     expect(icm.tree).toContain('├── websearch.md')
+    // Le gabarit d'une skill existe, lu à la demande.
+    expect(icm.tree).toContain('├── _MODELE.md')
   })
 
-  it('scaffoldFiles : la carte est pure et exhaustive — 26 fichiers, 9 CONTEXT.md', () => {
+  it('scaffoldFiles : la carte est pure et exhaustive — 28 fichiers, 10 CONTEXT.md', () => {
     const files = scaffoldFiles('demo')
     expect(Object.keys(files).sort()).toEqual([...SCAFFOLD_FILES].sort())
-    expect(SCAFFOLD_FILES.filter((f) => f.endsWith('CONTEXT.md'))).toHaveLength(9)
-    expect(SCAFFOLD_FOLDERS).toHaveLength(8)
+    expect(SCAFFOLD_FILES.filter((f) => f.endsWith('CONTEXT.md'))).toHaveLength(10)
+    expect(SCAFFOLD_FOLDERS).toHaveLength(9)
     // M16 — une fiche rigoureuse par outil, au catalogue complet.
     for (const tool of TOOL_NAMES) {
       expect(files[`tools/${tool}.md`], tool).toBeDefined()
@@ -297,6 +332,13 @@ describe('scaffoldAgenticWorkspace (M14 — arbre dans .workspace/)', () => {
     // Le protocole trois temps est chargé à chaque tour.
     expect(files['tools/CONTEXT.md']).toContain('Le protocole trois temps')
     expect(files['tools/CONTEXT.md']).toContain('{"tool": "read", "title": "Lire la charte", "ok": true, "result": "…"}')
+    // M19 — l'arsenal : charte chargée (évaluation + registre) et gabarit à la demande.
+    expect(files['skills/CONTEXT.md']).toContain('Le protocole d’évaluation')
+    expect(files['skills/CONTEXT.md']).toContain('Registre des skills')
+    expect(files['skills/CONTEXT.md']).toContain('porte PAS de CONTEXT.md')
+    expect(files['skills/_MODELE.md']).toContain('## Mission')
+    expect(files['skills/_MODELE.md']).toContain('## Quand l’utiliser (déclencheurs)')
+    expect(files['skills/_MODELE.md']).toContain('## Historique')
   })
 
   it('refuse un workspace existant — jamais d’écrasement', async () => {
@@ -350,6 +392,37 @@ describe('ensureIcmTree (M14 création, M16 upgrade)', () => {
     expect(existsSync(join(root, ICM_DIR, 'notes', 'journal.md'))).toBe(true)
     // Complet désormais : un nouvel appel ne rajoute rien.
     expect(await ensureIcmTree(root)).toBe('present')
+  })
+
+  it('M19 — un .workspace/ d’avant M19 (M16 complet, sans skills/) est UPGRADE : l’arsenal ajouté, le reste intact', async () => {
+    const root = tmp()
+    // Un workspace M16 complet : harness/ et tools/ présents, skills/ absent.
+    expect(await ensureIcmTree(root)).toBe('created')
+    rmSync(join(root, ICM_DIR, 'skills'), { recursive: true, force: true })
+    // L’agent a vécu : son registre potentiel et sa mémoire sont les siens.
+    writeFileSync(join(root, ICM_DIR, 'memory', 'core.md'), '# MA mémoire vive')
+    expect(await ensureIcmTree(root)).toBe('upgraded')
+    // La charte de l’arsenal et le gabarit sont là — le reste intact.
+    expect(readFileSync(join(root, ICM_DIR, 'skills', 'CONTEXT.md'), 'utf8')).toContain('ton arsenal')
+    expect(existsSync(join(root, ICM_DIR, 'skills', '_MODELE.md'))).toBe(true)
+    expect(readFileSync(join(root, ICM_DIR, 'memory', 'core.md'), 'utf8')).toBe('# MA mémoire vive')
+    // Complet désormais : un nouvel appel ne rajoute rien.
+    expect(await ensureIcmTree(root)).toBe('present')
+  })
+
+  it('M19 — un registre VIVANT n’est JAMAIS écrasé par l’upgrade', async () => {
+    const root = tmp()
+    expect(await ensureIcmTree(root)).toBe('created')
+    // L’agent a construit une skill et tenu son registre.
+    writeFileSync(
+      join(root, ICM_DIR, 'skills', 'CONTEXT.md'),
+      '# skills/ — ton arsenal\n\n| Skill | Ce qu’elle fait | Statut |\n|---|---|---|\n| conversion-pdf | images → PDF propres | v2 |\n',
+    )
+    mkdirSync(join(root, ICM_DIR, 'skills', 'conversion-pdf'))
+    writeFileSync(join(root, ICM_DIR, 'skills', 'conversion-pdf', 'SKILL.md'), '# conversion-pdf — la procédure VIVANTE')
+    expect(await ensureIcmTree(root)).toBe('present')
+    expect(readFileSync(join(root, ICM_DIR, 'skills', 'CONTEXT.md'), 'utf8')).toContain('conversion-pdf')
+    expect(readFileSync(join(root, ICM_DIR, 'skills', 'conversion-pdf', 'SKILL.md'), 'utf8')).toBe('# conversion-pdf — la procédure VIVANTE')
   })
 })
 

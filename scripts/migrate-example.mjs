@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
  * M16 — régénère les GABARITS versionnés de l'exemple agentique depuis le
- * scaffold v4 (harness/ + tools/ joints à l'arbre de base). Seuls les
- * fichiers du scaffold sont écrits : ce que l'agent a pu écrire d'autre
- * dans .workspace/ (racine comprise) reste local, hors git.
+ * scaffold (v4 : harness/ + tools/ joints à l'arbre de base ; v5/M19 :
+ * skills/ — l'arsenal — en plus). Seuls les fichiers du scaffold sont
+ * écrits : ce que l'agent a pu écrire d'autre dans .workspace/ (racine
+ * comprise) reste local, hors git.
  */
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'

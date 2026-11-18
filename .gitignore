@@ -30,6 +30,9 @@ examples/workspaces/**/.workspace/**
 !examples/workspaces/**/.workspace/harness/
 !examples/workspaces/**/.workspace/harness/CONTEXT.md
 !examples/workspaces/**/.workspace/harness/ENGINE.md
+!examples/workspaces/**/.workspace/skills/
+!examples/workspaces/**/.workspace/skills/CONTEXT.md
+!examples/workspaces/**/.workspace/skills/_MODELE.md
 !examples/workspaces/**/.workspace/tools/
 !examples/workspaces/**/.workspace/tools/CONTEXT.md
 !examples/workspaces/**/.workspace/tools/read.md

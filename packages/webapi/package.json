@@ -1,7 +1,7 @@
 {
   "name": "@nyworkflow/webapi",
   "private": true,
-  "version": "0.9.0",
+  "version": "0.10.0",
   "type": "module",
   "license": "MIT",
   "description": "Passerelle webapi \u2014 interface web Gemini servie en OpenAI-compatible (refonte moderne de ny-gemini-acp)",

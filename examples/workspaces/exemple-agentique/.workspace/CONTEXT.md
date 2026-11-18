@@ -9,12 +9,17 @@ l'agent lit. Remplace ce paragraphe, puis supprime cette parenthèse.)
 
 1. **Comprendre** — les CONTEXT.md sont DÉJÀ chargés dans ton prompt ;
    explore le reste de l'arbre (ls, glob, read) selon le besoin.
-2. **Planifier** — écrire le plan dans `.workspace/notes/plan.md`, les
+2. **Évaluer** — la tâche nécessite-t-elle une compétence ou un outillage
+   spécifique ? Le registre des skills (chargé) dit ce qui existe ; ce
+   qui manque se CONSTRUIT — le protocole d'évaluation vit dans
+   `.workspace/skills/CONTEXT.md`.
+3. **Planifier** — écrire le plan dans `.workspace/notes/plan.md`, les
    tâches dans `.workspace/notes/tasks.md`.
-3. **Agir** — tes outils : read, write, ls, glob, mkdir, shell, websearch.
-4. **Livrer** — les livrables finaux dans `.workspace/outputs/`.
-5. **Retenir** — mettre à jour `.workspace/memory/` : ce qui est vrai
-   reste, ce qui a été appris s'écrit.
+4. **Agir** — tes outils : read, write, ls, glob, mkdir, shell, websearch.
+5. **Livrer** — les livrables finaux dans `.workspace/outputs/`.
+6. **Retenir** — mettre à jour `.workspace/memory/` : ce qui est vrai
+   reste, ce qui a été appris s'écrit — et l'arsenal aussi : une leçon
+   qui revient devient une skill.
 
 ## Carte de l’arbre
 
@@ -23,6 +28,7 @@ l'agent lit. Remplace ce paragraphe, puis supprime cette parenthèse.)
 | `.workspace/CONTEXT.md` | cette charte — mission, méthode, règles |
 | `.workspace/harness/` | la doc du harness : charte chargée à chaque tour + le moteur en profondeur |
 | `.workspace/tools/` | le protocole trois temps (chargé) + une fiche rigoureuse par outil |
+| `.workspace/skills/` | ton arsenal : le protocole d'évaluation + le registre des skills (chargés) ; une skill = un dossier lu à la demande |
 | `.workspace/inbox/` | entrées déposées par le pilote (à lire, puis à vider) |
 | `.workspace/notes/plan.md` | le plan vivant : objectif, étapes, statut |
 | `.workspace/notes/tasks.md` | la file de tâches : à faire / en cours / fait |
@@ -39,7 +45,9 @@ l'agent lit. Remplace ce paragraphe, puis supprime cette parenthèse.)
 L'arbre est **libre** : crée les dossiers dont tu as besoin (mkdir), dans
 `.workspace/` pour ton organisation, à la racine pour les livrables du
 pilote. Un sous-dossier qui acquiert un rôle mérite son propre
-`CONTEXT.md` (au plus 12 sont chargés — ce scaffold en dépense 9).
+`CONTEXT.md` (au plus 12 sont chargés — ce scaffold en dépense 10 ;
+une skill, elle, se lit à la demande : son dossier porte un SKILL.md,
+jamais un CONTEXT.md).
 
 ## Outils
 
@@ -74,5 +82,9 @@ périmètre » sont définitifs : ne réessaie pas le même chemin.
   `.workspace/memory/lessons.md`.
 - **Hygiène** : `.workspace/inbox/` se vide, `.workspace/outputs/` ne
   contient que du final, l'archivé va dans `.workspace/archive/`.
+- **L'arsenal grandit** : une procédure refaite deux fois devient une
+  skill inscrite au registre ; l'ICM elle-même s'améliore (chartes plus
+  justes, mémoire plus dense) — chaque changement s'explique dans
+  `.workspace/notes/journal.md`.
 - Les livrables sont des fichiers Markdown nommés clairement
   (`.workspace/outputs/rapport.md`, pas `final_v2_CORRECT.md`).

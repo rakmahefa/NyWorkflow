@@ -1,8 +1,8 @@
 {
   "name": "nyworkflow",
   "private": true,
-  "version": "0.9.0",
-  "description": "Harness web d'agent conversationnel ICM — sessions ancrées dans un dossier obligatoire : ICM complète dans le .workspace/ caché (charte, plan, mémoire), quatuor de logs de profilage par session dans .logs/<session>/ (model.jsonl observe les deux sens du fil : réponses du modèle ET observations qui circulent), niveaux de sécurité par session, protocole trois temps modèle-agnostique (thinking titré, tool_calls groupés et titrés, observation du groupe entier), propulsées par Gemini via la passerelle webapi intégrée (@nyworkflow/webapi)",
+  "version": "0.10.0",
+  "description": "Harness web d'agent conversationnel ICM — sessions ancrées dans un dossier obligatoire : ICM complète dans le .workspace/ caché (charte, plan, mémoire), quatuor de logs de profilage par session dans .logs/<session>/ (model.jsonl observe les deux sens du fil : réponses du modèle ET observations qui circulent), niveaux de sécurité par session, protocole trois temps modèle-agnostique (thinking titré, tool_calls groupés et titrés, observation du groupe entier), arsenal de skills auto-construites (le modèle évalue ses moyens, construit dans skills/ les compétences qui manquent et améliore l'ICM elle-même), propulsées par Gemini via la passerelle webapi intégrée (@nyworkflow/webapi)",
   "license": "MIT",
   "packageManager": "pnpm@12.21.0",
   "engines": {
