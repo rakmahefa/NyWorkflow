@@ -121,6 +121,16 @@ export default function App() {
           setActiveId(first.id)
           store.appendMessage(first.id, 'system', welcome)
         } else {
+          // M22 — la course d'hydratation est fermée : des sessions vivent
+          // déjà dans le store (créées PENDANT le chargement — dialog
+          // rapide, clic dans la sidebar) ? L'état LIVE prime, l'hydratation
+          // s'efface (elle reviendra au prochain rechargement) : jamais la
+          // liste serveur ne vole la sélection ni n'efface une session en
+          // cours de création.
+          if (store.listSessions().length > 0) {
+            setMode('server')
+            return
+          }
           store.ingest(
             sessions.map((d): SessionInfo => ({
               id: d.id,
