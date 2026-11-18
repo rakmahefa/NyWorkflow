@@ -438,6 +438,16 @@ export function createSessionsHandler(
     const thinkingChars = int(body.thinkingChars, 10_000_000)
     const textChars = int(body.textChars, 10_000_000)
     const firstEvent = body.firstEvent === 'thinking' ? 'thinking' : body.firstEvent === 'text' ? 'text' : body.firstEvent === 'tool_calls' ? 'tool_calls' : 'none'
+    // M22 — the five phases' facts: the listing (headered [TOOL_LISTING]),
+    // its verdict against the decoded calls, the headered message, and the
+    // DROPS (headerless prose, malformed {{tool blocks).
+    const phases = {
+      ...(typeof body.listing === 'string' ? { listing: body.listing.slice(0, 300) } : body.listing === null ? { listing: null } : {}),
+      ...(typeof body.listingOk === 'boolean' ? { listingOk: body.listingOk } : {}),
+      ...(body.messageChars !== undefined ? { messageChars: int(body.messageChars, 10_000_000) } : {}),
+      ...(body.droppedChars !== undefined ? { droppedChars: int(body.droppedChars, 10_000_000) } : {}),
+      ...(body.brokenToolBlocks !== undefined ? { brokenToolBlocks: int(body.brokenToolBlocks, 1000) } : {}),
+    }
     // Protocol compliance — the automatic check the pilot used to do by eye.
     // M17: argsOk — every tool call's arguments parsed as clean JSON.
     const protocol = {
@@ -464,6 +474,8 @@ export function createSessionsHandler(
       text: str(body.text, 32_768),
       toolCalls,
       protocol,
+      // M22 — the phases (listing, message, drops).
+      ...(Object.keys(phases).length > 0 ? { phases } : {}),
       // M21 — le refus de contrat d'appels (groupe non exécuté) : la note
       // exacte que le round suivant lira, journalisée avec la réponse fautive.
       ...(typeof body.feedback === 'string' && body.feedback !== '' ? { feedback: body.feedback.slice(0, 2000) } : {}),

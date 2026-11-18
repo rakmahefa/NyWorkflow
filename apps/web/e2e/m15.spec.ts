@@ -68,7 +68,7 @@ test('groupe d’actions : tool_calls groupés, titrés, repliables', async ({ p
   await expect(group.first().locator('.tool-group-meta')).toContainText('2 ✓')
   await expect(group.first()).toContainText('1 fichier lu')
   await expect(group.first()).toContainText('1 recherche de fichiers')
-  await expect(page.locator('.msg.assistant').last()).toContainText('PROTOCOLE TROIS TEMPS', { timeout: 10_000 })
+  await expect(page.locator('.msg.assistant').last()).toContainText('PROTOCOLE CINQ PHASES', { timeout: 10_000 })
   await expect(group.first().locator('[data-test="tool-row"]')).toHaveCount(0) // replié d'office
 
   // Un clic ouvre l'arbre : chaque ligne porte le titre que le modèle a
@@ -98,7 +98,7 @@ test('persistance : le groupe et les titres survivent au rechargement (journal)'
   await box.fill('AGENTPROTOCOL cartographie encore')
   await box.press('Enter')
   await expect(page.locator('[data-test="tool-group"]').first()).toHaveAttribute('data-state', 'ok', { timeout: 10_000 })
-  await expect(page.locator('.msg.assistant').last()).toContainText('PROTOCOLE TROIS TEMPS', { timeout: 10_000 })
+  await expect(page.locator('.msg.assistant').last()).toContainText('PROTOCOLE CINQ PHASES', { timeout: 10_000 })
 
   // Rechargement : le journal rejoue les tool.call dans l'ordre — le
   // regroupement par adjacence et les titres (arguments journalisés)

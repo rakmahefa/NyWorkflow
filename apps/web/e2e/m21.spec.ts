@@ -75,7 +75,7 @@ test('contrat : le compte annoncé engage — le groupe non conforme est refusé
   const r2 = turn[1]!
   const last = r2.messages.at(-1)
   expect(last?.role).toBe('user')
-  expect(String(last?.content)).toContain('[HARNESS — protocole, round 1]')
+  expect(String(last?.content)).toContain('[HARNESS — feedback, round 1]')
   expect(String(last?.content)).toContain('annonçait 2 tool_calls et tu en as émis 1')
   expect(String(last?.content)).toContain('PAS été exécuté')
 })

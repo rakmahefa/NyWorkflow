@@ -39,6 +39,13 @@ export interface ChatMsg {
   thinking?: string
   /** M15 — the same thinking, cut into titled collapsible blocks. */
   thinkingBlocks?: ThinkingBlock[]
+  /** M22 — the harness's feedback on THIS round (phase 5): shown as a
+   * collapsible card inside the round, sent to the next round. */
+  feedback?: string
+  /** M22 — honest fallback: display the RAW text (headers included) — a
+   * turn that ends non-conformantly after its nudges still shows what the
+   * model actually wrote. */
+  rawText?: boolean
   /** Tool rows (role === 'tool'): the call and, once resolved, its outcome. */
   tool?: string
   args?: unknown
@@ -104,6 +111,16 @@ export interface RequestTrace {
   /** M20 — the mentor's protocol reminder sent to the NEXT round (what was
    * corrected, exactly as the model read it). */
   feedback?: string
+  /** M22 — phase 2: the listing's raw line (null when the header was absent). */
+  listing?: string | null
+  /** M22 — phase 2 verdict: the listing matches the decoded calls. */
+  listingOk?: boolean
+  /** M22 — phase 3: characters of headered [MESSAGE] prose. */
+  messageChars?: number
+  /** M22 — characters of headerless prose DROPPED (never displayed). */
+  droppedChars?: number
+  /** M22 — malformed {{tool blocks that stayed in the text (dropped). */
+  brokenToolBlocks?: number
   /** M18 — true when this trace is a journaled turn.completed (the TURN's
    * summary, not one round's): the activity tab groups by turn and closes
    * a block on it. */

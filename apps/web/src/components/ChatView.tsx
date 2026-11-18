@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { isDangerousTool } from '../lib/agentTools'
+import type { CallPlan } from '../lib/protocol'
+import { parseRoundPhases } from '../lib/protocol'
 import type { ChatMsg, ThinkingBlock } from '../lib/types'
 
 /** Compact display of a tool call's target. */
@@ -157,6 +159,54 @@ function ThinkingBlocks({ m }: { m: ChatMsg }) {
 }
 
 /**
+ * M22 — PHASE 2, the tool_call listing: one compact line under the
+ * thinking, « Plan : 3 appels — Titre A · Titre B · Titre C » (or the
+ * no_tool signature). Born from the EXACT [TOOL_LISTING] header — absent
+ * header, absent line: a miss is never listed.
+ */
+function ListingLine({ plan }: { plan: CallPlan }) {
+  if (plan.kind === 'no_tool') {
+    return (
+      <div className="round-listing" data-test="round-listing" data-kind="no_tool">
+        <span className="listing-glyph" aria-hidden="true">⌥</span> Plan : aucun outil — réponse finale
+      </div>
+    )
+  }
+  return (
+    <div className="round-listing" data-test="round-listing" data-kind="calls" data-count={plan.count}>
+      <span className="listing-glyph" aria-hidden="true">⌥</span> Plan : {plan.count} appel{plan.count > 1 ? 's' : ''}
+      {plan.titles.length > 0 ? <span className="listing-titles"> — {plan.titles.join(' · ')}</span> : null}
+    </div>
+  )
+}
+
+/**
+ * M22 — PHASE 5, the feedback card: what the harness answered THIS round
+ * (protocol deviations, drops, broken contract). Folded by default — the
+ * pilot opens it only when the model needed correcting.
+ */
+function FeedbackCard({ note }: { note: string }) {
+  const [open, setOpen] = useState(false)
+  const bullets = note.split('\n').filter((l) => l.startsWith('- ')).length
+  return (
+    <div className="round-feedback" data-test="round-feedback" data-open={open}>
+      <button type="button" className="round-feedback-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <svg className="chev" viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true" style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s var(--ease)' }}>
+          <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span className="round-feedback-title">Feedback du harness</span>
+        {bullets > 0 ? (
+          <span className="round-feedback-meta">
+            {bullets} rappel{bullets > 1 ? 's' : ''}
+          </span>
+        ) : null}
+      </button>
+      {open ? <pre className="round-feedback-body">{note}</pre> : null}
+    </div>
+  )
+}
+
+/**
  * One GROUP of tool calls (M15 grouped, M18 Z.ai-style): the calls of a
  * same model round run in parallel and land together — ONE collapsible
  * card whose HEAD aggregates them by tool (« 8 fichiers lus · 2 commandes
@@ -203,35 +253,55 @@ function ToolGroup({ rows }: { rows: readonly ChatMsg[] }) {
 }
 
 /**
- * M21 — ONE ROUND of the agent's turn, as a TREE (the Z.ai look): the titled
- * thinking that opened the round sits at the top, and the round's tool calls
- * hang NESTED beneath it — one visual block per protocol step, the plan above
- * its execution. After a reload the thinking is gone (never journaled): the
- * tree then stands on the tool group alone, grouped the same way.
+ * M22 — ONE ROUND of the agent's turn, as a TREE of its FIVE PHASES: the
+ * titled thinking (1), the [TOOL_LISTING] line (2), the [MESSAGE] prose
+ * (3), the tool calls nested beneath (4) and the harness's feedback card
+ * (5). Every phase was born from an EXACT header — a phase without its
+ * header is simply absent here (dropped, the feedback card says so).
+ * `rawText` is the honest fallback: the turn ended non-conformantly and the
+ * raw reply still shows. After a reload the thinking is gone (never
+ * journaled): the tree then stands on the listing, message and calls.
  */
-function RoundBlock({ head, rows }: { head?: ChatMsg; rows: ChatMsg[] }) {
+function RoundBlock({ head, rows, protocol }: { head?: ChatMsg; rows: ChatMsg[]; protocol: boolean }) {
   const hasThinking = head !== undefined && head.thinking !== undefined && head.thinking !== ''
+  const phases = protocol && head !== undefined ? parseRoundPhases(head.text) : null
+  const raw = head?.rawText === true
+  const message = raw || phases === null ? (head?.text ?? '') : phases.message
+  const streaming = head?.streaming === true
   return (
     <div className="agent-round" data-test="agent-round">
       {hasThinking ? <ThinkingBlocks m={head} /> : null}
+      {phases?.listing != null ? <ListingLine plan={phases.listing} /> : null}
+      {message !== '' ? (
+        <div className="round-message msg assistant" data-test="round-message">
+          {message}
+          {streaming ? <span className="caret">▍</span> : null}
+        </div>
+      ) : null}
       {rows.length > 0 ? (
         <div className="round-tree" data-test="round-tree">
           <ToolGroup rows={rows} />
         </div>
       ) : null}
+      {head?.feedback !== undefined && head.feedback !== '' ? <FeedbackCard note={head.feedback} /> : null}
     </div>
   )
 }
 
+/** True when a row would open a ROUND: a thinking head, a feedback card, or
+ * tool rows follow (M22 — even an emptied round keeps its phase-5 card). */
+const opensRound = (m: ChatMsg, next?: ChatMsg): boolean =>
+  (m.thinking !== undefined && m.thinking !== '') || m.feedback !== undefined || next?.role === 'tool'
+
 /**
- * The session stream (M11, M12, M15, M18, M21): chat messages, and the
- * agent's rounds — each round is ONE tree block: the titled thinking that
- * opened it, then its tool calls grouped in a single collapsible card,
- * nested beneath. The USER speaks from the right; EVERYTHING the agent
- * produces (thinking, actions, text) stays on the left. The caret marks
- * an ongoing stream.
+ * The session stream (M11, M12, M15, M18, M21, M22): chat messages, and the
+ * agent's rounds — each round is ONE tree block of its five phases: the
+ * titled thinking that opened it, its listing line, its message, its tool
+ * calls grouped in a single collapsible card nested beneath, and the
+ * harness's feedback card. The USER speaks from the right; EVERYTHING the
+ * agent produces stays on the left. The caret marks an ongoing stream.
  */
-export function ChatView({ messages }: { messages: readonly ChatMsg[] }) {
+export function ChatView({ messages, protocol = false }: { messages: readonly ChatMsg[]; protocol?: boolean }) {
   if (messages.length === 0) {
     return (
       <div className="chat">
@@ -256,12 +326,10 @@ export function ChatView({ messages }: { messages: readonly ChatMsg[] }) {
       </div>
     )
   }
-  // M21 — the stream is cut into ROUNDS. A round opens on a thinking-only
-  // assistant message (the live protocol head) and swallows the tool rows
-  // that follow it; tool rows without a head (journal replay — the thinking
-  // is never journaled) form their own round. M15's adjacency survives:
-  // the calls of a round arrive together and replay together, so
-  // consecutive tool rows ARE one group — live and after a reload alike.
+  // M22 — the stream is cut into ROUNDS. An assistant row OPENS a round
+  // when it carries a thinking head or when tool rows follow it (live and
+  // journal replay alike — the calls of a round land together); the round
+  // swallows the tool rows that follow. Everything else is a plain message.
   const rendered: Array<
     { kind: 'round'; head?: ChatMsg; rows: ChatMsg[] } | { kind: 'msg'; m: ChatMsg }
   > = []
@@ -275,12 +343,8 @@ export function ChatView({ messages }: { messages: readonly ChatMsg[] }) {
         i++
       }
       rendered.push({ kind: 'round', rows })
-    } else if (
-      m.role === 'assistant' &&
-      m.text.trim() === '' &&
-      (m.thinking ?? '') !== ''
-    ) {
-      // The live protocol head: thinking only, its tools follow.
+    } else if (m.role === 'assistant' && opensRound(m, messages[i + 1])) {
+      // The live protocol head: thinking (or calls to come), its tools follow.
       i++
       const rows: ChatMsg[] = []
       while (i < messages.length && messages[i]!.role === 'tool') {
@@ -297,7 +361,7 @@ export function ChatView({ messages }: { messages: readonly ChatMsg[] }) {
     <div className="chat">
       {rendered.map((item, k) =>
         item.kind === 'round' ? (
-          <RoundBlock key={`r${item.rows[0]?.id ?? item.head?.id ?? k}`} head={item.head} rows={item.rows} />
+          <RoundBlock key={`r${item.rows[0]?.id ?? item.head?.id ?? k}`} head={item.head} rows={item.rows} protocol={protocol} />
         ) : (
           <div key={item.m.id} className={`msg ${item.m.role}`}>
             {item.m.role === 'assistant' && item.m.thinking !== undefined && item.m.thinking !== '' ? (

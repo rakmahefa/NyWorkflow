@@ -162,8 +162,10 @@ function buildTurns(traces: readonly RequestTrace[], toolRows: readonly ChatMsg[
   return turns
 }
 
-/** M17 — the response block of a round card. Nothing when the trace is
- * pre-M17 (no payload captured): honest, not a fake empty answer. */
+/** M22 — the round's FIVE PHASES, each with its header and verdict. Shows
+ * what the model produced per phase, what the harness DROPPED, and what
+ * the feedback engine answered. Pre-M22 traces (no phase facts captured)
+ * keep the honest legacy note. */
 function ResponseView({ trace }: { trace: RequestTrace }) {
   if (trace.firstEvent === undefined) {
     return <p className="act-sub">Réponse non journalisée (trace d’avant M17) — elle est dans model.jsonl.</p>
@@ -171,44 +173,77 @@ function ResponseView({ trace }: { trace: RequestTrace }) {
   const firstOk = trace.firstEvent === 'thinking'
   const titled = (trace.thinkingTitles?.length ?? 0) > 0
   const argsAllOk = (trace.toolCalls ?? []).every((c) => c.argsOk)
+  const m22 = trace.listingOk !== undefined
+  const listing = trace.listing
+  const drops: string[] = []
+  if ((trace.droppedChars ?? 0) > 0) drops.push(`${trace.droppedChars} caractères de prose sans en-tête [MESSAGE]`)
+  if ((trace.brokenToolBlocks ?? 0) > 0) drops.push(`${trace.brokenToolBlocks} bloc${(trace.brokenToolBlocks ?? 0) > 1 ? 's' : ''} d’appel mal formé${(trace.brokenToolBlocks ?? 0) > 1 ? 's' : ''}`)
   return (
     <>
       <p className="act-sub">Protocole</p>
       <p className="act-protocol">
         <span className={`tag ${firstOk ? 'tag-ok' : 'tag-err'}`}>{firstOk ? 'thinking d’abord' : `premier événement : ${trace.firstEvent}`}</span>{' '}
         <span className={`tag ${titled ? 'tag-ok' : 'tag-err'}`}>{titled ? `thinking titré (${trace.thinkingTitles?.length})` : 'thinking non titré'}</span>{' '}
+        {m22 ? (
+          <span className={`tag ${trace.listingOk ? 'tag-ok' : 'tag-err'}`}>
+            {(listing ?? null) === null ? 'listing absent' : trace.listingOk ? `listing tenu (${(listing ?? '').slice(0, 40)})` : 'listing non tenu'}
+          </span>
+        ) : null}
+        {m22 ? (
+          <span className={`tag ${(trace.messageChars ?? 0) > 0 ? 'tag-ok' : 'tag-warn'}`}>
+            {(trace.messageChars ?? 0) > 0 ? `message ${(trace.messageChars ?? 0)} car.` : 'message absent'}
+          </span>
+        ) : null}
         {(trace.toolCalls ?? []).length > 0 ? (
           <span className={`tag ${argsAllOk ? 'tag-ok' : 'tag-err'}`}>{argsAllOk ? 'arguments valides' : 'arguments mal formés'}</span>
         ) : null}
         {trace.systemChars !== undefined ? <span className="tag">ICM {trace.systemChars.toLocaleString('fr-FR')} car.</span> : null}
       </p>
+      {drops.length > 0 ? (
+        <>
+          <p className="act-sub">Drops du round (jamais affichés, jamais exécutés)</p>
+          <ul className="act-calls" data-test="act-drops">
+            {drops.map((d, i) => (
+              <li key={i}>
+                <span className="tag tag-err">droppé</span> {d}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
       {trace.feedback !== undefined && trace.feedback !== '' ? (
         <>
-          <p className="act-sub">Rappel de protocole renvoyé au modèle (mentor)</p>
+          <p className="act-sub">Feedback renvoyé au modèle (phase 5)</p>
           <pre className="act-mentor" data-test="act-mentor">{trace.feedback}</pre>
         </>
       ) : null}
       {trace.thinkingTitles !== undefined && trace.thinkingTitles.length > 0 ? (
         <>
-          <p className="act-sub">Titres du thinking</p>
+          <p className="act-sub">Phase 1 — Titres du thinking</p>
           <p className="act-titles">{trace.thinkingTitles.join(' · ')}</p>
         </>
       ) : null}
       {trace.thinking !== undefined && trace.thinking !== '' ? (
         <>
-          <p className="act-sub">Thinking (extrait)</p>
+          <p className="act-sub">Phase 1 — Thinking (extrait)</p>
           <pre>{trace.thinking}</pre>
         </>
       ) : null}
-      {trace.text !== undefined && trace.text !== '' ? (
+      {listing != null && listing !== '' ? (
         <>
-          <p className="act-sub">Réponse du modèle (extrait)</p>
-          <pre>{trace.text}</pre>
+          <p className="act-sub">Phase 2 — Listing annoncé</p>
+          <pre>{listing}</pre>
+        </>
+      ) : null}
+      {m22 ? (
+        <>
+          <p className="act-sub">Phase 3 — Message en-têté</p>
+          <pre>{(trace.messageChars ?? 0) > 0 ? `${trace.messageChars} caractères (extrait : ${trace.text !== undefined ? trace.text.slice(0, 200) : '—'})` : '(absent)'}</pre>
         </>
       ) : null}
       {trace.toolCalls !== undefined && trace.toolCalls.length > 0 ? (
         <>
-          <p className="act-sub">Tool calls émis</p>
+          <p className="act-sub">Phase 4 — Tool calls émis</p>
           <ul className="act-calls">
             {trace.toolCalls.map((c, i) => (
               <li key={`${c.tool}-${i}`}>
@@ -218,6 +253,16 @@ function ResponseView({ trace }: { trace: RequestTrace }) {
               </li>
             ))}
           </ul>
+        </>
+      ) : null}
+      {!m22 ? (
+        <>
+          {trace.text !== undefined && trace.text !== '' ? (
+            <>
+              <p className="act-sub">Réponse du modèle (extrait)</p>
+              <pre>{trace.text}</pre>
+            </>
+          ) : null}
         </>
       ) : null}
     </>

@@ -1,12 +1,12 @@
-// M20/M21 — LE MENTOR + LE CONTRAT D'APPELS, de bout en bout sur l'app
-// réelle (maquette amont) : un modèle qui saute le thinking, n'instruit pas
-// le title de son appel et n'annonce pas son plan (les écarts EXACTS des
-// logs 2026-11-18-ebbe, le contrat M21 en plus) doit voir son groupe
-// REFUSÉ — la note [HARNESS — protocole] part au round suivant, vérifiée
-// SUR LE FIL (la maquette enregistre les requêtes), dans l'UI (l'onglet
-// Activité montre le rappel sur la carte du round), et dans model.jsonl
-// (le champ feedback de la model.response fautive). La maquette se
-// CORRIGE alors : le groupe conforme s'exécute.
+// M20/M21/M22 — LE MENTOR + LE CONTRAT D'APPELS + LES CINQ PHASES, de bout
+// en bout sur l'app réelle (maquette amont) : un modèle qui saute le
+// thinking, n'instruit pas le title de son appel et n'émet pas la section
+// [TOOL_LISTING] (les écarts EXACTS des logs 2026-11-18-ebbe) doit voir
+// son groupe REFUSÉ — la note [HARNESS — feedback] part au round suivant,
+// vérifiée SUR LE FIL (la maquette enregistre les requêtes), dans l'UI (la
+// carte de feedback du round + l'onglet Activité), et dans model.jsonl (le
+// champ feedback de la model.response fautive). La maquette se CORRIGE
+// alors : le groupe conforme s'exécute.
 import { expect, test } from '@playwright/test'
 import { newSessionViaDialog } from './helpers.mjs'
 
@@ -17,8 +17,8 @@ test('mentor : l’écart de protocole est renvoyé au modèle, visible et journ
   const title = `Mentor ${Date.now()}`
   await newSessionViaDialog(page, title)
 
-  // Le tour non conforme : appel sans thinking ni title ni annonce PLAN.
-  // M21 — le groupe est REFUSÉ (contrat non tenu), puis la maquette se
+  // Le tour non conforme : appel sans thinking ni title ni listing.
+  // M21/M22 — le groupe est REFUSÉ (contrat non tenu), puis la maquette se
   // corrige : l'appel titré et annoncé s'exécute, la conclusion arrive.
   const box = page.getByLabel('Message')
   await box.fill('AGENTNONCONFORME va contre le protocole')
@@ -29,7 +29,7 @@ test('mentor : l’écart de protocole est renvoyé au modèle, visible et journ
 
   // SUR LE FIL : la maquette a enregistré les requêtes de CE tour —
   // round 1 sans rappel (le mentor se tait avant l'écart), round 2 avec
-  // la note [HARNESS — protocole] en DERNIER message — le refus du
+  // la note [HARNESS — feedback] en DERNIER message — le refus du
   // contrat, juste après la réponse fautive qu'il corrige.
   const res = await page.request.get(`${MOCK}/__requests`)
   expect(res.ok()).toBe(true)
@@ -43,16 +43,22 @@ test('mentor : l’écart de protocole est renvoyé au modèle, visible et journ
   expect((r1.messages ?? []).some((m) => typeof m.content === 'string' && m.content.startsWith('[HARNESS — '))).toBe(false)
   const last = r2.messages.at(-1)
   expect(last?.role).toBe('user')
-  expect(String(last?.content)).toContain('[HARNESS — protocole, round 1]')
-  expect(String(last?.content)).toContain('<thinking>')
+  expect(String(last?.content)).toContain('[HARNESS — feedback, round 1]')
+  expect(String(last?.content)).toContain('<thinking')
   expect(String(last?.content)).toContain('`title`')
-  // M21 — le refus du contrat : le groupe non conforme n'a PAS été exécuté.
+  // M21/M22 — le refus du contrat : le groupe non conforme n'a PAS été exécuté.
   expect(String(last?.content)).toContain('PAS été exécuté')
   expect(String(last?.content)).toContain('RÉÉMETS le groupe complet')
   // Le round refusé n'a produit AUCUN résultat d'outil (rien n'a tourné).
   expect(r2.messages.map((m) => m.role)).not.toContain('tool')
 
-  // DANS L'UI : l'onglet Activité porte le rappel sur la carte du round.
+  // DANS L'UI : la carte de feedback du round refusé (phase 5, repliée).
+  const feedbackCard = page.locator('[data-test="round-feedback"]').first()
+  await expect(feedbackCard).toBeVisible()
+  await feedbackCard.locator('.round-feedback-head').click()
+  await expect(feedbackCard.locator('.round-feedback-body')).toContainText('[HARNESS — feedback, round 1]')
+
+  // DANS L'ONGLET ACTIVITÉ : le même feedback sur la carte du round.
   await page.locator('[data-test="tab-activity"]').click()
   const turnBlock = page.locator('[data-test="act-turn"]').last()
   await turnBlock.locator('.turn-head').click()
@@ -60,7 +66,7 @@ test('mentor : l’écart de protocole est renvoyé au modèle, visible et journ
   await roundCard.locator('.act-head').click()
   const mentor = roundCard.locator('[data-test="act-mentor"]')
   await expect(mentor).toBeVisible()
-  await expect(mentor).toContainText('[HARNESS — protocole, round 1]')
+  await expect(mentor).toContainText('[HARNESS — feedback, round 1]')
 
   // DANS LE JOURNAL : model.jsonl porte le refus AVEC la réponse fautive
   // (champ feedback de la model.response du round 1 — M21).
@@ -76,6 +82,6 @@ test('mentor : l’écart de protocole est renvoyé au modèle, visible et journ
     .map((l) => JSON.parse(l) as { kind?: string; feedback?: string })
     .find((r) => r.kind === 'model.response' && r.feedback !== undefined)
   expect(refused).toBeDefined()
-  expect(refused!.feedback).toContain('[HARNESS — protocole, round 1]')
+  expect(refused!.feedback).toContain('[HARNESS — feedback, round 1]')
   expect(refused!.feedback).toContain('PAS été exécuté')
 })

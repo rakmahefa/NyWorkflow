@@ -149,6 +149,16 @@ export interface ModelResponseSummary {
   thinking?: string
   text?: string
   toolCalls: ResponseToolCall[]
+  /** M22 — phase 2: the [TOOL_LISTING] raw content (null when absent). */
+  listing?: string | null
+  /** M22 — phase 2 verdict: the listing holds against the decoded calls. */
+  listingOk?: boolean
+  /** M22 — phase 3: characters of headered [MESSAGE] prose. */
+  messageChars?: number
+  /** M22 — characters of headerless prose DROPPED (never displayed). */
+  droppedChars?: number
+  /** M22 — malformed {{tool blocks that stayed in the text (dropped). */
+  brokenToolBlocks?: number
   error?: string
 }
 

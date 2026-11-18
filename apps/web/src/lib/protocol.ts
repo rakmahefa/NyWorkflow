@@ -1,34 +1,59 @@
 import { AGENT_TOOLS } from './agentTools'
 
 /**
- * M20 — LE MENTOR : la boucle de rétroaction protocole.
+ * M22 — LES CINQ PHASES DU TOUR, chacune née d'un EN-TÊTE EXACT.
  *
- * Piloté par les logs réels de la session 2026-11-18-ebbe : le modèle
- * suivait le protocole trois temps… sauf quand il ne le suivait pas —
- * thinking absent aux rounds 3 et 5 de la tâche arcade (2/7), `ls .`
- * exécuté trois fois pour un « hi » (rounds 1, 4, 5 — résultats
- * identiques), gabarits relus alors que l'ICM les charge à chaque tour.
- * Le harness JOURNALISAIT ces écarts (model.jsonl, protocol.*) mais ne
- * les disait JAMAIS au modèle : il n'était jamais corrigé.
+ * Demandé par le pilote au retour du M21 : le contrat d'appels tenait
+ * l'annonce dans le thinking (une ligne PLAN:), mais le modèle qui « miss »
+ * restait visible — un appel mal formé redevenait de la prose, une prose
+ * sans signature terminait le tour, et rien ne séparait les phases. M22
+ * refonde le tour en CINQ PHASES SÉPARÉES, dans le backend comme dans les
+ * deux UI :
  *
- * Le mentor referme la boucle : après chaque round, le harness calcule
- * les écarts et RENVOIE au round suivant un rappel de protocole (message
- * préfixé [HARNESS — protocole], journalisé dans model.observation via le
- * champ `feedback`). Le rappel est court, factuel, actionnable — jamais
- * une leçon de morale : le modèle corrige et reprend le travail.
+ *   1. THINKING      — en-tête exact : <thinking title="…">…</thinking>
+ *   2. TOOL_LISTING  — en-tête exact : [TOOL_LISTING] N tool_calls — [Titres]
+ *                      (ou [TOOL_LISTING] no_tool) — section du TEXTE visible
+ *   3. MESSAGE       — en-tête exact : [MESSAGE] puis la prose au pilote
+ *   4. TOOL_CALLS    — en-tête exact : {{tool {"name": …, "arguments": {…} }} }
+ *                      un bloc par appel — le listing ENGAGE le groupe
+ *   5. FEEDBACK      — en-tête exact : [HARNESS — feedback] — le HARNESS
+ *                      seul écrit cette phase (codée, jamais modelisée)
+ *
+ * La règle du pilote : « chacun devra avoir un entête precis sinon rejete
+ * et ne sera pas affiché nulle part ». Une phase sans son en-tête est
+ * REJETÉE — pas affichée, pas exécutée — et le feedback engine la liste au
+ * modèle : toutes les erreurs, tous les manques droppés (mauvais formatage,
+ * incohérence entre le listing et les appels réels). Le tour ne se termine
+ * QUE par la signature no_tool + [MESSAGE] : le modèle attend le feedback
+ * du harness pour décider de la suite — lui seul ne « s'arrête » plus.
  *
  * Pur et déterministe : tout se teste sans modèle ni réseau.
  */
 
-/** One round's response, as the mentor reads it (stream facts + calls). */
+/** M22 — les EN-TÊTES EXACTS des cinq phases (le contrat orthographique). */
+export const TOOL_LISTING_HEADER = '[TOOL_LISTING]'
+export const MESSAGE_HEADER = '[MESSAGE]'
+export const FEEDBACK_HEADER = '[HARNESS — feedback'
+
+/** M22 — LE FORMAT EXACT d'un appel d'outil, tel que le harness le décode.
+ * La passerelle enseigne la convention en amont (préambule [Tool calling]) ;
+ * le feedback la RAPPELE au moment exact où le modèle se trompe — un appel
+ * en prose n'est jamais exécuté, c'est la leçon des tours cassés. */
+export const TOOL_CALL_FORMAT =
+  '{{tool {"name": "ls", "arguments": {"path": ".", "title": "Lister la racine"}} }}'
+
+/** One round's response, as the feedback engine reads it (stream facts + phases + calls). */
 export interface RoundProtocol {
   round: number
   firstEvent: 'thinking' | 'text' | 'tool_calls' | 'none'
   thinkingChars: number
   thinkingTitles: readonly string[]
-  /** M21 — the thinking TEXT: the PLAN announcement lives at its end. */
+  /** The thinking TEXT (phase 1, streamed through its <thinking> tags). */
   thinking: string
+  /** The RAW visible text of the round (listing + message + drops, en-têtes compris). */
   text: string
+  /** M22 — the same text, cut into phases by their exact headers. */
+  phases: RoundPhases
   toolCalls: readonly RoundToolCall[]
 }
 
@@ -39,6 +64,67 @@ export interface RoundToolCall {
   argsOk: boolean
   args: Record<string, unknown>
   rawArgs: string
+}
+
+/**
+ * M22 — the visible text of one round, cut into its phases. Anything that
+ * does not carry an exact header is DROPPED material: never displayed,
+ * never executed — the feedback engine reports it.
+ */
+export interface RoundPhases {
+  /** Phase 2 — the listing parsed from [TOOL_LISTING] (null when absent). */
+  listing: CallPlan | null
+  /** The listing's raw content line (the activity tab shows it as-is). */
+  listingRaw: string
+  /** True when the [TOOL_LISTING] header was present (even if unreadable). */
+  listingPresent: boolean
+  /** Phase 3 — the prose after [MESSAGE] ('' when absent). */
+  message: string
+  /** Headerless prose: DROPPED (never displayed). */
+  droppedText: string
+  /** Characters of dropped prose (the feedback's counter). */
+  droppedChars: number
+  /** Malformed tool blocks that stayed in the text (dropped by the decoder). */
+  brokenToolBlocks: number
+}
+
+/**
+ * Parses the visible text of a round into its phases, by exact headers.
+ * Tolerant while streaming (a half-written header simply does not match
+ * yet); idempotent and pure. The FIRST [TOOL_LISTING] wins, every
+ * [MESSAGE] (re)opens the prose section, header lines are never prose.
+ */
+export function parseRoundPhases(text: string): RoundPhases {
+  const lines = text.split('\n')
+  let listingRaw: string | null = null
+  const messageLines: string[] = []
+  const droppedLines: string[] = []
+  let inMessage = false
+  for (const line of lines) {
+    const head = line.match(/^\s*\[(?:tool_listing|message)\]\s*/i)
+    if (head !== null) {
+      if (/^\s*\[\s*tool_listing\s*\]/i.test(line)) {
+        if (listingRaw === null) listingRaw = line.slice(head[0].length)
+        inMessage = false // le listing ne fait pas partie de la prose
+      } else {
+        inMessage = true
+        const rest = line.slice(head[0].length)
+        if (rest.trim() !== '') messageLines.push(rest)
+      }
+      continue
+    }
+    ;(inMessage ? messageLines : droppedLines).push(line)
+  }
+  const droppedText = droppedLines.join('\n').trim()
+  return {
+    listing: listingRaw === null ? null : parseCallPlan(listingRaw),
+    listingRaw: listingRaw ?? '',
+    listingPresent: listingRaw !== null,
+    message: messageLines.join('\n').trim(),
+    droppedText,
+    droppedChars: droppedText.length,
+    brokenToolBlocks: (text.match(/\{\{tool/g) ?? []).length,
+  }
 }
 
 /** The calls already made earlier in the SAME turn — the anti-loop memory. */
@@ -82,57 +168,29 @@ export function normalizeIcmPath(raw: string): string {
   return raw.replace(/^\.\//, '').replace(/^\.workspace\//, '').replace(/^\/+/, '')
 }
 
-/** The nudge for a round that produced NOTHING (no text, no calls) — the
- * "missed tool_calls" case: the turn would otherwise end on an empty
- * answer. The mentor nudges ONCE per turn, then gives up honestly. */
-export const EMPTY_RESPONSE_NUDGE =
-  '[HARNESS — protocole] Ta dernière réponse était VIDE : ni texte, ni tool_calls. ' +
-    'Reprends le protocole trois temps — thinking titré, puis SOIT des tool_calls groupés (avec leur title) pour agir, ' +
-    'SOIT la réponse finale en prose pour le pilote. Une réponse vide n’est jamais une réponse.'
-
-/** M21 — no_tool was emitted WITHOUT the final prose it must accompany:
- * nudged once, then the turn ends honestly. */
-export const NO_TOOL_EMPTY_PROSE_NUDGE =
-  '[HARNESS — protocole] Tu as émis no_tool SANS la prose finale : l’appel no_tool ACCOMPAGNE ta réponse au pilote ' +
-    'dans la MÊME réponse (thinking titré, puis no_tool, puis la prose). Écris maintenant cette réponse finale.'
-
 /**
- * M21 — LE CONTRAT D’APPELS. Le thinking de chaque round se TERMINE par
- * une ligne d’annonce :
- *
- *   PLAN: 3 tool_calls — [Lire le plan] [Lister inbox] [Vérifier uv]
- *   PLAN: no_tool
- *
- * Le harness compare cette annonce au groupe réellement émis : un groupe
- * qui ne tient pas son contrat n’est PAS exécuté — le modèle relit et
- * réémet. Pur et tolérant aux petites variations (espaces, tirets,
- * « appels » au lieu de « tool_calls »).
+ * M22 — the contract's plan, as the listing announces it. Pur et tolérant
+ * aux petites variations (espaces, « appels », tirets, majuscules) — but
+ * the header itself must have been exact.
  */
 export type CallPlan = { kind: 'calls'; count: number; titles: readonly string[] } | { kind: 'no_tool' }
 
-/** Parses the PLAN announcement out of a thinking block — null when absent. */
-export function parseCallPlan(thinking: string): CallPlan | null {
-  if (thinking === '') return null
-  const lines = thinking.split('\n')
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]!
-    const head = line.match(/^\s*PLAN\s*[:：]\s*/i)
-    if (head === null) continue
-    const rest = line.slice(head[0].length)
-    if (/no[\s_-]*tool/i.test(rest)) return { kind: 'no_tool' }
-    const n = rest.match(/\d+/)
-    if (n === null) return null // annonce présente mais illisible — traitée comme absente
-    const titles = [...rest.matchAll(/\[([^\]]*)\]/g)].map((t) => t[1]!.trim()).filter((t) => t !== '')
-    return { kind: 'calls', count: Number.parseInt(n[0]!, 10), titles }
-  }
-  return null
+/** Parses the CONTENT of a [TOOL_LISTING] line — null when unreadable. */
+export function parseCallPlan(content: string): CallPlan | null {
+  if (content.trim() === '') return null
+  const rest = content.trim()
+  if (/no[\s_-]*tool/i.test(rest)) return { kind: 'no_tool' }
+  const n = rest.match(/\d+/)
+  if (n === null) return null // annonce présente mais illisible — traitée comme absente
+  const titles = [...rest.matchAll(/\[([^\]]*)\]/g)].map((t) => t[1]!.trim()).filter((t) => t !== '')
+  return { kind: 'calls', count: Number.parseInt(n[0]!, 10), titles }
 }
 
 /** Compact render of a plan, for the reminder lines. */
 function planLabel(plan: CallPlan): string {
   return plan.kind === 'no_tool'
-    ? 'PLAN: no_tool'
-    : `PLAN: ${plan.count} tool_calls${plan.titles.length > 0 ? ` — ${plan.titles.map((t) => `« ${t} »`).join(' ')}` : ''}`
+    ? `${TOOL_LISTING_HEADER} no_tool`
+    : `${TOOL_LISTING_HEADER} ${plan.count} tool_calls${plan.titles.length > 0 ? ` — ${plan.titles.map((t) => `[${t}]`).join(' ')}` : ''}`
 }
 
 /** Compact display of a call for the reminder lines. */
@@ -153,9 +211,44 @@ function targetOfArgs(args: Record<string, unknown>): string {
 }
 
 /**
- * The mentor's verdict on ONE round: null when the protocol was followed
- * (the mentor stays silent — no nagging a compliant model), the reminder
- * text otherwise. Pure: same round, same reminder, byte for byte.
+ * The nudge for a round that produced NOTHING (no text, no calls) — the
+ * "missed tool_calls" case: the turn would otherwise end on an empty
+ * answer. Nudged ONCE per turn, then the turn ends honestly.
+ */
+export const EMPTY_RESPONSE_NUDGE =
+  `${FEEDBACK_HEADER}] Ta dernière réponse était VIDE : ni texte, ni tool_calls. ` +
+    'Reprends le protocole cinq phases — <thinking title="…">…</thinking>, puis [TOOL_LISTING] (N appels ou no_tool), ' +
+    'puis [MESSAGE] avec ta prose, puis les blocs {{tool …}}. Une réponse vide n’est jamais une réponse.'
+
+/** no_tool was emitted WITHOUT the final prose it must accompany:
+ * nudged once, then the turn ends honestly. */
+export const NO_TOOL_EMPTY_PROSE_NUDGE =
+  `${FEEDBACK_HEADER}] Tu as émis no_tool SANS la prose finale : l’appel no_tool ACCOMPAGNE ta réponse au pilote ` +
+    'dans la MÊME réponse — thinking titré, [TOOL_LISTING] no_tool, [MESSAGE] avec la prose, puis l’appel no_tool. ' +
+    'Écris maintenant cette réponse finale.'
+
+/**
+ * M22 — the UNSIGNED final: prose (even well-headered) without the no_tool
+ * signature does NOT end a turn. The model must wait for the harness's
+ * feedback — and the feedback asks for the signature.
+ */
+export const UNSIGNED_FINAL_NUDGE =
+  `${FEEDBACK_HEADER}] Ta réponse finale n’est pas SIGNÉE : le protocole exige ${TOOL_LISTING_HEADER} no_tool, ` +
+    `puis ${MESSAGE_HEADER} avec ta prose, puis l’appel unique no_tool. Une prose seule ne termine jamais un tour — ` +
+    'réémets la réponse complète, signée, ou continue le travail avec de vrais appels.'
+
+/** The five phases, as the feedback's tail teaches them back. */
+const PROTOCOL_TAIL =
+  'Reprends le protocole cinq phases : <thinking title="…">…</thinking>, puis [TOOL_LISTING] N tool_calls — [Titres] ' +
+    '(ou [TOOL_LISTING] no_tool), puis [MESSAGE] (ta prose au pilote, AVANT les appels), puis un bloc {{tool {…} }} par appel. ' +
+    'Le harness exécute le groupe et te répond — c’est son feedback qui décide de la suite.'
+
+/**
+ * The feedback engine's verdict on ONE round: null when every phase held
+ * (a compliant model is never nagged), the reminder text otherwise. Pure:
+ * same round, same reminder, byte for byte. M22 — the header is the phase-5
+ * one, and the verdict lists the DROPS (headerless prose, malformed blocks,
+ * broken contract) alongside the mentor's form deviations.
  */
 export function protocolFeedback(
   ctx: RoundProtocol,
@@ -164,27 +257,27 @@ export function protocolFeedback(
 ): string | null {
   const lines = protocolLines(ctx, memory, icmContextPaths)
   if (lines.length === 0) return null
-  const head = `[HARNESS — protocole, round ${ctx.round}]`
-  const tail = 'Reprends le protocole : thinking titré en premier, puis tool_calls groupés (avec leur title) ou la réponse finale.'
-  return [head, ...lines.map((l) => `- ${l}`), tail].join('\n')
+  return [`${FEEDBACK_HEADER}, round ${ctx.round}]`, ...lines.map((l) => `- ${l}`), PROTOCOL_TAIL].join('\n')
 }
 
 /**
- * M21 — the REDO note: the group did NOT hold its contract, the harness
+ * M21/M22 — the REDO note: the group did NOT hold its contract, the harness
  * did NOT execute it. The model must re-read what it did and re-emit the
  * complete group. All the round's other deviations ride along (one note,
  * not two).
  */
 export function planRedoNote(round: number, lines: readonly string[]): string {
   return [
-    `[HARNESS — protocole, round ${round}]`,
+    `${FEEDBACK_HEADER}, round ${round}]`,
     ...lines.map((l) => `- ${l}`),
-    'Ce groupe d’appels n’a PAS été exécuté (contrat non tenu). Relis ce que tu as fait, relis ton PLAN, puis RÉÉMETS le groupe complet : le nombre d’appels annoncé, chacun avec son `title` — la logique du tour reprendra proprement.',
+    `Ce groupe d’appels n’a PAS été exécuté (contrat non tenu : le listing et le groupe émis ne coïncident pas). ` +
+      `Relis ce que tu as fait, relis ton ${TOOL_LISTING_HEADER}, puis RÉÉMETS le groupe complet : le nombre d’appels annoncé, ` +
+      `chacun dans son bloc — format exact : ${TOOL_CALL_FORMAT} — la logique du tour reprendra proprement.`,
   ].join('\n')
 }
 
-/** The mentor's bullet lines for one round — pure, exported for the redo
- * note (M21): same deviations, two wrappings. */
+/** The feedback engine's bullet lines for one round — pure, exported for the
+ * redo note: same deviations, two wrappings. */
 export function protocolLines(
   ctx: RoundProtocol,
   memory: ProtocolMemory,
@@ -192,36 +285,39 @@ export function protocolLines(
 ): string[] {
   const lines: string[] = []
   const calls = ctx.toolCalls
-  const saidSomething = ctx.text.trim() !== '' || ctx.thinkingChars > 0
-  const plan = parseCallPlan(ctx.thinking)
+  const phases = ctx.phases
+  const plan = phases.listing
   const realCalls = calls.filter((c) => c.tool !== 'no_tool')
   const hasNoTool = calls.some((c) => c.tool === 'no_tool')
   const onlyNoTool = hasNoTool && realCalls.length === 0
 
-  // 1. The titled thinking OPENS every response — the logs' most frequent
-  //    violation (rounds 3 and 5 of the arcade task skipped it entirely).
-  if (ctx.firstEvent !== 'thinking' && (calls.length > 0 || saidSomething)) {
+  // PHASE 1 — the titled thinking OPENS every response (the logs' most
+  // frequent violation).
+  if (ctx.firstEvent !== 'thinking' && (calls.length > 0 || ctx.text.trim() !== '' || ctx.thinkingChars > 0)) {
     const began =
       ctx.firstEvent === 'text' ? 'du texte visible' : ctx.firstEvent === 'tool_calls' ? 'des tool_calls' : 'rien'
     lines.push(
-      `Ta réponse doit S’OUVRIR par un bloc <thinking> titré — ce round-ci, elle a commencé par ${began}.`,
+      `Ta réponse doit S’OUVRIR par un bloc <thinking title="…">…</thinking> — ce round-ci, elle a commencé par ${began}.`,
     )
   } else if (ctx.thinkingChars > 0 && ctx.thinkingTitles.length === 0) {
     lines.push('Ton bloc thinking n’a pas de title — donne-lui un titre court (« Comprendre la demande »…).')
   }
 
-  // 1bis. M21 — LE CONTRAT D’APPELS : l’annonce PLAN clôt le thinking, le
-  // groupe émis doit la tenir. (Le refus pur et simple du groupe — le
-  // « réémet » — est décidé par la boucle, pas ici : ces lignes documentent
-  // l’écart, y compris quand la boucle exécute malgré tout.)
+  // PHASE 2 — LE LISTING ENGAGE LE GROUPE : l'en-tête [TOOL_LISTING] précède
+  // les appels, le groupe émis doit le tenir. (Le refus pur et simple du
+  // groupe est décidé par la boucle : ces lignes documentent l'écart.)
   if (calls.length > 0 && !onlyNoTool) {
-    if (plan === null) {
+    if (!phases.listingPresent) {
       lines.push(
-        'Ton thinking ne se termine pas par l’annonce du plan — dernière ligne attendue : « PLAN: 3 tool_calls — [Titre A] [Titre B] [Titre C] » (ou « PLAN: no_tool » avant la prose finale).',
+        `Ta section ${TOOL_LISTING_HEADER} est absente — elle annonce le contrat AVANT les appels : ${TOOL_LISTING_HEADER} 3 tool_calls — [Titre A] [Titre B] [Titre C] (ou ${TOOL_LISTING_HEADER} no_tool avant la prose finale).`,
+      )
+    } else if (plan === null) {
+      lines.push(
+        `Ton ${TOOL_LISTING_HEADER} est illisible — compte attendu : ${TOOL_LISTING_HEADER} 2 tool_calls — [Titre A] [Titre B].`,
       )
     } else if (plan.kind === 'no_tool') {
       lines.push(
-        `Tu as annoncé « PLAN: no_tool » puis émis ${realCalls.length} tool_call${realCalls.length > 1 ? 's' : ''} — l’un ou l’autre : no_tool s’émet SEUL, en fin de tour, sans autre appel.`,
+        `Tu as annoncé ${TOOL_LISTING_HEADER} no_tool puis émis ${realCalls.length} tool_call${realCalls.length > 1 ? 's' : ''} — l’un ou l’autre : no_tool s’émet SEUL, en fin de tour, sans autre appel.`,
       )
     } else {
       if (hasNoTool) {
@@ -229,16 +325,16 @@ export function protocolLines(
       }
       if (plan.count !== realCalls.length) {
         lines.push(
-          `Ton plan annonçait ${plan.count} tool_call${plan.count > 1 ? 's' : ''} et tu en as émis ${realCalls.length} — le compte annoncé et le groupe émis doivent coïncider EXACTEMENT.`,
+          `Ton listing annonçait ${plan.count} tool_call${plan.count > 1 ? 's' : ''} et tu en as émis ${realCalls.length} — le compte annoncé et le groupe émis doivent coïncider EXACTEMENT.`,
         )
       }
       if (plan.titles.length === 0 && realCalls.length > 0) {
-        lines.push('Ton annonce PLAN: ne liste pas les titres — « PLAN: 2 tool_calls — [Titre A] [Titre B] » les porte entre crochets.')
+        lines.push(`Ton ${TOOL_LISTING_HEADER} ne liste pas les titres — « ${TOOL_LISTING_HEADER} 2 tool_calls — [Titre A] [Titre B] » les porte entre crochets.`)
       }
     }
   }
 
-  // 2. Tool_calls hygiene: titles, strict JSON args, known tools.
+  // PHASE 4 — tool_calls hygiene: titles, strict JSON args, known tools.
   const untitled = calls.filter((c) => c.title === '').length
   if (untitled > 0) {
     lines.push(`${untitled === 1 ? '1 tool_call est' : `${untitled} tool_calls sont`} sans argument \`title\` — chaque appel porte son titre court.`)
@@ -254,17 +350,22 @@ export function protocolLines(
     lines.push(`Outil inconnu : ${unknown.map((t) => `« ${t} »`).join(', ')} — les outils déclarés sont ${[...KNOWN_TOOLS].join(', ')}.`)
   }
 
-  // 3. The response STOPS after the calls: prose alongside tool_calls
-  //    breaks the protocol (the text is sent before the results exist).
-  //    M21 — EXCEPT no_tool: its final prose follows the call in the same
-  //    response (nothing to wait for) — that IS the designed ending.
-  if (calls.length > 0 && !onlyNoTool && ctx.text.trim() !== '') {
-    lines.push('Du texte visible accompagne tes tool_calls — termine ta réponse après les appels (le protocole : thinking, puis appels OU prose finale).')
+  // PHASE 3/4 — LES DROPS M22 : la prose sans en-tête n'est jamais affichée ;
+  // les blocs d'appel mal formés ne sont jamais décodés. Le feedback les
+  // liste TOUS — c'est la règle du pilote : le modèle apprend ce qui a été
+  // droppé et pourquoi, la logique du tour ne casse pas.
+  if (phases.droppedChars > 0) {
+    lines.push(
+      `${phases.droppedChars} caractères de prose sans en-tête ${MESSAGE_HEADER} ont été DROPPÉS (jamais affichés au pilote) — la prose au pilote vit dans la section ${MESSAGE_HEADER}, AVANT les appels.`,
+    )
+  }
+  if (phases.brokenToolBlocks > 0) {
+    lines.push(
+      `${phases.brokenToolBlocks === 1 ? '1 bloc d’appel mal formé a été' : `${phases.brokenToolBlocks} blocs d’appel mal formés ont été`} DROPPÉ${phases.brokenToolBlocks > 1 ? 'S' : ''} (non décodés, non exécutés) — format exact d’un appel : ${TOOL_CALL_FORMAT}`,
+    )
   }
 
-  // 4. Redundancy — the « hi » lesson: `ls .` three times, identical
-  //    results, two rounds lost. Within the group first, then across the
-  //    turn's earlier rounds, then the ICM files already in the prompt.
+  // Redundancy — the « hi » lesson: `ls .` three times, identical results.
   const inGroup = new Map<string, number>()
   for (const c of calls) {
     const key = callKey(c)

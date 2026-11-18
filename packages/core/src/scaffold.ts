@@ -10,7 +10,7 @@
  *   ├── .workspace/          ← l'ICM complet (caché)
  *   │   ├── CONTEXT.md       la charte — mission, méthode, règles
  *   │   ├── harness/         la doc du harness : charte chargée + moteur
- *   │   ├── tools/           le protocole trois temps + une fiche par outil
+ *   │   ├── tools/           le protocole cinq phases + une fiche par outil
  *   │   ├── skills/          l'arsenal : évaluation + registre (M19)
  *   │   ├── inbox/           entrées du pilote
  *   │   ├── notes/           plan, tâches, journal, décisions
@@ -119,7 +119,7 @@ l'agent lit. Remplace ce paragraphe, puis supprime cette parenthèse.)
 |---|---|
 | \`.workspace/CONTEXT.md\` | cette charte — mission, méthode, règles |
 | \`.workspace/harness/\` | la doc du harness : charte chargée à chaque tour + le moteur en profondeur |
-| \`.workspace/tools/\` | le protocole trois temps (chargé) + une fiche rigoureuse par outil |
+| \`.workspace/tools/\` | le protocole cinq phases (chargé) + une fiche rigoureuse par outil |
 | \`.workspace/skills/\` | ton arsenal : le protocole d'évaluation + le registre des skills (chargés) ; une skill = un dossier lu à la demande |
 | \`.workspace/inbox/\` | entrées déposées par le pilote (à lire, puis à vider) |
 | \`.workspace/notes/plan.md\` | le plan vivant : objectif, étapes, statut |
@@ -143,8 +143,9 @@ jamais un CONTEXT.md).
 
 ## Outils
 
-Neuf outils, un contrat — le **protocole trois temps** : thinking titré
-d'abord, action (tool_calls parallèles et titrés), puis ATTENTE du groupe
+Neuf outils, un contrat — le **protocole cinq phases** : thinking titré
+d'abord, listing du contrat, prose dans [MESSAGE], action (tool_calls
+parallèles et titrés), puis ATTENTE du feedback du harness sur le groupe
 entier des résultats. Le contrat et le catalogue vivent dans
 \`.workspace/tools/CONTEXT.md\` (chargé à chaque tour) ; la fiche
 rigoureuse de chaque outil (arguments exacts, lancements corrects,
@@ -218,7 +219,7 @@ te pilote, ce contrat est le même.
 - Il **recharge l’ICM** (l’arbre a pu grandir depuis le tour précédent).
 - Il **exécute tes tool_calls en parallèle et en arrière-plan**, puis te
   renvoie le groupe ENTIER des résultats, dans un format défini — voir
-  \`tools/CONTEXT.md\` (le protocole trois temps).
+  \`tools/CONTEXT.md\` (le protocole cinq phases).
 - Il **journalise** chaque appel, chaque résultat, chaque décision — le
   journal est la vérité des échanges.
 - Il **garde la sécurité** : selon le niveau de la session, tes écritures
@@ -227,8 +228,9 @@ te pilote, ce contrat est le même.
 
 ## Ce que le harness attend de toi
 
-- Le **protocole trois temps** à chaque réponse (thinking titré → action →
-  observation) — le détail dans \`tools/CONTEXT.md\`.
+- Le **protocole cinq phases** à chaque réponse (thinking titré → listing
+  → message → action → feedback du harness) — le détail dans
+  \`tools/CONTEXT.md\`.
 - Des **tool_calls corrects** : lis la fiche d’un outil
   (\`tools/<outil>.md\`) avant ta première utilisation ou quand un appel
   échoue.
@@ -252,7 +254,7 @@ function harnessEngine(): string {
   return `# ENGINE — le moteur NyWorkflow en profondeur
 
 La boucle d’un tour, telle que le engine la vit. Utile pour comprendre
-pourquoi le protocole trois temps existe, et ce que deviennent tes appels.
+pourquoi le protocole cinq phases existe, et ce que deviennent tes appels.
 
 ## La boucle de tour (round par round)
 
@@ -260,8 +262,8 @@ pourquoi le protocole trois temps existe, et ce que deviennent tes appels.
 2. **Rechargement de l’ICM** — l’arbre \`.workspace/\` est re-walké, les
    CONTEXT.md (max 12, 32 Kio chacun) rechargés dans ton prompt système.
    Conséquence : ce que tu écris dans l’ICM est VU au round suivant.
-3. **Ton protocole trois temps** — thinking titré, action (tool_calls),
-   puis STOP : tu attends les résultats.
+3. **Ton protocole cinq phases** — thinking titré, listing [TOOL_LISTING],
+   prose [MESSAGE], action (tool_calls), puis STOP : tu attends le feedback.
 4. **Dispatch du groupe** — le engine exécute TOUS les appels du groupe :
    les indépendants en parallèle (Promise.all), les shells longs en
    arrière-plan (jobId rendu immédiat). Sous sécurité « ask », les appels
@@ -307,33 +309,40 @@ l’ICM ne les montre même pas.
 }
 
 /**
- * `tools/CONTEXT.md` — the three-step tool protocol, LOADED each turn.
+ * `tools/CONTEXT.md` — the five-phase tool protocol, LOADED each turn.
  * This is the contract that makes the model's actions reliable whatever
- * the loader: think first, act in parallel, then WAIT for the whole
- * group's results before the next round.
+ * the loader: every phase carries an EXACT header, think first, announce
+ * the listing, prose in [MESSAGE], act in parallel, then WAIT for the
+ * harness's feedback before the next round.
  */
 function toolsContext(): string {
   return `# tools/ — le protocole d’utilisation des outils
 
-Dix outils, un seul contrat. Le protocole trois temps ci-dessous régit
+Dix outils, un seul contrat. Le protocole cinq phases ci-dessous régit
 CHAQUE réponse ; les fiches (\`read.md\`, \`write.md\`, …) documentent chaque
 outil rigoureusement — lis une fiche avant ta première utilisation de
 l’outil, ou quand un appel échoue.
 
-## Le protocole trois temps — à CHAQUE réponse
+## Le protocole cinq phases — à CHAQUE réponse
+
+Chaque phase a son EN-TÊTE EXACT : une phase sans son en-tête est REJETÉE
+(jamais affichée, jamais exécutée) et le feedback du harness te le dit.
 
 1. **Thinking** — d’abord, toujours : tu dialogues avec toi-même dans ton
-   thought process titré (ce que l’ICM sait, ce qui manque, le plan de CE
-   tour), qui se TERMINE par l’annonce \`PLAN:\`. Voir le protocole de
-   réponse dans le prompt système.
-2. **Action** — tu émets tes tool_calls : les appels **indépendants
+   thought process titré. Voir le protocole de réponse dans le prompt système.
+2. **Listing** — ta première ligne visible annonce le contrat :
+   \`[TOOL_LISTING] 3 tool_calls — [Titre A] [Titre B] [Titre C]\` (ou
+   \`[TOOL_LISTING] no_tool\`).
+3. **Message** — ta prose au pilote vit dans la section \`[MESSAGE]\` —
+   toute prose hors de cette section est DROPPÉE.
+4. **Action** — tu émets tes tool_calls : les appels **indépendants
    ENSEMBLE** dans la même réponse (le engine les exécute en parallèle),
-   chacun avec son \`title\`, en nombre EXACTEMENT égal à ton annonce
-   \`PLAN:\`. Puis tu **TERMINES ta réponse** — jamais de texte après les
-   tool_calls, jamais de résultat annoncé avant de l’avoir reçu.
-   Sans outil : \`PLAN: no_tool\`, puis l’appel unique \`no_tool\` accompagne
-   ta prose finale dans la même réponse.
-3. **Observation** — tu **ATTENDS**. Le engine exécute le groupe entier
+   chacun avec son \`title\`, en nombre EXACTEMENT égal à ton listing. Puis
+   tu **TERMINES ta réponse** — jamais de texte après les tool_calls,
+   jamais de résultat annoncé avant de l’avoir reçu.
+   Sans outil : \`[TOOL_LISTING] no_tool\`, la prose dans \`[MESSAGE]\`, puis
+   l’appel unique \`no_tool\` dans la même réponse.
+5. **Observation** — tu **ATTENDS**. Le engine exécute le groupe entier
    et te renvoie, à la fin du protocole, TOUTES les réponses du groupe,
    une par appel, dans ce format :
 
@@ -342,17 +351,17 @@ l’outil, ou quand un appel échoue.
 {"tool": "shell", "title": "Compiler le projet", "ok": false, "error": "…refusé par le pilote"}
 \`\`\`
 
-C’est en recevant ces réponses qu’un **NOUVEAU protocole démarre** :
-retour au temps 1 — thinking, puis la suite (nouveaux tool_calls, ou la
-réponse finale si le travail est fini).
+C’est en recevant ce feedback qu’un **NOUVEAU tour démarre** : le engine
+— pas toi seul — décide de la suite. Un tour ne se termine QUE par la
+signature \`no_tool\`.
 
-## Le contrat d’appels — l’annonce PLAN:
+## Le contrat d’appels — le listing [TOOL_LISTING]
 
-La dernière ligne de ton thinking ENGAGE ta réponse :
+La section \`[TOOL_LISTING]\` ENGAGE ta réponse :
 
 \`\`\`
-PLAN: 3 tool_calls — [Lire le plan] [Lister inbox] [Vérifier uv]
-PLAN: no_tool
+[TOOL_LISTING] 3 tool_calls — [Lire le plan] [Lister inbox] [Vérifier uv]
+[TOOL_LISTING] no_tool
 \`\`\`
 
 - Le **nombre annoncé** doit être le **nombre d’appels émis** — le engine
@@ -362,6 +371,8 @@ PLAN: no_tool
   l’ordre annoncé est l’ordre émis.
 - \`no_tool\` s’émet **SEUL** : c’est la signature de la réponse finale
   sans outil, jamais mélangé à de vrais appels.
+- Un bloc d’appel **mal formé** n’est jamais décodé ni exécuté — format
+  exact : \`{{tool {"name": "…", "arguments": {…}} }}\`.
 
 ## Règles de lancement
 
@@ -534,7 +545,7 @@ function toolFiche(doc: ToolDoc): string {
     `# ${doc.name} — ${doc.role}`,
     '',
     `> Fiche de référence — arguments exacts, lancements corrects, erreurs`,
-    `> courantes. Le contrat général (trois temps, parallèle, format de`,
+    `> courantes. Le contrat général (cinq phases, parallèle, format de`,
     `> réponse) vit dans \`tools/CONTEXT.md\`.`,
     '',
     '## Arguments',
@@ -752,17 +763,17 @@ function toolFiches(): Record<string, string> {
         ['reason', false, 'Pourquoi aucun outil n’est nécessaire ce tour (une ligne, ≤ 200 caractères)'],
       ],
       patterns: [
-        'PLAN: no_tool',
-        'no_tool {"title": "Réponse finale sans outil", "reason": "La réponse vient de l’ICM déjà chargé"}',
+        '[TOOL_LISTING] no_tool',
+        '{{tool {"name": "no_tool", "arguments": {"title": "Réponse finale sans outil", "reason": "La réponse vient de l’ICM déjà chargé"}} }}',
       ],
       parallel:
-        'JAMAIS parallélisable : no_tool s’émet SEUL, comme unique tool_call de sa réponse — il accompagne la prose finale et signe la fin du tour. Sa « prose suit l’appel » est l’exception assumée du protocole : no_tool n’a aucun résultat à attendre.',
+        'JAMAIS parallélisable : no_tool s’émet SEUL, comme unique tool_call de sa réponse — il accompagne la prose finale ([MESSAGE]) et signe la fin du tour. Sa « prose AVANT l’appel » est l’exception assumée du protocole : no_tool n’a aucun résultat à attendre.',
       errors: [
         'Mélanger no_tool à de vrais appels rompt le contrat — le groupe entier est refusé, tu dois le réémettre.',
         'Émettre no_tool SANS la prose finale laisse le tour sans réponse : l’appel accompagne ta réponse, dans la même réponse.',
-        'Annoncer `PLAN: 2 tool_calls` puis émettre no_tool (ou l’inverse) rompt le contrat — l’annonce et le groupe doivent coïncider.',
+        'Annoncer `[TOOL_LISTING] 2 tool_calls` puis émettre no_tool (ou l’inverse) rompt le contrat — le listing et le groupe doivent coïncider.',
       ],
-      related: '`tools/CONTEXT.md` (le contrat d’appels PLAN:), le protocole de réponse du prompt système.',
+      related: '`tools/CONTEXT.md` (le contrat d’appels [TOOL_LISTING]), le protocole de réponse du prompt système.',
     },
   ]
   const out: Record<string, string> = {}

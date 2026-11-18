@@ -208,57 +208,101 @@ export function buildIcmSystemPrompt(icm: IcmWorkspace): string {
     ].join('\n'),
   )
 
-  // 1bis. M16 — the THREE-step response protocol: the SAME contract for
-  // every model, whatever its native thinking channel. (1) The titled
-  // thought process opens EVERY response and CLOSES with the PLAN
-  // announcement (M21 — le contrat d'appels); (2) the action — parallel,
-  // titled tool_calls that MUST hold the announced plan, then the response
-  // STOPS; (3) the observation — the harness returns the WHOLE group's
-  // results in a defined format, and only then does a new protocol start.
-  // The harness parses the titled tag out of the content stream; the block
-  // shows to the pilot as a collapsible card, the work that follows is the
-  // visible answer.
+  // 1bis. M22 — the FIVE-PHASE response protocol: every phase carries an
+  // EXACT header, a phase without its header is REJECTED (never displayed,
+  // never executed) and the harness's feedback says so. (1) THINKING — the
+  // titled tag opens every response; (2) TOOL_LISTING — a headered section
+  // of the visible text announces the calls contract; (3) MESSAGE — the
+  // headered prose to the pilot, BEFORE the calls; (4) TOOL_CALLS — one
+  // {{tool …}} block per call, in EXACTLY the announced count; (5) FEEDBACK
+  // — the harness alone writes it ([HARNESS — feedback]): it executes the
+  // group, checks the contract, lists the drops, and answers. The model
+  // WAITS for that feedback to decide what comes next — a turn ends ONLY
+  // by the no_tool signature.
   sections.push(
     [
-      '# Protocole de réponse — trois temps, à CHAQUE réponse',
+      '# Protocole de réponse — cinq phases, à CHAQUE réponse',
       '',
-      'Chaque réponse que tu émets suit TOUJOURS cet ordre, sans exception — et la boucle se répète tant que le travail n’est pas fini :',
+      'Chaque réponse que tu émets suit TOUJOURS cet ordre, sans exception. Chaque phase a son EN-TÊTE EXACT : ' +
+        'une phase sans son en-tête est REJETÉE — jamais affichée au pilote, jamais exécutée — et le feedback du harness te le dit. ' +
+        'La boucle se répète tant que le travail n’est pas fini :',
       '',
-      '1. **Le temps du thinking, en premier.** Tu dialogues d’abord avec toi-même dans un bloc unique et titré, qui se TERMINE par l’annonce de ton plan d’appels (le CONTRAT du tour) :',
+      '## Phase 1 — THINKING (en-tête : la balise titrée)',
+      '',
+      'Tu dialogues d’abord avec toi-même dans un bloc unique et titré :',
       '',
       '```',
       '<thinking title="titre court de l’étape en cours">',
       '… ton dialogue interne : ce que l’ICM sait déjà, ce qui manque, le plan de CE tour …',
-      'PLAN: 3 tool_calls — [Lire le plan] [Lister inbox] [Vérifier uv]',
       '</thinking>',
       '```',
       '',
-      '   L’annonce `PLAN:` ENGAGE ta réponse : le harness compare le nombre annoncé au nombre d’appels réellement émis —',
-      '   un groupe qui ne tient pas son annonce n’est PAS exécuté, et on te demande de le réémettre conforme. Sans outil :',
-      '   `PLAN: no_tool`, puis l’appel unique `no_tool` accompagne ta prose finale.',
+      '## Phase 2 — TOOL_LISTING (en-tête exact : `[TOOL_LISTING]`)',
       '',
-      '2. **Le temps de l’action.** Tu bascules hors du thought process et tu procèdes au travail :',
-      '   - soit des tool_calls pour agir — tous les appels INDÉPENDANTS ENSEMBLE dans la même réponse (le harness les exécute en parallèle), chacun avec son argument `title` (≤ 60 caractères), en nombre EXACTEMENT égal à ton annonce PLAN. Puis tu TERMINES ta réponse : jamais de texte après les tool_calls, jamais de résultat annoncé avant de l’avoir reçu ;',
-      '   - soit la réponse finale en prose pour le pilote, quand aucun outil n’est nécessaire — précédée de l’appel unique `no_tool` (SEUL, jamais mélangé à d’autres appels) : c’est l’exception assumée du protocole, no_tool n’a aucun résultat à attendre, ta prose suit l’appel dans la même réponse ;',
+      'Ta première ligne de texte visible ANNONCE le contrat d’appels du tour — combien d’appels, lesquels :',
       '',
-      '3. **Le temps de l’observation.** Tu ATTENDS. Le harness exécute le groupe entier (en parallèle et en arrière-plan) et te renvoie, à la fin du protocole, TOUTES les réponses du groupe, une par appel, dans ce format :',
+      '```',
+      '[TOOL_LISTING] 3 tool_calls — [Lire la charte] [Lister inbox] [Vérifier uv]',
+      '```',
+      '',
+      '   Sans outil, l’annonce signe la fin :',
+      '',
+      '```',
+      '[TOOL_LISTING] no_tool',
+      '```',
+      '',
+      '   Le listing ENGAGE ta réponse : le harness compare le compte annoncé aux appels réellement décodés — ' +
+        'un groupe qui ne tient pas son annonce n’est PAS exécuté, et le feedback te demande de le réémettre conforme.',
+      '',
+      '## Phase 3 — MESSAGE (en-tête exact : `[MESSAGE]`)',
+      '',
+      'Ta prose au pilote — une phrase d’intention en cours de travail, ou la réponse finale complète :',
+      '',
+      '```',
+      '[MESSAGE]',
+      'Je lis la charte et l’inbox pour préparer le plan du tour.',
+      '```',
+      '',
+      '   Toute prose HORS de cette section est DROPPÉE (jamais affichée) : le pilote ne lit que ce qui porte l’en-tête.',
+      '',
+      '## Phase 4 — TOOL_CALLS (en-tête exact : un bloc `{{tool …}}` par appel)',
+      '',
+      'Tous les appels INDÉPENDANTS ENSEMBLE dans la même réponse (le harness les exécute en parallèle), chacun avec son ' +
+        'argument `title` (≤ 60 caractères), en nombre EXACTEMENT égal au listing, et tu TERMINES ta réponse après eux :',
+      '',
+      '```',
+      '{{tool {"name": "read", "arguments": {"path": ".workspace/notes/charte.md", "title": "Lire la charte"}} }}',
+      '{{tool {"name": "ls", "arguments": {"path": ".workspace/inbox", "title": "Lister inbox"}} }}',
+      '```',
+      '',
+      '   Un bloc mal formé n’est JAMAIS décodé ni exécuté — il est droppé, et le feedback te le dit avec le format exact. ' +
+        'Pour terminer SANS outil : le listing `no_tool`, la prose dans `[MESSAGE]`, puis l’appel unique `no_tool` (SEUL, jamais mélangé).',
+      '',
+      '## Phase 5 — FEEDBACK (l’en-tête `[HARNESS — feedback]` : le harness SEUL l’écrit)',
+      '',
+      'Tu ATTENDS. Le harness exécute le groupe entier (en parallèle et en arrière-plan) et te renvoie TOUTES les réponses, ' +
+        'une par appel, dans ce format :',
       '',
       '```',
       '{"tool": "read", "title": "Lire la charte", "ok": true, "result": "…"}',
       '{"tool": "shell", "title": "Compiler", "ok": false, "error": "…"}',
       '```',
       '',
-      '   C’est en recevant ces réponses qu’un NOUVEAU protocole démarre — retour au temps 1 : thinking, puis la suite du travail (nouveaux tool_calls, ou réponse finale). Un appel qui DÉPEND du résultat d’un autre attend le protocole suivant.',
+      '   Il peut aussi te parler en propre (messages préfixés `[HARNESS — feedback]`) : écarts de protocole, appels droppés, ' +
+        'contrat non tenu, signature manquante — corrige immédiatement et reprends, sans t’en excuser longuement. ' +
+        'C’est en recevant ce feedback qu’un NOUVEAU tour démarre : le harness — pas toi seul — décide de la suite ; ' +
+        'un tour ne se termine QUE par `[TOOL_LISTING] no_tool` + `[MESSAGE]` + l’appel no_tool.',
       '',
       'Règles du protocole :',
       '- Le bloc `<thinking>` ouvre la réponse, une seule fois, AVANT tout le reste — jamais de prose visible avant lui.',
       '- `title` dit l’étape (« Comprendre la demande », « Planifier le tour », « Vérifier le résultat ») : le pilote le lit replié.',
-      '- `PLAN: N tool_calls — [titres]` clôt le thinking : N et les titres annoncés ENGAGENT ta réponse — le harness vérifie la correspondance et REFUSE le groupe non conforme.',
+      '- `[TOOL_LISTING]` est la PREMIÈRE ligne visible : N et les titres annoncés ENGAGENT la réponse — le harness vérifie la correspondance et REFUSE le groupe non conforme.',
+      '- `[MESSAGE]` porte TOUTE la prose au pilote — la prose sans cet en-tête est droppée.',
+      '- Les blocs `{{tool …}}` FERMENT la réponse — jamais de texte après eux, jamais de résultat annoncé avant de l’avoir reçu.',
       '- `no_tool` s’émet SEUL (jamais mélangé à de vrais appels) : c’est la signature d’une réponse finale sans outil.',
+      '- N’écris JAMAIS la balise `<thinking>` en prose visible (le harness la parserait comme un vrai bloc), ni l’en-tête `[HARNESS — feedback]` (il est réservé au harness).',
       '- Dans le thought process : sois franc, méthodique, bref — ce que tu sais déjà par l’ICM, ce qui manque, ce que tu fais ce tour.',
-      '- N’écris JAMAIS la balise `<thinking>` en prose visible (le harness la parserait comme un vrai bloc).',
-      '- Ton thought process t’appartient : le pilotage du pilote vit dans la prose et les tool_calls.',
-      '- Le harness peut te rappeler le protocole (messages préfixés `[HARNESS — protocole]`, après l’observation) : c’est le temps 3 qui te parle — corrige immédiatement et reprends le travail, sans t’en excuser longuement.',
+      '- Ton thought process t’appartient : le pilotage du pilote vit dans `[MESSAGE]` et les tool_calls.',
     ].join('\n'),
   )
 

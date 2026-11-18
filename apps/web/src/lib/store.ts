@@ -176,15 +176,42 @@ export class SessionStore {
     this.commit()
   }
 
+  /** M22 — attaches the harness's feedback to one round (phase 5): the
+   * chat shows it as a collapsible card INSIDE the round it corrects. */
+  attachFeedback(id: string, feedback: string): boolean {
+    let hit = false
+    this.messages = this.messages.map((m) => {
+      if (m.id !== id) return m
+      hit = true
+      return { ...m, feedback }
+    })
+    if (hit) this.commit()
+    return hit
+  }
+
+  /** M22 — honest fallback: mark one round's text as RAW (headers included)
+   * — a turn that ends non-conformantly still shows what the model wrote. */
+  setRawDisplay(id: string, raw: boolean): boolean {
+    let hit = false
+    this.messages = this.messages.map((m) => {
+      if (m.id !== id) return m
+      hit = true
+      return { ...m, rawText: raw }
+    })
+    if (hit) this.commit()
+    return hit
+  }
+
   /** M12 — settles a trace (duration, outcome, received chars — M17: the
    * response itself: first event, titles, excerpts, tool calls; M20: the
-   * mentor's protocol reminder that was sent to the next round). */
+   * mentor's protocol reminder that was sent to the next round; M22: the
+   * five phases' facts — listing, message, drops). */
   settleTrace(
     id: string,
     patch: Partial<
       Pick<
         RequestTrace,
-        | 'ms' | 'outcome' | 'error' | 'thinkingChars' | 'textChars' | 'firstEvent' | 'thinkingTitles' | 'thinking' | 'text' | 'toolCalls' | 'systemChars' | 'feedback'
+        | 'ms' | 'outcome' | 'error' | 'thinkingChars' | 'textChars' | 'firstEvent' | 'thinkingTitles' | 'thinking' | 'text' | 'toolCalls' | 'systemChars' | 'feedback' | 'listing' | 'listingOk' | 'messageChars' | 'droppedChars' | 'brokenToolBlocks'
       >
     >,
   ): boolean {

@@ -15,7 +15,7 @@ import { fakeReply, streamText } from './lib/fakeLLM'
 import { useGatewayStatus } from './lib/gateway'
 import { toAgentMessages } from './lib/history'
 import { baseModelOf, withThinkLevel } from './lib/modelMeta'
-import { EMPTY_RESPONSE_NUDGE, NO_TOOL_EMPTY_PROSE_NUDGE, ProtocolMemory, parseCallPlan, planRedoNote, protocolFeedback, protocolLines } from './lib/protocol'
+import { EMPTY_RESPONSE_NUDGE, NO_TOOL_EMPTY_PROSE_NUDGE, UNSIGNED_FINAL_NUDGE, ProtocolMemory, parseRoundPhases, planRedoNote, protocolFeedback, protocolLines } from './lib/protocol'
 import { loadDefaultSecurity, SECURITY_HINT, SECURITY_LABEL } from './lib/security'
 import { applyTheme, loadTheme } from './lib/theme'
 import * as api from './lib/sessionApi'
@@ -25,7 +25,7 @@ import type { ChatMsg, RequestTrace, SecurityLevel, SessionInfo } from './lib/ty
 import { APP_VERSION } from './lib/version'
 
 const WELCOME =
-  `Bienvenue dans NyWorkflow (v${APP_VERSION}). Sessions ICM agentiques — chaque session vit dans SON dossier (obligatoire) : l’ICM complet naît dans le dossier caché .workspace/ (charte, plan, tâches, journal, décisions, recherche, mémoire, skills, livrables) et ses logs de profilage dans .logs/<session>/ au même endroit (quatuor : engine, session, activity, model). Le modèle sait qu’il tourne dans ce harness et agit avec ses outils (read, write, ls, glob, mkdir, shell + arrière-plan, websearch, shell_output, shell_kill, no_tool) — il évalue ses moyens et construit dans skills/ les compétences qui manquent : l’arsenal grandit d’une tâche à l’autre. Le protocole trois temps est un CONTRAT : le thinking se termine par l’annonce PLAN: N tool_calls — [titres] (ou PLAN: no_tool), le compte annoncé ENGAGE le groupe — un groupe non conforme n’est pas exécuté, le modèle relit et réémet ; une réponse finale sans outil est signée par l’appel no_tool. Le harness est aussi son mentor : un écart de protocole (thinking manquant, appel sans titre, arguments mal formés, appel redondant) lui est renvoyé au round suivant, et le niveau d’exigence est celui d’un travail professionnel. Niveau de sécurité par session (demander / accepter / aucun outil). Le chat reste épuré : vos messages à droite, l’activité de l’agent à gauche en ARBRES PAR ROUND (le thinking titré, ses appels groupés nichés dessous — « N fichiers lus · N commandes lancées ») ; l’onglet Activité profile chaque tour (rounds, appels, payloads exacts, rappels du mentor et refus de contrat, journaux de la session).`
+  `Bienvenue dans NyWorkflow (v${APP_VERSION}). Sessions ICM agentiques — chaque session vit dans SON dossier (obligatoire) : l’ICM complet naît dans le dossier caché .workspace/ (charte, plan, tâches, journal, décisions, recherche, mémoire, skills, livrables) et ses logs de profilage dans .logs/<session>/ au même endroit (quatuor : engine, session, activity, model). Le modèle sait qu’il tourne dans ce harness et agit avec ses outils (read, write, ls, glob, mkdir, shell + arrière-plan, websearch, shell_output, shell_kill, no_tool) — il évalue ses moyens et construit dans skills/ les compétences qui manquent : l’arsenal grandit d’une tâche à l’autre. Le protocole CINQ PHASES est un CONTRAT d’en-têtes exacts : thinking titré, [TOOL_LISTING] N tool_calls — [titres] (ou no_tool), [MESSAGE] pour la prose, un bloc {{tool …}} par appel, puis le FEEDBACK du harness — une phase sans son en-tête est rejetée (jamais affichée, jamais exécutée) et le feedback engine liste au modèle toutes les erreurs et manques droppés (mauvais formatage, incohérence listing/appels) ; le modèle attend ce feedback pour décider de la suite, et un tour ne se termine QUE par la signature no_tool. Niveau de sécurité par session (demander / accepter / aucun outil). Le chat reste épuré : vos messages à droite, l’activité de l’agent à gauche en ARBRES PAR ROUND aux cinq phases visibles (thinking, listing, message, appels nichés dessous, carte de feedback) ; l’onglet Activité profile chaque tour (rounds, appels, payloads exacts, drops et feedback, journaux de la session).`
 const GATEWAY_DOWN =
   'Passerelle webapi absente — réponses simulées. Elle démarre normalement avec l’application ; ouvrez Paramètres → Passerelle pour le diagnostic, ou vérifiez NYW_WEBAPI_EMBED (0 = désactivée).'
 const MEMORY_FALLBACK =
@@ -245,7 +245,19 @@ export default function App() {
     const openByCallId = new Map<string, ChatMsg>()
     for (const e of events) {
       if (e.type === 'user.message' || e.type === 'assistant.message') {
-        out.push({ id: `${sessionId}:${k++}`, sessionId, role: e.type === 'user.message' ? 'user' : 'assistant', text: e.text, at: Date.parse(e.at) || 0 })
+        // M22 — un message assistant journalisé SANS aucun en-tête de phase
+        // est un journal d'avant M22 (ou une prose non structurée) : il
+        // s'affiche brut — l'hydratation ne rejette pas l'historique ancien.
+        const legacy =
+          e.type === 'assistant.message' && !/\[(?:TOOL_LISTING|MESSAGE)\]/i.test(e.text) && !e.text.includes('{{tool')
+        out.push({
+          id: `${sessionId}:${k++}`,
+          sessionId,
+          role: e.type === 'user.message' ? 'user' : 'assistant',
+          text: e.text,
+          at: Date.parse(e.at) || 0,
+          ...(legacy ? { rawText: true } : {}),
+        })
       } else if (e.type === 'tool.call') {
         // M15 — le titre relancé du journal : l'argument `title` de l'appel.
         const journaledTitle = titleOfArgs(e.args)
@@ -491,7 +503,7 @@ export default function App() {
           // la réponse vient de l'ICM et de la conversation.
           if (!toolsOn) {
             system +=
-              '\n\n## Niveau de sécurité de la session\nLes outils sont DÉSACTIVÉS pour cette session (niveau « aucun outil ») : n’émet aucun tool_call (no_tool compris — le contrat PLAN: est suspendu ici), réponds à partir de l’ICM ci-dessus et de la conversation.'
+              '\n\n## Niveau de sécurité de la session\nLes outils sont DÉSACTIVÉS pour cette session (niveau « aucun outil ») : n’émet aucun tool_call (no_tool compris — le contrat [TOOL_LISTING] est suspendu ici, ta prose s’affiche directement), réponds à partir de l’ICM ci-dessus et de la conversation.'
           }
           if (aborted()) return
 
@@ -501,7 +513,7 @@ export default function App() {
             { role: 'system' as const, content: system },
             ...toAgentMessages(store.listMessages(session.id)),
             // M20 — le rappel de protocole du round précédent part en DERNIER :
-            // c'est le harness qui parle (préfixe [HARNESS — protocole]), juste
+            // c'est le harness qui parle (préfixe [HARNESS — feedback]), juste
             // après l'observation qu'il corrige. Transient : jamais journalisé
             // comme un message du pilote — sa trace vit dans model.jsonl
             // (champ feedback de l'observation) et sur la trace du round.
@@ -633,28 +645,34 @@ export default function App() {
           turn.textChars += text.length
 
           // M20 — LE MENTOR, temps 3 qui parle : le verdict de CE round part au
-          // round suivant (message [HARNESS — protocole]) et se lit sur la trace
+          // round suivant (message [HARNESS — feedback]) et se lit sur la trace
           // et dans model.jsonl (champ feedback de l'observation). Silence
           // total quand le protocole est suivi — un modèle conforme n'est
           // jamais sermonné. La mémoire du tour se remplit APRÈS le verdict :
           // un appel ne peut pas être déclaré répété contre lui-même.
           //
-          // M21 — LE CONTRAT D'APPELS : l'annonce PLAN du thinking ENGAGE le
-          // groupe. Un groupe qui ne la tient pas (annonce absente, compte
-          // différent, no_tool incohérent) n'est PAS exécuté : le modèle
-          // relit ce qu'il a fait et RÉÉMET le groupe complet — deux refus
-          // par tour au plus, puis la boucle exécute malgré tout et journalise
-          // l'écart : la logique du tour ne casse jamais.
+          // M22 — LES CINQ PHASES : le texte du round est découpé par ses
+          // EN-TÊTES EXACTS ([TOOL_LISTING], [MESSAGE]) ; une phase sans son
+          // en-tête est REJETÉE (prose droppée, blocs cassés) et le feedback
+          // engine le liste au modèle. Le listing ENGAGE le groupe : un groupe
+          // qui ne le tient pas (en-tête absent, compte différent, no_tool
+          // incohérent) n'est PAS exécuté — le modèle relit et RÉÉMET le
+          // groupe complet, deux refus par tour au plus, puis la boucle
+          // exécute malgré tout et journalise l'écart : la logique du tour
+          // ne casse jamais.
+          const phases = parseRoundPhases(text)
           const roundCalls = responseToolCalls()
           const realCount = roundCalls.filter((c) => c.tool !== NO_TOOL).length
           const hasNoTool = roundCalls.some((c) => c.tool === NO_TOOL)
           const onlyNoTool = hasNoTool && realCount === 0
-          const callPlan = parseCallPlan(thinking)
+          const listingOk =
+            phases.listing !== null &&
+            (onlyNoTool ? phases.listing.kind === 'no_tool' : phases.listing.kind === 'calls' && phases.listing.count === realCount)
           const planBroken =
             toolsOn &&
             calls.length > 0 &&
             !onlyNoTool &&
-            (callPlan === null || callPlan.kind === 'no_tool' || hasNoTool || callPlan.count !== realCount)
+            (phases.listing === null || phases.listing.kind === 'no_tool' || hasNoTool || phases.listing.count !== realCount)
           const roundProtocol = {
             round,
             firstEvent,
@@ -662,10 +680,22 @@ export default function App() {
             thinkingTitles,
             thinking,
             text,
+            phases,
             toolCalls: roundCalls,
           }
           const mentor = calls.length > 0 ? protocolFeedback(roundProtocol, turnMemory, icmContextPaths) : null
           mentorNote = mentor
+          // M22 — le feedback s'affiche DANS le round qu'il corrige (carte
+          // repliée, phase 5) et part au round suivant.
+          if (mentor !== null) store.attachFeedback(placeholder.id, mentor)
+          // Les faits des phases, pour la trace et le journal.
+          const phaseFacts = {
+            listing: phases.listingPresent ? phases.listingRaw : null,
+            listingOk,
+            messageChars: phases.message.length,
+            droppedChars: phases.droppedChars,
+            brokenToolBlocks: phases.brokenToolBlocks,
+          }
 
           if (aborted()) {
             turn.outcome = 'stopped'
@@ -685,15 +715,19 @@ export default function App() {
             return
           }
 
-          // M21 — LE CONTRAT REFUSÉ : le groupe n'est PAS exécuté. La note de
+          // M21/M22 — LE CONTRAT REFUSÉ : le groupe n'est PAS exécuté. La note de
           // refus part au round suivant (comme celle du mentor), la trace et
           // model.jsonl gardent l'écart, et le modèle RÉÉMET un groupe
-          // conforme — le thinking du round refusé reste affiché (le pilote
-          // lit ce qui avait été annoncé).
+          // conforme — le thinking et le listing du round refusé restent
+          // affichés (le pilote lit ce qui avait été annoncé).
           if (planBroken && planRedos < MAX_PLAN_REDOS && round < MAX_ROUNDS) {
             planRedos++
             const redoNote = planRedoNote(round, protocolLines(roundProtocol, turnMemory, icmContextPaths))
             mentorNote = redoNote
+            // M22 — la carte de feedback (phase 5) vit DANS le round refusé,
+            // même vide par ailleurs : c'est la seule phase qui reste — le
+            // pilote lit ce que le harness a répondu au modèle.
+            store.attachFeedback(placeholder.id, redoNote)
             store.settleTrace(traceId, {
               ms: Date.now() - startedAt,
               outcome: 'tool_calls',
@@ -705,6 +739,7 @@ export default function App() {
               text: excerpt(text),
               toolCalls: responseToolCalls().map((c) => ({ tool: c.tool, title: c.title, argsOk: c.argsOk })),
               systemChars: system.length,
+              ...phaseFacts,
               feedback: redoNote,
             })
             if (mode === 'server') {
@@ -724,7 +759,9 @@ export default function App() {
                   text,
                   toolCalls: responseToolCalls(),
                   // M21 — le refus journalisé AVEC la réponse fautive : la
-                  // note exacte que le round suivant lit.
+                  // note exacte que le round suivant lit. M22 — les faits des
+                  // phases (listing, drops) voyagent avec.
+                  ...phaseFacts,
                   feedback: redoNote,
                 })
                 .catch(() => undefined) // jamais bloquant
@@ -732,7 +769,7 @@ export default function App() {
             store.appendMessage(
               session.id,
               'system',
-              `Groupe d’appels refusé — contrat non tenu (annonce PLAN ≠ groupe émis) : rappel renvoyé au modèle (${planRedos}/${MAX_PLAN_REDOS}).`,
+              `Groupe d’appels refusé — contrat non tenu (listing [TOOL_LISTING] ≠ groupe émis) : feedback renvoyé au modèle (${planRedos}/${MAX_PLAN_REDOS}).`,
             )
             continue
           }
@@ -740,18 +777,22 @@ export default function App() {
 
           store.settleTrace(traceId, {
             ms: Date.now() - startedAt,
-            outcome: calls.length > 0 ? 'tool_calls' : 'ok',
+            // M22 — le round no_tool signé est une RÉPONSE finale : son issue
+            // est 'ok' (le tour ne reste pas « en cours » dans l'activité).
+            outcome: onlyNoTool ? 'ok' : calls.length > 0 ? 'tool_calls' : 'ok',
             thinkingChars: thinking.length,
             textChars: text.length,
             // M17 — the response rides on the trace: the activity tab SHOWS
             // what the model said (first event, titles, excerpts, calls).
             // M20 — the mentor's reminder rides with it (what was corrected).
+            // M22 — the phases' facts ride too (listing, message, drops).
             firstEvent,
             thinkingTitles: [...thinkingTitles],
             thinking: excerpt(thinking),
             text: excerpt(text),
             toolCalls: responseToolCalls().map((c) => ({ tool: c.tool, title: c.title, argsOk: c.argsOk })),
             systemChars: system.length,
+            ...phaseFacts,
             ...(mentor !== null ? { feedback: mentor } : {}),
           })
 
@@ -759,13 +800,15 @@ export default function App() {
           // pilote voit si le protocole est suivi (thinking d'abord ? titres
           // remplis ? groupe cohérent ?) — la conformité est calculée serveur.
           // M17 — rawArgs + argsOk par appel : le MAUVAIS FORMAT reste visible.
+          // M22 — les cinq phases : listing, message, drops journalisés.
           if (mode === 'server') {
             void api
               .postResponse(session.id, {
                 model,
                 round,
                 ms: Date.now() - startedAt,
-                outcome: calls.length > 0 ? 'tool_calls' : 'ok',
+                // M22 — le round no_tool signé est une réponse finale ('ok').
+                outcome: onlyNoTool ? 'ok' : calls.length > 0 ? 'tool_calls' : 'ok',
                 firstEvent,
                 systemChars: system.length,
                 messages: messages.length,
@@ -775,6 +818,7 @@ export default function App() {
                 thinking,
                 text,
                 toolCalls: responseToolCalls(),
+                ...phaseFacts,
               })
               .catch(() => undefined) // jamais bloquant
           }
@@ -789,37 +833,57 @@ export default function App() {
                 mentorNote = EMPTY_RESPONSE_NUDGE
                 store.removeMessage(placeholder.id)
                 store.settleTrace(traceId, { feedback: EMPTY_RESPONSE_NUDGE })
-                store.appendMessage(session.id, 'system', 'Réponse vide — rappel de protocole renvoyé au modèle.')
+                store.appendMessage(session.id, 'system', 'Réponse vide — feedback renvoyé au modèle.')
                 continue
               }
               store.removeMessage(placeholder.id)
               if (emptyNudged) {
-                store.appendMessage(session.id, 'system', 'Le modèle reste vide malgré le rappel — tour terminé.')
+                store.appendMessage(session.id, 'system', 'Le modèle reste vide malgré le feedback — tour terminé.')
               }
+              return
+            }
+            // M22 — LA SIGNATURE : une prose sans no_tool ne termine PAS le
+            // tour. Le modèle doit attendre le feedback du harness pour
+            // décider de la suite — le feedback lui réclame la signature
+            // (une fois, puis le tour se termine honnêtement : la prose
+            // s'affiche alors TELLE QUELLE, la logique ne casse jamais).
+            if (toolsOn) {
+              if (!emptyNudged && round < MAX_ROUNDS) {
+                emptyNudged = true
+                mentorNote = UNSIGNED_FINAL_NUDGE
+                store.attachFeedback(placeholder.id, UNSIGNED_FINAL_NUDGE)
+                store.settleTrace(traceId, { feedback: UNSIGNED_FINAL_NUDGE })
+                store.appendMessage(session.id, 'system', 'Réponse non signée (no_tool absent) — feedback renvoyé au modèle.')
+                continue
+              }
+              store.setRawDisplay(placeholder.id, true)
+              store.appendMessage(session.id, 'system', 'Réponse non signée malgré le feedback — prose affichée telle quelle, tour terminé.')
             }
             return // réponse finale — tour terminé
           }
 
-          // M21 — no_tool SEUL : la signature de la réponse finale sans
-          // outil. La prose finale est déjà dans le placeholder (elle suit
-          // l'appel dans la même réponse — l'exception assumée du protocole :
-          // no_tool n'a aucun résultat à attendre). L'appel part au serveur
-          // (journalisé, jamais dangereux), son observation part au journal,
-          // et le tour se termine proprement.
+          // M21/M22 — no_tool SEUL : la signature de la réponse finale sans
+          // outil. La prose finale vit dans la section [MESSAGE] du
+          // placeholder (elle précède l'appel — l'exception assumée du
+          // protocole : no_tool n'a aucun résultat à attendre). L'appel part
+          // au serveur (journalisé, jamais dangereux), son observation part au
+          // journal, et le tour se termine proprement.
           if (onlyNoTool) {
-            // no_tool SANS prose : le modèle a signé la fin sans écrire la
-            // réponse — réclamée une fois, puis tour terminé honnêtement.
-            if (text.trim() === '') {
+            // no_tool SANS prose en-têtée : le modèle a signé la fin sans
+            // écrire la réponse — réclamée une fois, puis tour terminé
+            // honnêtement (la prose nue, s'il y en avait, s'affiche brute).
+            if (phases.message === '') {
               if (!emptyNudged && round < MAX_ROUNDS) {
                 emptyNudged = true
                 mentorNote = NO_TOOL_EMPTY_PROSE_NUDGE
-                store.removeMessage(placeholder.id)
+                store.attachFeedback(placeholder.id, NO_TOOL_EMPTY_PROSE_NUDGE)
                 store.settleTrace(traceId, { feedback: NO_TOOL_EMPTY_PROSE_NUDGE })
-                store.appendMessage(session.id, 'system', 'no_tool sans prose finale — rappel renvoyé au modèle.')
+                store.appendMessage(session.id, 'system', 'no_tool sans [MESSAGE] final — feedback renvoyé au modèle.')
                 continue
               }
-              store.removeMessage(placeholder.id)
-              store.appendMessage(session.id, 'system', 'no_tool sans prose malgré le rappel — tour terminé.')
+              if (text.trim() !== '') store.setRawDisplay(placeholder.id, true)
+              else store.removeMessage(placeholder.id)
+              store.appendMessage(session.id, 'system', 'no_tool sans prose malgré le feedback — tour terminé.')
               return
             }
             turn.toolCalls += 1
@@ -1180,7 +1244,10 @@ export default function App() {
         {tab === 'activity' && active.workspace !== undefined ? (
           <ActivityPanel traces={traces} toolRows={rows.filter((r) => r.role === 'tool')} sessionId={active.id} />
         ) : (
-          <ChatView messages={rows} />
+          <ChatView
+            messages={rows}
+            protocol={mode === 'server' && active.workspace !== undefined && active.security !== 'no-tools'}
+          />
         )}
         {mode === 'server' && active.workspace !== undefined && pendingRow && tab === 'chat' ? (
           <ToolApprovalCard

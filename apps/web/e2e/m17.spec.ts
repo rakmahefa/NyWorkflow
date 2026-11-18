@@ -38,7 +38,9 @@ test('activité : la RÉPONSE du modèle et le quatuor de la session, dans l’o
   await req.locator('.act-head').click()
   await expect(req.locator('.act-body')).toContainText('Protocole')
   await expect(req.locator('.act-body')).toContainText('thinking d’abord')
-  await expect(req.locator('.act-body')).toContainText('Réponse du modèle (extrait)')
+  // M22 — les cinq phases dans la carte : listing no_tool, message en-têté.
+  await expect(req.locator('.act-body')).toContainText('Phase 2 — Listing annoncé')
+  await expect(req.locator('.act-body')).toContainText('Phase 3 — Message')
 
   // Le quatuor DE LA SESSION — model.jsonl inclus, lisible sur place.
   await expect(page.locator('[data-test="session-logs"]')).toBeVisible()

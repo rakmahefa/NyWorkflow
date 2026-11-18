@@ -102,11 +102,11 @@ it(
     expect(session.status).toBe(201)
     const sid: string = session.body.id
 
-    // L'ICM M16+M19 : 10 contexts chargés, protocole trois temps + arsenal dans le prompt.
+    // L'ICM M16+M19+M22 : 10 contexts chargés, protocole cinq phases + arsenal dans le prompt.
     const icm = await api(base, '/workspaces/modelog/icm')
     expect(icm.body.contexts).toHaveLength(10)
-    expect(icm.body.system).toContain('Protocole de réponse — trois temps')
-    expect(icm.body.system).toContain('Le temps de l’observation')
+    expect(icm.body.system).toContain('Protocole de réponse — cinq phases')
+    expect(icm.body.system).toContain('Phase 5 — FEEDBACK')
     expect(icm.body.system).toContain('Évalue tes moyens — l’arsenal')
 
     // Round conforme : thinking titré en premier, appels titrés.

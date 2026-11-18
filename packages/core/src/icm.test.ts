@@ -244,24 +244,26 @@ describe('buildIcmSystemPrompt — identité harness (M14)', () => {
     expect(prompt).toContain('inbox/')
     expect(prompt).toContain('vérifie-le EN PREMIER')
     // Le mentor : le modèle sait que le harness peut lui parler protocole.
-    expect(prompt).toContain('[HARNESS — protocole]')
+    expect(prompt).toContain('[HARNESS — feedback]')
     expect(prompt).toContain('corrige immédiatement')
   })
 
-  it('M16 — le protocole trois temps : thinking titré, action parallèle, observation du groupe entier', async () => {
+  it('M16/M22 — le protocole cinq phases : thinking titré, listing, message, action parallèle, feedback du harness', async () => {
     const root = tmp()
     await ensureIcmTree(root)
     const prompt = buildIcmSystemPrompt(await loadIcm(root))
     // Le contrat : le bloc titré ouvre la réponse, AVANT tout le reste.
-    expect(prompt).toContain('Protocole de réponse — trois temps')
+    expect(prompt).toContain('Protocole de réponse — cinq phases')
     expect(prompt).toContain('<thinking title="titre court de l’étape en cours">')
     expect(prompt).toContain('</thinking>')
-    expect(prompt).toContain('Le temps du thinking, en premier')
-    expect(prompt).toContain('Le temps de l’action')
-    expect(prompt).toContain('Le temps de l’observation')
+    expect(prompt).toContain('## Phase 1 — THINKING')
+    expect(prompt).toContain('## Phase 2 — TOOL_LISTING')
+    expect(prompt).toContain('## Phase 3 — MESSAGE')
+    expect(prompt).toContain('## Phase 4 — TOOL_CALLS')
+    expect(prompt).toContain('## Phase 5 — FEEDBACK')
     // Le format de réponse du groupe entier, montré au modèle.
     expect(prompt).toContain('{"tool": "read", "title": "Lire la charte", "ok": true, "result": "…"}')
-    expect(prompt).toContain('NOUVEAU protocole démarre')
+    expect(prompt).toContain('NOUVEAU tour démarre')
     // L'action : appels indépendants ENSEMBLE, puis STOP.
     expect(prompt).toContain('INDÉPENDANTS ENSEMBLE')
     expect(prompt).toContain('tu TERMINES ta réponse')
@@ -269,19 +271,24 @@ describe('buildIcmSystemPrompt — identité harness (M14)', () => {
     expect(prompt).toContain('`title` (≤ 60 caractères)')
     // Modèle-agnostique : jamais la balise en prose visible.
     expect(prompt).toContain('JAMAIS la balise')
+    // La règle du pilote M22 : un en-tête manquant = phase rejetée.
+    expect(prompt).toContain('EN-TÊTE EXACT')
+    expect(prompt).toContain('REJETÉE')
+    // Le modèle attend le feedback du harness pour décider de la suite.
+    expect(prompt).toContain('un tour ne se termine QUE par')
     // L’ICM documente le harness et les outils.
     expect(prompt).toContain('harness/')
     expect(prompt).toContain('tools/')
   })
 
-  it('M21 — le contrat d’appels : l’annonce PLAN clôt le thinking et engage le groupe, no_tool signe la fin', async () => {
+  it('M21/M22 — le contrat d’appels : le listing [TOOL_LISTING] engage le groupe, no_tool signe la fin', async () => {
     const root = tmp()
     await ensureIcmTree(root)
     const prompt = buildIcmSystemPrompt(await loadIcm(root))
-    // L’annonce montrée au modèle, dans le gabarit du thinking.
-    expect(prompt).toContain('PLAN: 3 tool_calls — [Lire le plan] [Lister inbox] [Vérifier uv]')
-    expect(prompt).toContain('PLAN: no_tool')
-    expect(prompt).toContain('L’annonce `PLAN:` ENGAGE ta réponse')
+    // L’annonce montrée au modèle, en tête du texte visible.
+    expect(prompt).toContain('[TOOL_LISTING] 3 tool_calls — [Lire le plan] [Lister inbox] [Vérifier uv]')
+    expect(prompt).toContain('[TOOL_LISTING] no_tool')
+    expect(prompt).toContain('Le listing ENGAGE ta réponse')
     // Le refus du groupe non conforme est annoncé au modèle.
     expect(prompt).toContain('n’est PAS exécuté')
     expect(prompt).toContain('réémettre conforme')
@@ -289,7 +296,12 @@ describe('buildIcmSystemPrompt — identité harness (M14)', () => {
     expect(prompt).toContain('l’appel unique `no_tool`')
     expect(prompt).toContain('SEUL, jamais mélangé')
     // Le compte annoncé engage : EXACTEMENT.
-    expect(prompt).toContain('EXACTEMENT égal à ton annonce PLAN')
+    expect(prompt).toContain('EXACTEMENT égal au listing')
+    // La prose du pilote vit dans [MESSAGE], le reste est droppé.
+    expect(prompt).toContain('TOUTE la prose au pilote')
+    expect(prompt).toContain('prose sans cet en-tête est droppée')
+    // Le format exact d’un bloc d’appel est enseigné.
+    expect(prompt).toContain('{{tool {"name": "read"')
   })
 })
 
@@ -376,12 +388,12 @@ describe('scaffoldAgenticWorkspace (M14 — arbre dans .workspace/)', () => {
     // La doc du harness : charte + moteur.
     expect(files['harness/CONTEXT.md']).toContain('le harness NyWorkflow')
     expect(files['harness/ENGINE.md']).toContain('La boucle de tour')
-    // Le protocole trois temps est chargé à chaque tour.
-    expect(files['tools/CONTEXT.md']).toContain('Le protocole trois temps')
+    // Le protocole cinq phases est chargé à chaque tour.
+    expect(files['tools/CONTEXT.md']).toContain('Le protocole cinq phases')
     expect(files['tools/CONTEXT.md']).toContain('{"tool": "read", "title": "Lire la charte", "ok": true, "result": "…"}')
-    // M21 — le contrat d’appels et la fiche no_tool.
+    // M21/M22 — le contrat d’appels et la fiche no_tool.
     expect(files['tools/CONTEXT.md']).toContain('Le contrat d’appels')
-    expect(files['tools/CONTEXT.md']).toContain('PLAN: 3 tool_calls — [Lire le plan] [Lister inbox] [Vérifier uv]')
+    expect(files['tools/CONTEXT.md']).toContain('[TOOL_LISTING] 3 tool_calls — [Lire le plan] [Lister inbox] [Vérifier uv]')
     expect(files['tools/CONTEXT.md']).toContain('| no_tool | signer la réponse finale sans outil | oui |')
     expect(files['tools/no_tool.md']).toContain('SEUL')
     // M19 — l'arsenal : charte chargée (évaluation + registre) et gabarit à la demande.
@@ -481,7 +493,7 @@ describe('ensureIcmTree (M14 création, M16 upgrade)', () => {
 describe('buildIcmSystemPrompt — charte scaffold (M12/M13 conservés)', () => {
   it('la charte scaffold pointe vers le protocole et les fiches, et garde le parallélisme', () => {
     const charter = scaffoldContext('exemple-agentique')
-    expect(charter).toContain('protocole trois temps')
+    expect(charter).toContain('protocole cinq phases')
     expect(charter).toContain('.workspace/tools/CONTEXT.md')
     expect(charter).toContain('.workspace/tools/<outil>.md')
     expect(charter).toContain('.workspace/harness/')

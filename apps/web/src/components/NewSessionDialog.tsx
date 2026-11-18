@@ -75,6 +75,11 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
   const browseSeq = useRef(0)
   /** True once the user typed a path: the initial home load must not overwrite it. */
   const pathTouched = useRef(false)
+  /** M22 — the folder EXPLICITLY chosen to be USED by the session: set by
+   * « Utiliser ce dossier », by a row's « Utiliser », or by a resolved
+   * explorer pick (native or Firefox). The submit registers THIS path —
+   * navigating alone never selects anything. */
+  const [usedPath, setUsedPath] = useState<string | null>(null)
 
   // --- M17 : sélecteur natif « Explorer » ---
   /** True while the picked name is being resolved by /workspaces/locate. */
@@ -145,15 +150,37 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
       })
   }
 
-  /** M17 — applies a RESOLVED path (locate or candidate click): the path is
-   * filled, verified by the server's own browser, the name slugged. */
+  /** M17/M22 — applies a RESOLVED path (locate or candidate click): the
+   * folder becomes the one the session will USE — path filled and verified
+   * by the server's own browser, the name slugged, the selection visible. */
   const applyPickedFolder = (path: string, name: string): void => {
     setLocateCandidates([])
-    setPicked(`Dossier sélectionné via l’explorateur : ${path}`)
+    setUsedPath(path)
+    setPicked(`Dossier sélectionné : ${path} — il sera utilisé par la session.`)
     pathTouched.current = true
     setBrowsePath(path)
     setFolderName(slugify(name) || name)
     loadBrowse(path)
+  }
+
+  /** M22 — USES the folder currently listed (the navigation's destination):
+   * the selection becomes explicit and visible, the workspace name follows. */
+  const useCurrentFolder = (): void => {
+    if (browse === null) return
+    const base = browse.path.split('/').pop() ?? browse.path
+    setUsedPath(browse.path)
+    setLocateCandidates([])
+    setPicked(`Dossier sélectionné : ${browse.path} — il sera utilisé par la session.`)
+    setFolderName(slugify(base) || base)
+  }
+
+  /** M22 — USES one listed sub-folder directly (no navigation): the pilot
+   * points at the row, the session takes that folder. */
+  const useSubFolder = (path: string, name: string): void => {
+    setUsedPath(path)
+    setLocateCandidates([])
+    setPicked(`Dossier sélectionné : ${path} — il sera utilisé par la session.`)
+    setFolderName(slugify(name) || name)
   }
 
   /** M17/M21 — resolves a picked folder NAME into a server path via
@@ -172,7 +199,7 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
           applyPickedFolder(res.candidates[0] as string, name)
         } else if (res.candidates.length === 0) {
           setError(
-            `« ${name} » est introuvable depuis le dossier personnel du serveur — le sélecteur ne transmet pas le chemin. Collez-le ci-contre, ou naviguez avec la liste.`,
+            `« ${name} » est introuvable depuis le dossier personnel du serveur — le sélecteur du navigateur ne transmet pas le chemin. Naviguez jusqu’à ce dossier dans la liste ci-dessous, puis cliquez « Utiliser ce dossier » : la sélection sera appliquée.`,
           )
         } else {
           setLocateCandidates(res.candidates)
@@ -254,9 +281,11 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
           }
           workspace = (await api.createWorkspace(name)).name
         } else if (mode_ === 'folder') {
-          const path = browsePath.trim()
-          if (path === '' || browse === null || path !== browse.path) {
-            setError('Choisissez un dossier (naviguez jusqu’à lui, ou collez son chemin absolu).')
+          // M22 — the folder must have been EXPLICITLY used: « Utiliser ce
+          // dossier », a row's « Utiliser », or a resolved explorer pick.
+          // Navigating alone never selects — the miss the pilot reported.
+          if (usedPath === null) {
+            setError('Choisissez le dossier à utiliser : naviguez jusqu’à lui (ou passez par l’explorateur), puis cliquez « Utiliser ce dossier ».')
             return
           }
           const name = folderName.trim()
@@ -265,7 +294,7 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
             return
           }
           try {
-            workspace = (await api.registerWorkspace(name, path)).name
+            workspace = (await api.registerWorkspace(name, usedPath)).name
           } catch (err) {
             setError(err instanceof Error ? err.message : String(err))
             return
@@ -416,6 +445,19 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
                     </p>
                   </>
                 ) : null}
+                {/* M22 — LA SÉLECTION EXPLICITE : le dossier courant devient
+                    celui que la session UTILISERA. Naviguer ne sélectionne
+                    rien — ce bouton si. */}
+                <button
+                  type="button"
+                  className="folder-use"
+                  data-test="folder-use"
+                  disabled={browsing || browse === null}
+                  onClick={useCurrentFolder}
+                >
+                  {usedPath !== null && usedPath === browse?.path ? '✓ Utilisé — ce dossier' : 'Utiliser ce dossier'}
+                  {browse !== null ? <code> {browse.path}</code> : null}
+                </button>
                 {picked !== '' ? (
                   <p className="hint folder-picked" data-test="folder-picked">
                     {picked}
@@ -450,7 +492,7 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
                         <p className="hint">(aucun sous-dossier)</p>
                       ) : (
                         browse.dirs.map((d) => (
-                          <div className="folder-row" key={d.path} data-test="folder-row">
+                          <div className="folder-row" key={d.path} data-test="folder-row" data-used={usedPath === d.path}>
                             <button type="button" className="folder-open" onClick={() => loadBrowse(d.path)} title={`Ouvrir ${d.path}`}>
                               <span aria-hidden="true">▸</span> {d.name}
                             </button>
@@ -458,12 +500,10 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
                               type="button"
                               className="folder-choose"
                               data-test="folder-choose"
-                              onClick={() => {
-                                loadBrowse(d.path)
-                                setFolderName(d.name)
-                              }}
+                              title={`La session utilisera ${d.path}`}
+                              onClick={() => useSubFolder(d.path, d.name)}
                             >
-                              Choisir
+                              Utiliser
                             </button>
                           </div>
                         ))
@@ -476,7 +516,7 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
                   <span>Nom du workspace pour ce dossier</span>
                   <input data-test="folder-ws-name" value={folderName} onChange={(e) => setFolderName(e.target.value)} placeholder="ex. mes-documents" />
                   <span className="hint">
-                    Le dossier devient le terrain de la session : un <code>.workspace/</code> caché (l’ICM complet) et un{' '}
+                    Le dossier sélectionné sera UTILISÉ par la session comme terrain : un <code>.workspace/</code> caché (l’ICM complet) et un{' '}
                     <code>.logs/</code> par session y seront créés — vos propres fichiers ne sont jamais modifiés ailleurs.
                   </span>
                 </label>
