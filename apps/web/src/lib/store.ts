@@ -176,8 +176,14 @@ export class SessionStore {
     this.commit()
   }
 
-  /** M12 — settles a trace (duration, outcome, received chars). */
-  settleTrace(id: string, patch: Partial<Pick<RequestTrace, 'ms' | 'outcome' | 'error' | 'thinkingChars' | 'textChars'>>): boolean {
+  /** M12 — settles a trace (duration, outcome, received chars — M17: the
+   * response itself: first event, titles, excerpts, tool calls). */
+  settleTrace(
+    id: string,
+    patch: Partial<
+      Pick<RequestTrace, 'ms' | 'outcome' | 'error' | 'thinkingChars' | 'textChars' | 'firstEvent' | 'thinkingTitles' | 'thinking' | 'text' | 'toolCalls' | 'systemChars'>
+    >,
+  ): boolean {
     let hit = false
     this.traces = this.traces.map((t) => {
       if (t.id !== id) return t

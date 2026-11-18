@@ -18,11 +18,21 @@
  *                                     to model.jsonl — thinking titled,
  *                                     text, tool_calls titled, protocol
  *                                     compliance, ICM prompt size
+ *   POST   /sessions/:id/observation → M17: log the tool-group RESULTS
+ *                                     that circulate back to the model
+ *                                     (model.observation — the exact
+ *                                     observation step of the protocol)
+ *   GET    /sessions/:id/logs      → M17: the session's OWN quartet inside
+ *                                     its folder (<folder>/.logs/<id>/) —
+ *                                     listing + tail, read-only: the
+ *                                     pilot sees the session's model.jsonl
+ *                                     (the model's responses) in the UI,
+ *                                     next to the session it belongs to
  *
  * M14 — every session-scoped record (lifecycle, chat, turns) lands BOTH
- * in the global trio (<home>/.logs) AND in the session's own trio inside
- * its folder (<sessionFolder>/.logs/<sessionId>/) — the pilot zips and
- * uploads that folder to refine the harness.
+ * in the global quartet (<home>/.logs) AND in the session's own quartet
+ * inside its folder (<sessionFolder>/.logs/<sessionId>/) — the pilot zips
+ * and uploads that folder to refine the harness.
  *
  * Chat events here — tool.call / tool.result events land in the SAME
  * journal through /workspaces (M11): the agent's tools are journaled by
@@ -35,6 +45,7 @@ import { existsSync } from 'node:fs'
 import { access, readdir } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
+
 import { ensureIcmTree } from '@nyworkflow/core'
 import {
   appendEvent,
@@ -48,7 +59,7 @@ import {
   readEvents,
 } from '@nyworkflow/session'
 import type { DerivedSession, SecurityLevel, SessionEvent } from '@nyworkflow/session'
-import { dropSessionProfiler, sessionProfiler, type Profiler } from './logs.ts'
+import { dropSessionProfiler, JsonlLog, LOG_NAMES, sessionProfiler, type LogName, type Profiler } from './logs.ts'
 import { resolveWorkspaceRoot, workspaceExists } from './workspaces.ts'
 
 /** Workspace folder names, same rule as the /workspaces API. */
@@ -409,7 +420,10 @@ export function createSessionsHandler(
       .filter((t): t is string => typeof t === 'string' && t.trim() !== '')
       .slice(0, 20)
       .map((t) => t.trim().slice(0, 120))
-    // Tool calls: the group as the model made it (tool, title, args).
+    // Tool calls: the group as the model made it. M17 — the RAW arguments
+    // string rides along (rawArgs) with its own parse verdict (argsOk): a
+    // malformed JSON emitted by the model stays VISIBLE in the log instead
+    // of collapsing into an empty {} (the bad format, not its absence).
     const toolCalls = (Array.isArray(body.toolCalls) ? body.toolCalls : [])
       .filter((c): c is Record<string, unknown> => c !== null && typeof c === 'object' && !Array.isArray(c))
       .slice(0, 50)
@@ -417,16 +431,21 @@ export function createSessionsHandler(
         tool: typeof c.tool === 'string' ? c.tool.slice(0, 40) : 'unknown',
         title: typeof c.title === 'string' ? c.title.trim().slice(0, 60) : '',
         args: str(JSON.stringify(c.args ?? {}), 4096),
+        // M17 — a client that sends rawArgs gets BOTH the raw string and the
+        // verdict (true or false); a legacy client sends neither.
+        ...(typeof c.rawArgs === 'string' && c.rawArgs !== '' ? { rawArgs: str(c.rawArgs, 2048), argsOk: c.argsOk === true } : {}),
       }))
     const thinkingChars = int(body.thinkingChars, 10_000_000)
     const textChars = int(body.textChars, 10_000_000)
     const firstEvent = body.firstEvent === 'thinking' ? 'thinking' : body.firstEvent === 'text' ? 'text' : body.firstEvent === 'tool_calls' ? 'tool_calls' : 'none'
     // Protocol compliance — the automatic check the pilot used to do by eye.
+    // M17: argsOk — every tool call's arguments parsed as clean JSON.
     const protocol = {
       thinkingFirst: firstEvent === 'thinking',
       thinkingTitled: thinkingTitles.length > 0,
       toolCalls: toolCalls.length,
       toolCallsTitled: toolCalls.filter((c) => c.title !== '').length,
+      argsOk: toolCalls.every((c) => c.argsOk !== false),
     }
     const record = {
       kind: 'model.response',
@@ -452,6 +471,92 @@ export function createSessionsHandler(
     const d = deriveSession(await readEvents(file))
     const sp = await perSession(d.workspace, id)
     sp?.model({ ...record, ...(d.workspace !== undefined ? { workspace: d.workspace } : {}) })
+  }
+
+  /**
+   * M17 — the OBSERVATION that circulates back to the model: once the whole
+   * tool_calls group has run, the harness feeds every result to the next
+   * round in the protocol's response format. THAT payload — the exact
+   * {"tool","title","ok","result"|"error"} the model is about to read — is
+   * journalized here (kind model.observation, in model.jsonl, global AND
+   * per session). With model.response, the log now shows BOTH directions of
+   * the wire: what the model said, and what it was answered — bad formats
+   * and all.
+   */
+  async function modelObservation(req: IncomingMessage, id: string): Promise<void> {
+    const file = journalPath(home, id)
+    try {
+      await access(file)
+    } catch {
+      throw notFound('session inconnue')
+    }
+    const body = await readJson(req)
+    const model = typeof body.model === 'string' && body.model.trim() !== '' ? body.model.trim().slice(0, 100) : ''
+    if (model === '') throw badRequest('model non vide attendu')
+    const int = (v: unknown, max: number): number =>
+      typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.min(Math.floor(v), max) : 0
+    const str = (v: unknown, max: number): string => (typeof v === 'string' ? (v.length > max ? `${v.slice(0, max)}… (tronqué à ${max} caractères)` : v) : '')
+    // The group's results, capped in count — one entry per tool call. This
+    // is the EXACT {"tool","title","ok","result"|"error"} the model reads.
+    const results = (Array.isArray(body.results) ? body.results : [])
+      .filter((r): r is Record<string, unknown> => r !== null && typeof r === 'object' && !Array.isArray(r))
+      .slice(0, 50)
+      .map((r) => {
+        const payload =
+          typeof r.result === 'string' ? r.result : r.result === undefined || r.result === null ? '' : JSON.stringify(r.result)
+        const failure = typeof r.error === 'string' && r.error !== '' ? r.error : payload
+        return {
+          tool: typeof r.tool === 'string' ? r.tool.slice(0, 40) : 'unknown',
+          title: typeof r.title === 'string' ? r.title.trim().slice(0, 60) : '',
+          ok: r.ok === true,
+          ...(r.ok === true ? { result: str(payload, 4096) } : { error: str(failure, 2048) }),
+          ...(int(r.ms, 3_600_000) > 0 ? { ms: int(r.ms, 3_600_000) } : {}),
+        }
+      })
+    if (results.length === 0) throw badRequest('results : au moins un résultat d’outil attendu')
+    const round = int(body.round, 999)
+    const record = {
+      kind: 'model.observation',
+      sessionId: id,
+      model,
+      round,
+      fedToRound: int(body.fedToRound, 1000) || round + 1,
+      ms: int(body.ms, 3_600_000),
+      calls: results.length,
+      ok: results.every((r) => r.ok),
+      results,
+    }
+    profiler?.model(record)
+    const d = deriveSession(await readEvents(file))
+    const sp = await perSession(d.workspace, id)
+    sp?.model({ ...record, ...(d.workspace !== undefined ? { workspace: d.workspace } : {}) })
+  }
+
+  /**
+   * M17 — the session's OWN quartet, listed and tailed read-only: the
+   * profiling view of a session reads ITS model.jsonl (the model's
+   * responses of THAT session) instead of the engine-wide one. The dir is
+   * '' when the logs folder cannot be resolved (no workspace binding, or
+   * the registry is absent): the UI says so honestly.
+   */
+  async function sessionLogs(id: string, name: string | null, tail: number): Promise<Record<string, unknown>> {
+    let file: string
+    try {
+      file = journalPath(home, id)
+      await access(file)
+    } catch {
+      throw notFound('session inconnue')
+    }
+    const d = deriveSession(await readEvents(file))
+    const root = d.workspace === undefined || workspacesDir === '' ? undefined : await resolveWorkspaceRoot(workspacesDir, d.workspace).catch(() => undefined)
+    const dir = root === undefined ? '' : join(root, '.logs', id)
+    const logs = Object.fromEntries(LOG_NAMES.map((n) => [n, new JsonlLog(dir === '' ? join(home, '.logs-absentes', id) : dir, n)])) as Record<LogName, JsonlLog>
+    if (name === null) {
+      return { dir, workspace: d.workspace ?? '', files: LOG_NAMES.map((n) => logs[n].stats()) }
+    }
+    if (!(LOG_NAMES as readonly string[]).includes(name)) throw badRequest('journal inconnu')
+    const log = logs[name as LogName]
+    return { name, dir, tail: await log.tail(tail), stats: log.stats() }
   }
 
   /** Fork d'un journal (M12). */
@@ -514,7 +619,9 @@ export function createSessionsHandler(
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const method = req.method ?? 'GET'
-    const url = (req.url ?? '/').split('?')[0] || '/'
+    const rawUrl = req.url ?? '/'
+    const query = rawUrl.includes('?') ? new URLSearchParams(rawUrl.slice(rawUrl.indexOf('?') + 1)) : null
+    const url = rawUrl.split('?')[0] || '/'
 
     if (url === '/' || url === '') {
       if (method === 'GET') return send(res, 200, { sessions: await list() })
@@ -557,6 +664,14 @@ export function createSessionsHandler(
         await modelResponse(req, id)
         return send(res, 201, { ok: true })
       }
+      if (parts[1] === 'observation' && method === 'POST') {
+        await modelObservation(req, id)
+        return send(res, 201, { ok: true })
+      }
+      // M17 — the session's OWN quartet (listing, then tail of one log).
+      if (parts[1] === 'logs' && method === 'GET') {
+        return send(res, 200, await sessionLogs(id, null, 0))
+      }
       if (parts[1] === 'delete' && method === 'POST') {
         await remove(id)
         return send(res, 200, { ok: true })
@@ -565,6 +680,13 @@ export function createSessionsHandler(
         await remove(id)
         return send(res, 200, { ok: true })
       }
+    }
+    // M17 — GET /sessions/:id/logs/:name?tail=N — the tail of ONE of the
+    // session's own logs (model.jsonl in the pilot's sights).
+    if (parts.length === 3 && isSessionId(parts[0] ?? '') && parts[1] === 'logs' && method === 'GET') {
+      const tailRaw = Number.parseInt(query?.get('tail') ?? '200', 10)
+      const tail = Number.isNaN(tailRaw) ? 200 : Math.max(1, Math.min(tailRaw, 1000))
+      return send(res, 200, await sessionLogs(parts[0] as string, decodeURIComponent(parts[2] ?? ''), tail))
     }
     throw notFound('route inconnue')
   }

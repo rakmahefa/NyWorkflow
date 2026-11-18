@@ -228,4 +228,32 @@ describe('SessionStore — M12 (thinking, traces, renommage)', () => {
     store.removeSession(s.id)
     expect(store.listTraces(s.id)).toHaveLength(0)
   })
+
+  it('M17 — settleTrace porte la RÉPONSE du modèle (protocole, titres, extraits, appels)', () => {
+    const store = new SessionStore()
+    const s = store.createSession('S17')
+    store.appendTrace({ id: 't17', sessionId: s.id, at: 2, model: 'gemini-3.5-flash', thinkLevel: null, round: 1, messages: 4, tools: 9, ms: 0, outcome: 'ok', thinkingChars: 0, textChars: 0 })
+    store.settleTrace('t17', {
+      ms: 900,
+      outcome: 'tool_calls',
+      thinkingChars: 320,
+      textChars: 0,
+      firstEvent: 'thinking',
+      thinkingTitles: ['Analyser', 'Agir'],
+      thinking: '<thinking title="Analyser">…</thinking>',
+      text: '',
+      toolCalls: [
+        { tool: 'read', title: 'Lire la charte', argsOk: true },
+        { tool: 'read', title: '', argsOk: false },
+      ],
+      systemChars: 21_400,
+    })
+    const trace = store.listTraces(s.id)[0]
+    expect(trace).toBeDefined()
+    expect(trace?.firstEvent).toBe('thinking')
+    expect(trace?.thinkingTitles).toEqual(['Analyser', 'Agir'])
+    expect(trace?.toolCalls).toHaveLength(2)
+    expect(trace?.toolCalls?.[1]).toMatchObject({ tool: 'read', argsOk: false })
+    expect(trace?.systemChars).toBe(21_400)
+  })
 })

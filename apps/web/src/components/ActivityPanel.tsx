@@ -1,10 +1,15 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import * as api from '../lib/sessionApi'
 import type { ChatMsg, RequestTrace } from '../lib/types'
 
 /**
- * The activity tab (M12, M13) — harness-style tracking of one session: every
- * model request (model, think level, duration, outcome) and every tool
- * call (args + the payload returned to the model), in chronological order.
+ * The activity tab (M12, M13, M17) — harness-style tracking of one session:
+ * every model request WITH ITS RESPONSE (first event, thinking titles,
+ * excerpts, tool calls — M17: the pilot reads what the model said, protocol
+ * compliance at a glance), every tool call (args + the payload returned to
+ * the model), and the session's OWN profiling quartet (M17) — its
+ * .logs/<sessionId>/ folder, model.jsonl first: the responses of THAT
+ * session, next to the session itself.
  *
  * Tool history AND completed turns derive from the session's journal
  * (tool.call/tool.result + turn.completed, M13): the whole tab survives
@@ -49,6 +54,62 @@ function merge(traces: readonly RequestTrace[], toolRows: readonly ChatMsg[]): E
     ...toolRows.map((r): Entry => ({ kind: 'tool', at: r.at, row: r })),
   ]
   return entries.sort((a, b) => a.at - b.at)
+}
+
+/** M17 — the response block of a request card. Nothing when the trace is
+ * pre-M17 (no payload captured): honest, not a fake empty answer. */
+function ResponseView({ trace }: { trace: RequestTrace }) {
+  if (trace.firstEvent === undefined) {
+    return <p className="act-sub">Réponse non journalisée (trace d’avant M17) — elle est dans model.jsonl.</p>
+  }
+  const firstOk = trace.firstEvent === 'thinking'
+  const titled = (trace.thinkingTitles?.length ?? 0) > 0
+  const argsAllOk = (trace.toolCalls ?? []).every((c) => c.argsOk)
+  return (
+    <>
+      <p className="act-sub">Protocole</p>
+      <p className="act-protocol">
+        <span className={`tag ${firstOk ? 'tag-ok' : 'tag-err'}`}>{firstOk ? 'thinking d’abord' : `premier événement : ${trace.firstEvent}`}</span>{' '}
+        <span className={`tag ${titled ? 'tag-ok' : 'tag-err'}`}>{titled ? `thinking titré (${trace.thinkingTitles?.length})` : 'thinking non titré'}</span>{' '}
+        {(trace.toolCalls ?? []).length > 0 ? (
+          <span className={`tag ${argsAllOk ? 'tag-ok' : 'tag-err'}`}>{argsAllOk ? 'arguments valides' : 'arguments mal formés'}</span>
+        ) : null}
+        {trace.systemChars !== undefined ? <span className="tag">ICM {trace.systemChars.toLocaleString('fr-FR')} car.</span> : null}
+      </p>
+      {trace.thinkingTitles !== undefined && trace.thinkingTitles.length > 0 ? (
+        <>
+          <p className="act-sub">Titres du thinking</p>
+          <p className="act-titles">{trace.thinkingTitles.join(' · ')}</p>
+        </>
+      ) : null}
+      {trace.thinking !== undefined && trace.thinking !== '' ? (
+        <>
+          <p className="act-sub">Thinking (extrait)</p>
+          <pre>{trace.thinking}</pre>
+        </>
+      ) : null}
+      {trace.text !== undefined && trace.text !== '' ? (
+        <>
+          <p className="act-sub">Réponse du modèle (extrait)</p>
+          <pre>{trace.text}</pre>
+        </>
+      ) : null}
+      {trace.toolCalls !== undefined && trace.toolCalls.length > 0 ? (
+        <>
+          <p className="act-sub">Tool calls émis</p>
+          <ul className="act-calls">
+            {trace.toolCalls.map((c, i) => (
+              <li key={`${c.tool}-${i}`}>
+                <code>{c.tool}</code>
+                {c.title !== '' ? ` — ${c.title}` : ' — (sans titre)'}
+                {!c.argsOk ? <span className="tag tag-err"> arguments mal formés</span> : null}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </>
+  )
 }
 
 function RequestCard({ trace }: { trace: RequestTrace }) {
@@ -96,6 +157,7 @@ function RequestCard({ trace }: { trace: RequestTrace }) {
               <dd>{trace.ms} ms</dd>
             </div>
           </dl>
+          <ResponseView trace={trace} />
         </div>
       ) : null}
     </div>
@@ -132,7 +194,99 @@ function ToolCard({ row }: { row: ChatMsg }) {
   )
 }
 
-export function ActivityPanel({ traces, toolRows }: { traces: readonly RequestTrace[]; toolRows: readonly ChatMsg[] }) {
+/**
+ * M17 — the session's OWN quartet, read from its folder: the pilot opens the
+ * Activity tab and reads THIS session's model.jsonl (the model's responses)
+ * without leaving the UI — the logs were on disk only until now.
+ */
+function SessionLogsCard({ sessionId }: { sessionId: string }) {
+  const [logs, setLogs] = useState<api.SessionLogsDto | null>(null)
+  const [logTail, setLogTail] = useState<{ name: string; tail: string } | null>(null)
+
+  const refresh = useCallback(() => {
+    void api
+      .listSessionLogs(sessionId)
+      .then(setLogs)
+      .catch(() => setLogs(null))
+  }, [sessionId])
+
+  useEffect(() => {
+    refresh()
+    setLogTail(null)
+  }, [refresh])
+
+  return (
+    <div className="act-logs" data-test="session-logs">
+      <div className="act-logs-head">
+        <h4>Journaux de la session</h4>
+        <button type="button" className="diag-refresh" data-test="session-logs-refresh" onClick={refresh}>
+          Rafraîchir
+        </button>
+      </div>
+      {logs === null ? (
+        <p className="activity-note">Journaux injoignables (serveur de sessions absent ?).</p>
+      ) : logs.dir === '' ? (
+        <p className="activity-note">Dossier de logs introuvable — la session n’est liée à aucun dossier résolu.</p>
+      ) : (
+        <>
+          <p className="activity-note">
+            Le quatuor de CETTE session, dans son propre dossier : <code>{logs.dir}</code> — model.jsonl porte les réponses du
+            modèle (model.response) et ce qu’on lui a répondu (model.observation). Zippé, ce dossier est la matière première
+            du harness.
+          </p>
+          <table className="journal" data-test="session-logs-table">
+            <thead>
+              <tr>
+                <th>Journal</th>
+                <th>Lignes</th>
+                <th>Taille</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {logs.files.map((f) => (
+                <tr key={f.name} data-test="session-logs-row">
+                  <td className="journal-model">{f.name}</td>
+                  <td>{f.lines}</td>
+                  <td>{(f.bytes / 1024).toFixed(1)} Kio</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="diag-refresh"
+                      onClick={() =>
+                        void api
+                          .tailSessionLog(sessionId, f.name, 50)
+                          .then((t) => setLogTail(t.tail === '' ? { name: f.name, tail: '(vide)' } : { name: f.name, tail: t.tail }))
+                          .catch(() => setLogTail(null))
+                      }
+                    >
+                      Voir
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {logTail !== null ? (
+            <pre className="log-tail" data-test="session-log-tail">{logTail.name} — 50 dernières lignes
+{'\n'}{logTail.tail}</pre>
+          ) : null}
+        </>
+      )}
+    </div>
+  )
+}
+
+export function ActivityPanel({
+  traces,
+  toolRows,
+  sessionId,
+}: {
+  traces: readonly RequestTrace[]
+  toolRows: readonly ChatMsg[]
+  /** M17 — the session's own logs are part of its profiling view. */
+  sessionId?: string
+}) {
   const entries = merge(traces, toolRows)
   return (
     <div className="activity" data-test="activity-panel">
@@ -148,6 +302,7 @@ export function ActivityPanel({ traces, toolRows }: { traces: readonly RequestTr
           )}
         </>
       )}
+      {sessionId !== undefined ? <SessionLogsCard sessionId={sessionId} /> : null}
     </div>
   )
 }

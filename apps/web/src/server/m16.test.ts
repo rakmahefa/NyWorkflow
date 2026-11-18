@@ -160,9 +160,9 @@ it(
     expect(first.model).toBe('gemini-3.5-flash')
     expect(first.systemChars).toBe(21_500)
     expect(first.thinking).toContain('Comprendre la demande')
-    expect(first.protocol).toEqual({ thinkingFirst: true, thinkingTitled: true, toolCalls: 2, toolCallsTitled: 2 })
+    expect(first.protocol).toEqual({ thinkingFirst: true, thinkingTitled: true, toolCalls: 2, toolCallsTitled: 2, argsOk: true })
     const second = JSON.parse(lines[1] as string)
-    expect(second.protocol).toEqual({ thinkingFirst: false, thinkingTitled: false, toolCalls: 1, toolCallsTitled: 0 })
+    expect(second.protocol).toEqual({ thinkingFirst: false, thinkingTitled: false, toolCalls: 1, toolCallsTitled: 0, argsOk: true })
     expect(second.toolCalls[0].tool).toBe('read')
     expect(second.toolCalls[0].title).toBe('')
 

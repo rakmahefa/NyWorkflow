@@ -166,15 +166,25 @@ export const AGENT_TOOLS: readonly ToolDeclaration[] = [
 
 /** Parses the arguments string of a tool call (JSON) — {} when unreadable. */
 export function parseToolArgs(raw: string): Record<string, unknown> {
+  return parseToolArgsStrict(raw).args
+}
+
+/**
+ * M17 — the STRICT parse: the args AND the verdict. A model emitting
+ * malformed JSON arguments is a protocol failure the profiling must SHOW
+ * (rawArgs stays, argsOk: false) — parseToolArgs alone swallowed it into
+ * {}, hiding the bad format the pilot wants to see.
+ */
+export function parseToolArgsStrict(raw: string): { ok: boolean; args: Record<string, unknown> } {
   try {
     const parsed = JSON.parse(raw) as unknown
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>
+      return { ok: true, args: parsed as Record<string, unknown> }
     }
   } catch {
-    // unreadable JSON — empty args, the server refuses with a clear reason
+    // unreadable JSON — the caller keeps the raw string for the log
   }
-  return {}
+  return { ok: false, args: {} }
 }
 
 /** M15 — the `title` argument of a call, when the model filled it ('' otherwise). */

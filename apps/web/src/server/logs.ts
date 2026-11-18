@@ -12,11 +12,16 @@
  *     activity.jsonl — every tool call and result (callId, ok, ms),
  *                     human decisions, workspace operations;
  *     model.jsonl    — M16: EVERY model response, round by round — the
- *                     thinking (titled), the text, the tool_calls (titled),
- *                     plus protocol compliance (thinking first? titles
- *                     filled?) and the ICM prompt size (systemChars) —
- *                     the raw material that says whether the protocol
- *                     is followed in real life.
+ *                     thinking (titled), the text, the tool_calls (titled,
+ *                     with their RAW arguments and parse verdict since
+ *                     M17 — a malformed call stays visible), plus protocol
+ *                     compliance (thinking first? titles filled? args ok?)
+ *                     and the ICM prompt size (systemChars) — the raw
+ *                     material that says whether the protocol is followed
+ *                     in real life. M17 adds model.observation: the
+ *                     tool-group RESULTS that circulate back to the model
+ *                     (the third step of the protocol) — BOTH directions
+ *                     of the wire, journalled.
  *
  *   session <folder>/.logs/<sessionId>/    — the SAME quartet, per session,
  *     INSIDE the session's folder (M14, pilot-driven): each session's

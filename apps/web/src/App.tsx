@@ -9,7 +9,7 @@ import { NewSessionDialog } from './components/NewSessionDialog'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Sidebar } from './components/Sidebar'
 import { ToolApprovalCard } from './components/ToolApprovalCard'
-import { AGENT_TOOLS, isDangerousTool, parseToolArgs, titleOfArgs } from './lib/agentTools'
+import { AGENT_TOOLS, isDangerousTool, parseToolArgs, parseToolArgsStrict, titleOfArgs } from './lib/agentTools'
 import { parseInput, runCommand } from './lib/commands'
 import { fakeReply, streamText } from './lib/fakeLLM'
 import { useGatewayStatus } from './lib/gateway'
@@ -508,6 +508,22 @@ export default function App() {
           const thinkingTitles: string[] = []
           let calls: ToolCallRequest[] = []
           let failed = false
+          /** M17 — the response as the log and the trace both want it: the
+           * RAW arguments string and its parse verdict ride along (a
+           * malformed tool call stays visible — the bad format, not {}). */
+          const responseToolCalls = () =>
+            calls.map((c) => {
+              const parsed = parseToolArgsStrict(c.function.arguments)
+              return {
+                tool: c.function.name,
+                title: titleOfArgs(parsed.args),
+                args: parsed.args,
+                rawArgs: c.function.arguments,
+                argsOk: parsed.ok,
+              }
+            })
+          /** M17 — the display excerpt: enough to read, never the whole firehose. */
+          const excerpt = (s: string, max = 2000): string => (s.length > max ? `${s.slice(0, max)}…` : s)
           try {
             for await (const ev of client.chatStream({
               model,
@@ -545,8 +561,21 @@ export default function App() {
             }
             const why = err instanceof Error ? err.message : String(err)
             store.appendMessage(session.id, 'system', `Erreur passerelle : ${why}`)
-            store.settleTrace(traceId, { ms: Date.now() - startedAt, outcome: 'error', error: why, thinkingChars: thinking.length, textChars: text.length })
+            store.settleTrace(traceId, {
+              ms: Date.now() - startedAt,
+              outcome: 'error',
+              error: why,
+              thinkingChars: thinking.length,
+              textChars: text.length,
+              firstEvent,
+              thinkingTitles: [...thinkingTitles],
+              thinking: excerpt(thinking),
+              text: excerpt(text),
+              toolCalls: responseToolCalls().map((c) => ({ tool: c.tool, title: c.title, argsOk: c.argsOk })),
+              systemChars: system.length,
+            })
             // M16 — l'échec du round est journalisé aussi : où le flux s'est arrêté.
+            // M17 — rawArgs + argsOk : un tool_call mal formé reste VISIBLE.
             if (mode === 'server') {
               void api
                 .postResponse(session.id, {
@@ -562,10 +591,7 @@ export default function App() {
                   thinkingTitles,
                   thinking,
                   text,
-                  toolCalls: calls.map((c) => {
-                    const args = parseToolArgs(c.function.arguments)
-                    return { tool: c.function.name, title: titleOfArgs(args), args }
-                  }),
+                  toolCalls: responseToolCalls(),
                   error: turn.error,
                 })
                 .catch(() => undefined) // jamais bloquant
@@ -579,7 +605,18 @@ export default function App() {
 
           if (aborted()) {
             turn.outcome = 'stopped'
-            store.settleTrace(traceId, { ms: Date.now() - startedAt, outcome: 'stopped', thinkingChars: thinking.length, textChars: text.length })
+            store.settleTrace(traceId, {
+              ms: Date.now() - startedAt,
+              outcome: 'stopped',
+              thinkingChars: thinking.length,
+              textChars: text.length,
+              firstEvent,
+              thinkingTitles: [...thinkingTitles],
+              thinking: excerpt(thinking),
+              text: excerpt(text),
+              toolCalls: responseToolCalls().map((c) => ({ tool: c.tool, title: c.title, argsOk: c.argsOk })),
+              systemChars: system.length,
+            })
             store.appendMessage(session.id, 'system', 'Tour interrompu — le texte reçu est conservé.')
             return
           }
@@ -589,11 +626,20 @@ export default function App() {
             outcome: calls.length > 0 ? 'tool_calls' : 'ok',
             thinkingChars: thinking.length,
             textChars: text.length,
+            // M17 — the response rides on the trace: the activity tab SHOWS
+            // what the model said (first event, titles, excerpts, calls).
+            firstEvent,
+            thinkingTitles: [...thinkingTitles],
+            thinking: excerpt(thinking),
+            text: excerpt(text),
+            toolCalls: responseToolCalls().map((c) => ({ tool: c.tool, title: c.title, argsOk: c.argsOk })),
+            systemChars: system.length,
           })
 
           // M16 — la réponse du modèle de CE round part dans model.jsonl : le
           // pilote voit si le protocole est suivi (thinking d'abord ? titres
           // remplis ? groupe cohérent ?) — la conformité est calculée serveur.
+          // M17 — rawArgs + argsOk par appel : le MAUVAIS FORMAT reste visible.
           if (mode === 'server') {
             void api
               .postResponse(session.id, {
@@ -609,10 +655,7 @@ export default function App() {
                 thinkingTitles,
                 thinking,
                 text,
-                toolCalls: calls.map((c) => {
-                  const args = parseToolArgs(c.function.arguments)
-                  return { tool: c.function.name, title: titleOfArgs(args), args }
-                }),
+                toolCalls: responseToolCalls(),
               })
               .catch(() => undefined) // jamais bloquant
           }
@@ -655,6 +698,7 @@ export default function App() {
           // shells compris ; sous « ask », les appels sûrs ensemble et les
           // dangereux l'un après l'autre (la porte d'approbation reste
           // strictement une à la fois côté serveur).
+          const groupStartedAt = Date.now()
           if (security === 'accept') {
             await Promise.all(plan.map((p) => runOne(p)))
           } else {
@@ -662,6 +706,41 @@ export default function App() {
             for (const item of plan.filter((p) => p.danger)) {
               if (aborted()) return
               await runOne(item)
+            }
+          }
+          // M17 — L'OBSERVATION QUI CIRCULE : le groupe entier est exécuté,
+          // ses résultats partent au round suivant dans le format du
+          // protocole — ce payload EXACT part dans model.jsonl (kind
+          // model.observation, fire-and-forget). Le journal montre désormais
+          // les DEUX sens du fil : ce que le modèle a dit (model.response)
+          // et ce qu'on lui a répondu (model.observation) — mauvais formats
+          // compris. Une session effacée ou un groupe incomplet ne poste rien.
+          if (mode === 'server' && store.findSessionById(session.id) !== undefined) {
+            const rows = store.listMessages(session.id)
+            const settled = plan.map((p) => rows.find((r) => r.id === p.row.id)).filter((r) => r !== undefined && r.ok !== undefined)
+            if (settled.length === plan.length && settled.length > 0) {
+              void api
+                .postObservation(session.id, {
+                  model,
+                  round,
+                  fedToRound: round + 1,
+                  ms: Date.now() - groupStartedAt,
+                  results: settled.map((r) => {
+                    const row = r as (typeof settled)[number] & { tool?: string; title?: string; ok?: boolean; summary?: string; data?: unknown }
+                    // EXACTLY what toAgentMessages feeds the model (M16):
+                    // result = data ?? summary on success, error = summary otherwise.
+                    const payload = row.ok === true ? row.data ?? row.summary : row.summary ?? 'refusé'
+                    return {
+                      tool: row.tool ?? 'unknown',
+                      title: row.title ?? '',
+                      ok: row.ok === true,
+                      ...(row.ok === true
+                        ? { result: typeof payload === 'string' ? payload : JSON.stringify(payload ?? null) }
+                        : { error: typeof payload === 'string' ? payload : 'refusé' }),
+                    }
+                  }),
+                })
+                .catch(() => undefined) // jamais bloquant
             }
           }
           if (aborted()) return
@@ -892,7 +971,7 @@ export default function App() {
           </div>
         ) : null}
         {tab === 'activity' && active.workspace !== undefined ? (
-          <ActivityPanel traces={traces} toolRows={rows.filter((r) => r.role === 'tool')} />
+          <ActivityPanel traces={traces} toolRows={rows.filter((r) => r.role === 'tool')} sessionId={active.id} />
         ) : (
           <ChatView messages={rows} />
         )}

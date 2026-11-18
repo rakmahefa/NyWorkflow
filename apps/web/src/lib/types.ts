@@ -63,7 +63,10 @@ export interface TurnRecordDto {
 }
 
 /** M12 — one model request of the agent loop, tracked live (not journaled:
- * these live in the browser; tool history survives via the journal). */
+ * these live in the browser; tool history survives via the journal).
+ * M17 — the trace carries the RESPONSE ITSELF (first event, thinking titles,
+ * excerpts, tool calls): the activity tab shows what the model said, not
+ * just that it was asked. */
 export interface RequestTrace {
   id: string
   sessionId: string
@@ -86,4 +89,16 @@ export interface RequestTrace {
   /** Characters of thinking and text received. */
   thinkingChars: number
   textChars: number
+  /** M17 — kind of the first streamed event (the thinking-first check). */
+  firstEvent?: 'thinking' | 'text' | 'tool_calls' | 'none'
+  /** M17 — the thinking's titles, as streamed (the titled check). */
+  thinkingTitles?: string[]
+  /** M17 — the thinking, capped for display. */
+  thinking?: string
+  /** M17 — the reply text, capped for display. */
+  text?: string
+  /** M17 — the tool calls as the model made them (name + title + verdict). */
+  toolCalls?: { tool: string; title: string; argsOk: boolean }[]
+  /** M17 — the ICM system prompt's size (the context drift, per request). */
+  systemChars?: number
 }

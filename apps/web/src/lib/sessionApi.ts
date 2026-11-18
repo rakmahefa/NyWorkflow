@@ -122,6 +122,10 @@ export interface ResponseToolCall {
   tool: string
   title?: string
   args?: unknown
+  /** M17 — the RAW arguments string, as emitted (bad formats stay visible). */
+  rawArgs?: string
+  /** M17 — false when the raw arguments did not parse as a JSON object. */
+  argsOk?: boolean
 }
 
 /** One round's MODEL RESPONSE — logged to model.jsonl (M16): what the
@@ -145,12 +149,45 @@ export interface ModelResponseSummary {
   error?: string
 }
 
+/** M17 — one tool result of the group, as fed back to the model (the
+ * observation step of the three-step protocol). */
+export interface ObservationResult {
+  tool: string
+  title: string
+  ok: boolean
+  /** The result payload (ok) or the failure summary — what the model reads. */
+  result?: string
+  error?: string
+  ms?: number
+}
+
+/** M17 — the group's results, logged as model.observation in model.jsonl. */
+export interface ObservationSummary {
+  model: string
+  /** The round that EMITTED the calls. */
+  round: number
+  /** The round that will READ the results (round + 1 by construction). */
+  fedToRound: number
+  ms: number
+  results: ObservationResult[]
+}
+
 /** M16 — logs one round's model response (model.jsonl, 4th profiling log). */
 export function postResponse(id: string, response: ModelResponseSummary): Promise<void> {
   return jsonFetch<unknown>(`/sessions/${encodeURIComponent(id)}/response`, {
     method: 'POST',
     headers: jsonHeaders,
     body: JSON.stringify(response),
+  }).then(() => undefined)
+}
+
+/** M17 — logs the tool-group RESULTS that circulate back to the model
+ * (model.observation, in model.jsonl — the observation step of the protocol). */
+export function postObservation(id: string, observation: ObservationSummary): Promise<void> {
+  return jsonFetch<unknown>(`/sessions/${encodeURIComponent(id)}/observation`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify(observation),
   }).then(() => undefined)
 }
 
@@ -169,6 +206,45 @@ export function listLogs(): Promise<LogsDto> {
 
 export function tailLog(name: string, tail = 200): Promise<{ name: string; tail: string; stats: { bytes: number; lines: number } }> {
   return jsonFetch(`/logs/${encodeURIComponent(name)}?tail=${tail}`)
+}
+
+// --- M17 : les journaux DE LA SESSION (son propre quatuor) --------------------
+
+/** GET /sessions/:id/logs — the session's OWN quartet inside its folder. */
+export interface SessionLogsDto {
+  /** '' when the folder cannot be resolved (the UI says so honestly). */
+  dir: string
+  workspace: string
+  files: { name: string; bytes: number; lines: number }[]
+}
+
+/** M17 — the session's own logs (listing), and the tail of one of them. */
+export function listSessionLogs(id: string): Promise<SessionLogsDto> {
+  return jsonFetch<SessionLogsDto>(`/sessions/${encodeURIComponent(id)}/logs`)
+}
+
+export function tailSessionLog(
+  id: string,
+  name: string,
+  tail = 200,
+): Promise<{ name: string; dir: string; tail: string; stats: { bytes: number; lines: number } }> {
+  return jsonFetch(`/sessions/${encodeURIComponent(id)}/logs/${encodeURIComponent(name)}?tail=${tail}`)
+}
+
+// --- M17 : localisation de dossier (le pont du sélecteur natif) ----------------
+
+/** GET /workspaces/locate?name=… — candidates for the picked folder's name. */
+export interface LocateDto {
+  name: string
+  candidates: string[]
+  truncated: boolean
+  scanned: number
+  roots: string[]
+}
+
+/** M17 — resolves a natively picked folder NAME into candidate server paths. */
+export function locateFolders(name: string): Promise<LocateDto> {
+  return jsonFetch<LocateDto>(`/workspaces/locate?name=${encodeURIComponent(name)}`)
 }
 
 // --- /workspaces : surface ICM agentique (M11) ---------------------------------

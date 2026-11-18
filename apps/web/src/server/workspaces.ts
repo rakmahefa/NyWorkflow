@@ -12,6 +12,12 @@
  *                                             ICM tree is created INSIDE it
  *                                             (idempotent, never overwrites)
  *   GET  /workspaces/browse?path=…          → M12: folder browser (dirs only, read-only)
+ *   GET  /workspaces/locate?name=…          → M17: find a folder BY NAME on the
+ *                                             server's disk (bounded BFS from
+ *                                             home + the registry) — the bridge
+ *                                             of the native directory picker:
+ *                                             the picker gives the folder's
+ *                                             name, locate gives its path
  *   GET  /workspaces/:name/icm              → { name, tree, contexts, system } —
  *                                             the ICM loaded toward the model
  *   GET  /workspaces/:name/file?path=…      → { path, content, bytes } — read-only
@@ -51,10 +57,11 @@
  * survives restarts by derivation.
  */
 import { existsSync, statSync } from 'node:fs'
+import type { Dirent } from 'node:fs'
 import { access, readFile, readdir, writeFile, mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { isAbsolute, join, dirname } from 'node:path'
+import { isAbsolute, join, dirname, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { buildIcmSystemPrompt, ensureIcmTree, ICM_DIR, loadIcm, scaffoldAgenticWorkspace } from '@nyworkflow/core'
 import { checkToolCall, executeToolCall, isDangerous, refusedByUser, toolsDisabledRefusal, ShellJobRegistry } from '@nyworkflow/tools'
@@ -94,6 +101,20 @@ export interface BrowseDir {
   path: string
 }
 
+/** GET /workspaces/locate?name=… (M17) — the native picker's bridge. */
+export interface LocateDto {
+  /** The searched folder name (the picker's basename). */
+  name: string
+  /** Absolute paths of matching folders, shallowest first. */
+  candidates: string[]
+  /** True when the walk hit a cap before covering everything. */
+  truncated: boolean
+  /** Directories actually visited — the honest cost of the search. */
+  scanned: number
+  /** Where the search started (home + the workspaces registry). */
+  roots: string[]
+}
+
 export interface BrowseDto {
   /** The folder being listed. */
   path: string
@@ -124,6 +145,25 @@ const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const BROWSE_MAX = 500
 /** Manifest file name, at the registry root. */
 const MANIFEST_FILE = 'workspaces.json'
+/** Locate caps (M17) — a bounded, honest walk, never a full-disk scan. */
+const LOCATE_MAX_DEPTH = 5
+const LOCATE_MAX_DIRS = 4000
+const LOCATE_MAX_CANDIDATES = 20
+/** Heavy or noisy folders the locate walk never enters. */
+const LOCATE_SKIP = new Set([
+  'node_modules',
+  '.git',
+  '.hg',
+  '.svn',
+  '__pycache__',
+  '.venv',
+  'venv',
+  '.cache',
+  '.npm',
+  '.pnpm-store',
+  'Library',
+  'AppData',
+])
 
 class HttpError extends Error {
   constructor(
@@ -389,6 +429,73 @@ export function createWorkspacesHandler(
     return { path: target, parent, dirs: truncated ? dirs.slice(0, BROWSE_MAX) : dirs, truncated, home: homedir() }
   }
 
+  /**
+   * GET /workspaces/locate?name=… (M17) — the native picker's bridge. The
+   * browser's `showDirectoryPicker()` gives a folder HANDLE whose only
+   * server-usable piece is its NAME (the web platform hides the path, by
+   * design). This bounded BFS — from the user's home AND the workspaces
+   * registry, depth ≤ 5, heavy folders skipped, hard caps everywhere —
+   * turns that name into candidate absolute paths. One candidate: the
+   * dialog fills itself. Several: the pilot clicks the right one. Zero:
+   * the honest error, the manual path stays.
+   */
+  async function locate(rawName: string | null): Promise<LocateDto> {
+    const name = rawName?.trim() ?? ''
+    if (name === '' || name.includes('/') || name.includes('\\') || name.length > 120) {
+      throw badRequest('nom de dossier attendu (basname, sans séparateur)')
+    }
+    const started = Date.now()
+    const roots = [...new Set([homedir(), dir])]
+    const candidates: string[] = []
+    const seen = new Set<string>()
+    let scanned = 0
+    let truncated = false
+    // BFS, depth-bounded — the queue carries (path, depth).
+    const queue: { path: string; depth: number }[] = roots.map((path) => ({ path, depth: 0 }))
+    while (queue.length > 0) {
+      if (scanned >= LOCATE_MAX_DIRS || candidates.length >= LOCATE_MAX_CANDIDATES) {
+        truncated = true
+        break
+      }
+      const current = queue.shift() as { path: string; depth: number }
+      if (seen.has(current.path)) continue
+      seen.add(current.path)
+      let entries: Dirent[] = []
+      try {
+        entries = await readdir(current.path, { withFileTypes: true }) as Dirent[]
+      } catch {
+        continue // unreadable (EACCES…) — never fatal, just not scanned
+      }
+      scanned++
+      for (const e of entries) {
+        // Directories only — a symlinked folder is not isDirectory(), and
+        // that is exactly what we want: no cycles, no surprises.
+        if (!e.isDirectory()) continue
+        const child = join(current.path, e.name)
+        if (e.name === name && !seen.has(child)) {
+          seen.add(child)
+          candidates.push(child)
+          if (candidates.length >= LOCATE_MAX_CANDIDATES) break
+        }
+        // Descend: hidden and heavy folders are skipped, depth is bounded.
+        if (current.depth < LOCATE_MAX_DEPTH && !e.name.startsWith('.') && !LOCATE_SKIP.has(e.name)) {
+          queue.push({ path: child, depth: current.depth + 1 })
+        }
+      }
+    }
+    // Shallowest first (the shortest path wins — usually THE folder).
+    candidates.sort((a, b) => a.split(sep).length - b.split(sep).length || a.localeCompare(b))
+    profiler?.activity({
+      kind: 'folder.locate',
+      name,
+      candidates: candidates.length,
+      truncated,
+      scanned,
+      ms: Date.now() - started,
+    })
+    return { name, candidates, truncated, scanned, roots }
+  }
+
   /** GET /workspaces/:name/icm — the ICM toward the model. */
   async function icmOf(name: string): Promise<IcmDto> {
     const root = await rootOf(name)
@@ -622,6 +729,10 @@ export function createWorkspacesHandler(
 
     if (parts.length === 1 && parts[0] === 'browse') {
       if (method === 'GET') return send(res, 200, await browse(query?.get('path') ?? null))
+      throw notFound('route inconnue')
+    }
+    if (parts.length === 1 && parts[0] === 'locate') {
+      if (method === 'GET') return send(res, 200, await locate(query?.get('name') ?? null))
       throw notFound('route inconnue')
     }
     if (parts.length === 2 && parts[1] === 'icm') {
