@@ -282,7 +282,7 @@ async function runTool(root: string, call: ToolCall, runtime?: ToolRuntime): Pro
 /** M21 — no_tool : le pivot du contrat d'appels. Le modèle qui n'a besoin
  * d'aucun outil émet QUAND MÊME son unique tool_call no_tool : la boucle
  * garde un format constant (thinking → tool_calls), le journal garde la
- * trace du choix, et le compte annoncé « PLAN: no_tool » vérifie. */
+ * trace du choix, et le listing « [TOOL_LISTING] no_tool » (M22) vérifie. */
 function runNoTool(args: Record<string, unknown>): Promise<ToolOutcome> {
   const reason = argString(args, 'reason')
   return Promise.resolve({

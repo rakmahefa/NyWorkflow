@@ -80,6 +80,12 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
    * explorer pick (native or Firefox). The submit registers THIS path —
    * navigating alone never selects anything. */
   const [usedPath, setUsedPath] = useState<string | null>(null)
+  /** Audit — the picked message must follow the navigation: the state is
+   * async to read inside loadBrowse's .then, the ref is always current. */
+  const usedPathRef = useRef<string | null>(null)
+  useEffect(() => {
+    usedPathRef.current = usedPath
+  }, [usedPath])
 
   // --- M17 : sélecteur natif « Explorer » ---
   /** True while the picked name is being resolved by /workspaces/locate. */
@@ -141,6 +147,14 @@ export function NewSessionDialog({ mode, initialTitle, initialWorkspace, onClose
         // Le chargement initial (home) ne doit JAMAIS écraser un chemin déjà tapé.
         setBrowsePath((current) => (path === undefined && pathTouched.current ? current : dto.path))
         setFolderName((current) => (current === '' ? (dto.path.split('/').pop() ?? '') : current))
+        // Audit — le message de sélection suit la navigation : il ne peut
+        // plus dire « /a/b sera utilisé » pendant que l'écran liste /c/d (le
+        // pilote ne soumettrait pas /a/b en croyant avoir pris /c/d).
+        if (path !== undefined && usedPathRef.current !== null && usedPathRef.current !== dto.path) {
+          setPicked(
+            `Sélection actuelle : ${usedPathRef.current} — vous naviguez dans ${dto.path} ; « Utiliser ce dossier » appliquera celui-ci.`,
+          )
+        }
       })
       .catch((err) => {
         if (seq === browseSeq.current) setError(err instanceof Error ? err.message : String(err))

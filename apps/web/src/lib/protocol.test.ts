@@ -363,6 +363,14 @@ describe('M23 — LE BRIEFING : parseAssessment, la ligne EXIGENCE du premier ro
     expect(parseAssessment('Je réfléchis.\nexigence : standard — ICM: riche')).toBe('standard — ICM: riche')
   })
 
+  it('tolère la mise en forme markdown du marqueur (audit)', () => {
+    expect(parseAssessment('**EXIGENCE:** exigeante — ICM: riche')).toBe('exigeante — ICM: riche')
+    expect(parseAssessment('**EXIGENCE** : standard')).toBe('standard')
+    expect(parseAssessment('> EXIGENCE: triviale')).toBe('triviale')
+    expect(parseAssessment('- __EXIGENCE__ standard, sans tiret')).toBe('standard, sans tiret')
+    expect(parseAssessment('EXIGENCEUX: ça n’est pas le marqueur')).toBeNull()
+  })
+
   it('rend la ligne présente mais vide, et null quand elle manque', () => {
     expect(parseAssessment('EXIGENCE:')).toBe('')
     expect(parseAssessment('EXIGENCE : ')).toBe('')
@@ -409,13 +417,25 @@ describe('M23 — L’ANTI-RENONCEMENT : detectCapitulation, le model control', 
   })
 
   it('détecte chaque famille de renoncement d’identité', () => {
-    expect(detectCapitulation('Ceci n’a pas été conçu pour ce travail.')).toContain('conçu')
+    expect(detectCapitulation('Je n’ai pas été conçu pour ce travail.')).toContain('conçu')
     expect(detectCapitulation('Je ne suis qu’un modèle de langage.')).toContain('modèle')
+    expect(detectCapitulation('Je ne suis qu’un simple modèle de langage.')).toContain('modèle')
     expect(detectCapitulation('En tant qu’IA, je ne peux pas créer de projet complet.')).toContain('IA')
+    expect(detectCapitulation('En tant que modèle de langage spécialisé dans l’analyse de grandes bases documentaires, je ne peux pas deviner ce que vous voulez.')).toContain('modèle')
     expect(detectCapitulation('Cela est hors de ma portée.')).toContain('portée')
     expect(detectCapitulation('Il m’est impossible de continuer.')).not.toBeNull()
     expect(detectCapitulation('Je n’ai pas la capacité de gérer ce projet.')).not.toBeNull()
     expect(detectCapitulation('Je ne suis pas en mesure de créer cette archive.')).not.toBeNull()
+  })
+
+  it('audit — les limites d’OUTILS tiers et les états réels ne sont pas des renoncements', () => {
+    // Un outil tiers qui « n’a pas été conçu pour » : limite honnête, pas capitulation.
+    expect(detectCapitulation('xargs n’a pas été conçu pour parser du JSON — je passe par jq.')).toBeNull()
+    expect(detectCapitulation('Ce format n’a jamais été fait pour être lu en texte, read renvoie du binaire.')).toBeNull()
+    // « Autorisé » après un refus d’approbation du pilote : c’est l’ÉTAT réel.
+    expect(detectCapitulation('Je ne suis pas autorisé à écrire ici — le pilote a refusé l’appel, voici une alternative.')).toBeNull()
+    // « Concerné » n’est pas « conçu ».
+    expect(detectCapitulation('Je ne suis pas concerné par cette remarque du plan.')).toBeNull()
   })
 
   it('laisse passer l’impossibilité locale honnête — le blocage précis n’est pas un renoncement', () => {

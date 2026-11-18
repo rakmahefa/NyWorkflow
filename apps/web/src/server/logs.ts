@@ -21,7 +21,14 @@
  *                     in real life. M17 adds model.observation: the
  *                     tool-group RESULTS that circulate back to the model
  *                     (the third step of the protocol) — BOTH directions
- *                     of the wire, journalled.
+ *                     of the wire, journalled. M20-M22 (audit I3, doc
+ *                     alignée sur les champs réels) : model.response porte
+ *                     le groupe `phases` (listing, listingOk, messageChars,
+ *                     droppedChars, brokenToolBlocks) et le champ
+ *                     `feedback` quand un round est refusé pour contrat
+ *                     non tenu ; model.observation porte `feedback` aussi
+ *                     — la note du mentor/du model control qui part au
+ *                     round suivant, mot pour mot.
  *
  *   session <folder>/.logs/<sessionId>/    — the SAME quartet, per session,
  *     INSIDE the session's folder (M14, pilot-driven): each session's

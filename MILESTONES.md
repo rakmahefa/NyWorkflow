@@ -405,6 +405,19 @@ Détail de la livraison :
 - **Tests** : 531 unitaires (+10 protocol M23 : parseAssessment et sa tolérance/bornes/coquilles, chaque famille de capitulation et les impossibilités locales qui passent, capitulationNote ligne par ligne, le briefing réclamé au round 1 et jamais au round 2+, le silence du conforme ; +2 icm : le briefing enseigné avec son gabarit, le model control enseigné à la source). **48 e2e** (+2 m23 : le renoncement refusé-repris-sur le fil-dans l'UI, le briefing manquant réclamé avec sa carte de feedback). Maquette : briefing par défaut, scénarios AGENTRENONCE/AGENTBRIEFING corrigés après feedback.
 - Docs : README (le model control dans la ligne protocole, comptes 531/48, M23 dans la table), USERGUIDE (§ le briefing et le model control), ARCHITECTURE (D13), PLAN (point de décision fin M23), ce fichier — v0.14.0.
 
+## Audit du code — les 20 correctifs post-M23 (v0.14.1) ✅
+
+> Demandé par le pilote à la livraison du M23 : « auditer le code (bugs, incohérences, UI et code) ». Trois revues parallèles ont couvert le dépôt entier — boucle de tour/UI, protocole/composants, packages/serveur — et le rapport complet vit dans [AUDIT.md](AUDIT.md). Cette entrée n'en retient que la décision.
+
+- [x] **LA SÉCURITÉ DU SERVEUR LOCAL** : le drive-by navigateur est fermé (`originGuard.ts` — un navigateur envoie toujours `Origin` sur les requêtes mutantes ; on refuse 403 celles d'une autre origine, curl et les tests passent), `DELETE /sessions/:id/<x>` ne supprime plus la session derrière le dos du pilote (routage strict), `.logs/` est interdit aux outils fichiers (le prompt l'enseignait, le scope ne l'imposait pas — la session B ne lit plus le model.jsonl de la session A), et `filePreview` vérifie la taille AVANT de lire (plus de 2 Go en mémoire avant un 413).
+- [x] **LES ÉTATS ORPHELINS** : le Stop refuse AUSSI l'approbation serveur en attente (plus de 409 permanent ni de carte zombie au rechargement), la race Stop/runTool ne suspend plus le tour (garde `aborted()` avant l'installation du waiter), les jobs d'arrière-plan meurent avec le serveur (`close()` → `killAll()` dans le plugin — plus de processus orphelin après Ctrl+C), l'éviction du registre ne sort JAMAIS un job vivant, et les erreurs realpath (ELOOP, EACCES) deviennent des refus propres au lieu de 500.
+- [x] **LA TRAÇABILITÉ DU MODEL CONTROL** : le refus de contrat n'ÉCRASE plus la note de renoncement (les deux voyagent fusionnées — une carte, jamais deux), et le champ `feedback` journalisé (trace, réponse refusée, observation) porte la note COMPLETE envoyée au round suivant, pas sa moitié mentor.
+- [x] **LES FAUX POSITIFS DE L'ANTI-RENONCEMENT** : première personne exigée (« xargs n'a pas été conçu pour » passe), « autorisé » après un refus du pilote passe, « concerné » ne matche plus « conçu », « En tant QUE modèle » est détecté (le pattern exigeait « qu' »), fenêtre élargie à 120, « qu'un simple modèle » détecté — chaque cas couvert par un test négatif ou positif.
+- [x] **LE BRIEFING TOLÉRANT LE MARKDOWN** : `**EXIGENCE:**`, `__EXIGENCE__`, `> EXIGENCE`, `- EXIGENCE` sont attrapés (lookahead au lieu de `\b`, que le souligné casse) — « EXIGENCEUX » reste refusé.
+- [x] **L'UI** : la clé de round est STABLE (le head, pas la première rangée d'outil — fini le remontage en plein stream), `no_tool` a son glyphe et son libellé dans l'Activité (« aucun outil — réponse finale »), le message de sélection du dossier suit la navigation (il ne dit plus « /a/b sera utilisé » pendant que l'écran liste /c/d), la fin du dernier round vide n'est jamais silencieuse, et le repli positionnel des vieux journaux est FIFO.
+
+**Livré quand :** `pnpm test` vert (533 unitaires, +2 : markdown du briefing, négatifs de la capitulation), `pnpm test:e2e` vert (48 — les deux M23 rejoués après correctifs), typecheck et build verts, CI complet sur le commit. ✔
+
 ## Milestones futurs
 
 > Réécrits à chaque fin de milestone atteint (règle de gouvernance ci-dessus).

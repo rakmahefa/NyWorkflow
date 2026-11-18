@@ -224,7 +224,11 @@ function callLabel(c: RoundToolCall): string {
  */
 export function parseAssessment(thinking: string): string | null {
   for (const line of thinking.split('\n')) {
-    const m = line.match(/^\s*exIGENCE\s*:?\s*(.*)$/i)
+    // Audit — tolérance markdown : **EXIGENCE**, __EXIGENCE__, > EXIGENCE,
+    // - EXIGENCE… le marqueur doit être attrapé, pas puni pour sa mise en
+    // forme (les modèles gras-sent souvent leurs en-têtes). Le lookahead
+    // (et non \b) laisse passer le souligné de __EXIGENCE__.
+    const m = line.match(/^\s*[>#\s-]*(?:\*\*|__)?exIGENCE(?![A-Za-z0-9À-ÿ])(?:\*\*|__)?[\s:*_-]*(.*)$/i)
     if (m !== null) return m[1]!.trim().slice(0, 300)
   }
   return null
@@ -242,12 +246,20 @@ export function parseAssessment(thinking: string): string | null {
  * La classe `[\wÀ-ÿ]` couvre les accents français (programmé, conçu,
  * capacité…) que `\w` ASCII ignore ; les deux apostrophes (' et ') sont
  * admises partout où le français s'écrit.
+ *
+ * Audit — resserrage des faux positifs remontés : (1) les patterns 1-2
+ * exigent un sujet à la PREMIÈRE PERSONNE — « xargs n'a pas été conçu
+ * pour parser du JSON » est une limite d'outil honnête, pas un
+ * renoncement ; (2) « autorisé » a quitté le pattern 1 : après un refus
+ * d'approbation du pilote, « je ne suis pas autorisé à écrire ici » est
+ * l'ÉTAT réel, le contester serait faux ; (3) le lexème « conçu » est
+ * fermé (con[çc]u…) pour ne plus attraper « concerné ».
  */
 const CAPITULATION_PATTERNS: readonly RegExp[] = [
-  /je\s+(?:ne\s+|n['’]\s*)?(?:suis|serais|étais)\s+pas\s+(?:un\s+|une\s+)?(?:programm[\wÀ-ÿ]*|con[çc][\wÀ-ÿ]*|fait[\wÀ-ÿ]*|autoris[\wÀ-ÿ]*)/i,
-  /(?:pas|jamais)\s+(?:été\s+)?(?:programm[\wÀ-ÿ]*|con[çc][\wÀ-ÿ]*|fait[\wÀ-ÿ]*)\s+(?:pour|à)/i,
-  /je\s+(?:ne\s+|n['’]\s*)?(?:suis|serais)\s+qu['’](?:un|une)\s+(?:mod[eè]le|IA|intelligence|chatbot|assistant\s+basique)/i,
-  /en\s+tant\s+qu['’]?\s*(?:une?\s+)?(?:IA|mod[eè]le(?:\s+de\s+langage)?|intelligence\s+artificielle)\b[^.\n]{0,60}?\b(?:je\s+ne\s+peux|je\s+n['’]arrive|je\s+ne\s+sais\s+pas|je\s+ne\s+suis\s+pas\s+capable|incapable|impossible)/i,
+  /je\s+(?:ne\s+|n['’]\s*)?(?:suis|serais|étais)\s+pas\s+(?:un\s+|une\s+)?(?:programm[\wÀ-ÿ]*|con[çc]u[\wÀ-ÿ]*|fait[\wÀ-ÿ]*)/i,
+  /je\s+(?:ne\s+|n['’]\s*)?(?:suis|serais|étais|ai|avais)\s+(?:pas|jamais)\s+(?:été\s+)?(?:programm[\wÀ-ÿ]*|con[çc]u[\wÀ-ÿ]*|fait[\wÀ-ÿ]*)\s+(?:pour|à)/i,
+  /je\s+(?:ne\s+|n['’]\s*)?(?:suis|serais)\s+qu['’](?:un|une)\s+(?:[\wÀ-ÿ]+\s+){0,2}?(?:mod[eè]le|IA|intelligence|chatbot|assistant\s+basique)/i,
+  /en\s+tant\s+qu(?:e\b|['’])?\s*(?:une?\s+)?(?:IA|mod[eè]le(?:\s+de\s+langage)?|intelligence\s+artificielle)\b[^.\n]{0,120}?\b(?:je\s+ne\s+peux|je\s+n['’]arrive|je\s+ne\s+sais\s+pas|je\s+ne\s+suis\s+pas\s+capable|incapable|impossible)/i,
   /(?:hors|au[- ]delà|en\s+dehors)\s+(?:de\s+)?(?:ma|mes)\s+(?:port[\wÀ-ÿ]*|capacit[\wÀ-ÿ]*|comp[ée]tences|possibilit[\wÀ-ÿ]*|fonctions|attributions)/i,
   /impossible\s+(?:pour\s+moi|de\s+ma\s+part)/i,
   /(?:il\s+)?m['’]est\s+impossible/i,

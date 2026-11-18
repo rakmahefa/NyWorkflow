@@ -361,7 +361,10 @@ export function ChatView({ messages, protocol = false }: { messages: readonly Ch
     <div className="chat">
       {rendered.map((item, k) =>
         item.kind === 'round' ? (
-          <RoundBlock key={`r${item.rows[0]?.id ?? item.head?.id ?? k}`} head={item.head} rows={item.rows} protocol={protocol} />
+          // Audit — le head est l'INVARIANT du round : sa clé ne doit pas
+          // changer quand la première rangée d'outil atterrit (sinon le bloc
+          // se remonte en plein stream — carte thinking réouverte, scroll perdu).
+          <RoundBlock key={`r${item.head?.id ?? item.rows[0]?.id ?? k}`} head={item.head} rows={item.rows} protocol={protocol} />
         ) : (
           <div key={item.m.id} className={`msg ${item.m.role}`}>
             {item.m.role === 'assistant' && item.m.thinking !== undefined && item.m.thinking !== '' ? (

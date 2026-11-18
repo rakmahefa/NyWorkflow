@@ -56,6 +56,9 @@ const TOOL_GLYPH: Record<string, string> = {
   websearch: '🌐',
   shell_output: '📡',
   shell_kill: '🛑',
+  // Audit — le 10e outil a son glyphe aussi : la signature de fin de tour
+  // ne s'affiche plus avec l'icône générique de l'activité.
+  no_tool: '🚫',
 }
 
 /** M18 — the Z.ai-style summary of a tool set: counts by tool, French. */
@@ -69,6 +72,8 @@ const TOOL_GROUP_LABEL: Record<string, (n: number) => string> = {
   websearch: (n) => (n === 1 ? '1 recherche web' : `${n} recherches web`),
   shell_output: (n) => (n === 1 ? '1 job suivi' : `${n} jobs suivis`),
   shell_kill: (n) => (n === 1 ? '1 job arrêté' : `${n} jobs arrêtés`),
+  // Audit — même libellé français que le chat pour la signature de fin.
+  no_tool: () => 'aucun outil — réponse finale',
 }
 
 /** « 2 fichiers lus · 1 commande lancée » — the head line of a turn. */

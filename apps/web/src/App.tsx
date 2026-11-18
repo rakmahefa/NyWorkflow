@@ -287,7 +287,7 @@ export default function App() {
         // callId d'abord (M12), repli positionnel pour les journaux anciens.
         let open: ChatMsg | undefined
         if (e.callId !== undefined) open = openByCallId.get(e.callId)
-        if (open === undefined) open = [...out].reverse().find((r) => r.role === 'tool' && r.ok === undefined)
+        if (open === undefined) open = out.find((r) => r.role === 'tool' && r.ok === undefined)
         if (open !== undefined) {
           open.ok = e.ok
           open.summary = e.summary
@@ -746,11 +746,14 @@ export default function App() {
           if (planBroken && planRedos < MAX_PLAN_REDOS && round < MAX_ROUNDS) {
             planRedos++
             const redoNote = planRedoNote(round, protocolLines(roundProtocol, turnMemory, icmContextPaths))
-            mentorNote = redoNote
+            // Audit M5 — le refus de contrat n'ÉCRASE pas la note de model
+            // control : les deux voyagent ensemble au round suivant (une
+            // seule carte de feedback, phase 5, jamais deux).
+            mentorNote = capNote !== null ? `${capNote}\n\n${redoNote}` : redoNote
             // M22 — la carte de feedback (phase 5) vit DANS le round refusé,
             // même vide par ailleurs : c'est la seule phase qui reste — le
             // pilote lit ce que le harness a répondu au modèle.
-            store.attachFeedback(placeholder.id, redoNote)
+            store.attachFeedback(placeholder.id, mentorNote)
             store.settleTrace(traceId, {
               ms: Date.now() - startedAt,
               outcome: 'tool_calls',
@@ -763,7 +766,7 @@ export default function App() {
               toolCalls: responseToolCalls().map((c) => ({ tool: c.tool, title: c.title, argsOk: c.argsOk })),
               systemChars: system.length,
               ...phaseFacts,
-              feedback: redoNote,
+              feedback: mentorNote,
             })
             if (mode === 'server') {
               void api
@@ -783,9 +786,10 @@ export default function App() {
                   toolCalls: responseToolCalls(),
                   // M21 — le refus journalisé AVEC la réponse fautive : la
                   // note exacte que le round suivant lit. M22 — les faits des
-                  // phases (listing, drops) voyagent avec.
+                  // phases (listing, drops) voyagent avec. Audit M5 — la note
+                  // COMPLETE (model control compris), pas sa moitié.
                   ...phaseFacts,
-                  feedback: redoNote,
+                  feedback: mentorNote,
                 })
                 .catch(() => undefined) // jamais bloquant
             }
@@ -816,7 +820,10 @@ export default function App() {
             toolCalls: responseToolCalls().map((c) => ({ tool: c.tool, title: c.title, argsOk: c.argsOk })),
             systemChars: system.length,
             ...phaseFacts,
-            ...(mentor !== null ? { feedback: mentor } : {}),
+            // Audit M6 — la trace journalise la note COMPLETE envoyée au
+            // round suivant (model control fusionné au verdict protocole),
+            // pas la seule partie mentor.
+            ...(mentorNote !== null ? { feedback: mentorNote } : {}),
           })
 
           // M16 — la réponse du modèle de CE round part dans model.jsonl : le
@@ -860,9 +867,13 @@ export default function App() {
                 continue
               }
               store.removeMessage(placeholder.id)
-              if (emptyNudged) {
-                store.appendMessage(session.id, 'system', 'Le modèle reste vide malgré le feedback — tour terminé.')
-              }
+              // Audit m5 — même au dernier round, la fin ne se fait jamais en
+              // silence : le pilote sait TOUJOURS pourquoi le tour s'arrête.
+              store.appendMessage(
+                session.id,
+                'system',
+                emptyNudged ? 'Le modèle reste vide malgré le feedback — tour terminé.' : 'Réponse vide au dernier round — tour terminé.',
+              )
               return
             }
             // M23 — UN RENONCEMENT N'EST PAS UNE RÉPONSE : la prose
@@ -1006,6 +1017,18 @@ export default function App() {
               store.resolveToolCall(item.row.id, res.outcome)
               return
             }
+            // Audit M1 — Stop pendant le runTool en vol : ne JAMAIS installer
+            // le waiter d'un tour déjà interrompu (personne ne le résoudrait —
+            // composer bloqué jusqu'à un second Stop). La ligne est soldée
+            // localement et l'approbation serveur est refusée au passage.
+            if (aborted()) {
+              const ws = store.findSessionById(session.id)?.workspace
+              if (ws !== undefined && mode === 'server') {
+                void api.decideTool(ws, session.id, 'refuse').catch(() => undefined)
+              }
+              store.resolveToolCall(item.row.id, { ok: false, summary: 'tour interrompu pendant l’appel' })
+              return
+            }
             // Dangereux : en pause — la carte d'approbation décide, la boucle attend.
             const outcome = await new Promise<ToolRunDto>((resolve) => {
               waiterRef.current = { sessionId: session.id, rowId: item.row.id, resolve }
@@ -1048,8 +1071,9 @@ export default function App() {
                   // M20 — le rappel du mentor part avec l'observation qu'il
                   // corrige : model.jsonl garde les DEUX sens du fil, rappel
                   // compris (ce qui a été dit au modèle, pas seulement ce
-                  // qu'il a dit).
-                  ...(mentor !== null ? { feedback: mentor } : {}),
+                  // qu'il a dit). Audit M6 — la note COMPLETE (model control
+                  // compris), celle que le round suivant lit vraiment.
+                  ...(mentorNote !== null ? { feedback: mentorNote } : {}),
                   results: settled.map((r) => {
                     const row = r as (typeof settled)[number] & { tool?: string; title?: string; ok?: boolean; summary?: string; data?: unknown }
                     // EXACTLY what toAgentMessages feeds the model (M16):
@@ -1086,9 +1110,17 @@ export default function App() {
     const waiter = waiterRef.current
     if (waiter !== null) {
       waiterRef.current = null
+      // Audit C1 — la décision REFUSE part AUSSI au serveur : sans elle,
+      // l'appel dangereux y resterait pending (409 aux prochains appels de
+      // la session, carte d'approbation zombie au rechargement). Best-effort,
+      // jamais bloquant — le tour finit quoi qu'il arrive.
+      const ws = store.findSessionById(waiter.sessionId)?.workspace
+      if (ws !== undefined && mode === 'server') {
+        void api.decideTool(ws, waiter.sessionId, 'refuse').catch(() => undefined)
+      }
       waiter.resolve({ status: 'executed', callId: '', outcome: { ok: false, code: 'refused_by_user', summary: 'tour interrompu par le pilote' } })
     }
-  }, [])
+  }, [mode, store])
 
   const handleSend = useCallback(
     async (raw: string) => {

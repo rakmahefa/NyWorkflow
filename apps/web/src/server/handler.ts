@@ -60,6 +60,7 @@ import {
 } from '@nyworkflow/session'
 import type { DerivedSession, SecurityLevel, SessionEvent } from '@nyworkflow/session'
 import { dropSessionProfiler, JsonlLog, LOG_NAMES, sessionProfiler, type LogName, type Profiler } from './logs.ts'
+import { refuseCrossOrigin } from './originGuard.ts'
 import { resolveWorkspaceRoot, workspaceExists } from './workspaces.ts'
 
 /** Workspace folder names, same rule as the /workspaces API. */
@@ -700,9 +701,11 @@ export function createSessionsHandler(
         await remove(id)
         return send(res, 200, { ok: true })
       }
-      if (method === 'DELETE') {
-        await remove(id)
-        return send(res, 200, { ok: true })
+      // Audit I5 — le fallback DELETE est strict : seules les sous-ressources
+      // CONNUES répondent — DELETE /sessions/:id/logs doit échouer, pas
+      // supprimer la session derrière le dos du pilote.
+      if (method === 'DELETE' && ['events', 'fork', 'rename', 'security', 'turn', 'response', 'observation', 'delete'].includes(parts[1] ?? '')) {
+        throw notFound(`DELETE non supporté pour /sessions/:id/${parts[1]}`)
       }
     }
     // M17 — GET /sessions/:id/logs/:name?tail=N — the tail of ONE of the
@@ -716,6 +719,9 @@ export function createSessionsHandler(
   }
 
   return function sessionsApi(req, res): void {
+    // Audit S1 — les requêtes cross-origin d'un navigateur n'ont rien à
+    // faire ici (drive-by CSRF sur les routes mutantes).
+    if (refuseCrossOrigin(req, res)) return
     handle(req, res).catch((err: unknown) => {
       if (err instanceof HttpError) return send(res, err.status, { error: err.message })
       console.error('[sessions] erreur interne', err)

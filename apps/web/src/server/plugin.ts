@@ -54,7 +54,7 @@ export function nyworkflowServerPlugin(options: NyworkflowServerPluginOptions = 
   let profiler: Profiler | undefined
   let gateway: EmbeddedGateway | undefined
 
-  function mount(middlewares: MiddlewareStack): void {
+  function mount(middlewares: MiddlewareStack): () => void {
     const sessions = createSessionsHandler(home, { workspacesDir, profiler })
     const workspaces = createWorkspacesHandler({ dir: workspacesDir, home, profiler })
     // M13 — every /sessions and /workspaces request lands in engine.jsonl
@@ -62,6 +62,11 @@ export function nyworkflowServerPlugin(options: NyworkflowServerPluginOptions = 
     middlewares.use('/sessions', profiler !== undefined ? profiler.traceHttp(sessions) : sessions)
     middlewares.use('/workspaces', profiler !== undefined ? profiler.traceHttp(workspaces) : workspaces)
     if (profiler !== undefined) middlewares.use('/logs', createLogsHandler(profiler))
+    return () => {
+      // Audit R1 — les jobs d'arrière-plan (shells) meurent avec le serveur :
+      // plus de processus orphelin après Ctrl+C.
+      workspaces.close()
+    }
   }
 
   async function embed(): Promise<void> {
@@ -86,16 +91,18 @@ export function nyworkflowServerPlugin(options: NyworkflowServerPluginOptions = 
       profiler?.engine({ kind: 'boot', mode: config.command, home, workspacesDir, logsDir })
     },
     configureServer(server: ViteDevServer) {
-      mount(server.middlewares as unknown as MiddlewareStack)
+      const unmount = mount(server.middlewares as unknown as MiddlewareStack)
       void embed()
       return () => {
+        unmount()
         void gateway?.close()
       }
     },
     configurePreviewServer(server: PreviewServer) {
-      mount(server.middlewares as unknown as MiddlewareStack)
+      const unmount = mount(server.middlewares as unknown as MiddlewareStack)
       void embed()
       return () => {
+        unmount()
         void gateway?.close()
       }
     },

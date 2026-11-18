@@ -9,7 +9,7 @@ import { realpath } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
 
 /** Why a path was refused. */
-export type ScopeRefusal = 'empty' | 'absolute' | 'backslash' | 'escape' | 'symlink-escape'
+export type ScopeRefusal = 'empty' | 'absolute' | 'backslash' | 'escape' | 'symlink-escape' | 'forbidden' | 'unresolvable'
 
 export interface ScopeResolution {
   ok: boolean
@@ -28,6 +28,11 @@ export const SCOPE_REASONS: Record<ScopeRefusal, string> = {
   backslash: 'séparateur « \\ » interdit',
   escape: 'chemin hors workspace',
   'symlink-escape': 'symlink pointant hors du workspace',
+  // Audit S4 — le prompt enseigne « ne lis ni ne modifie jamais .logs/ » :
+  // le scope l'impose aussi (les logs de session d'un workspace ne sont pas
+  // la matière première des outils).
+  forbidden: 'dossier .logs/ réservé au harness (interdit aux outils)',
+  unresolvable: 'chemin non résolvable (permissions ou boucle de symlinks)',
 }
 
 /** Lexical pass: shape of the path, no filesystem access. */
@@ -40,6 +45,11 @@ function lexicalCheck(root: string, raw: string): ScopeResolution {
 
   const rel = posix.normalize(t)
   if (rel === '..' || rel.startsWith('../')) return refuse('escape')
+
+  // Audit S4 — .logs/ est le journal du harness (il contient les réponses
+  // des modèles, y compris celles des AUTRES sessions du workspace) : le
+  // prompt l'interdit aux outils, le scope l'imprime pareil.
+  if (rel === '.logs' || rel.startsWith('.logs/')) return refuse('forbidden')
 
   const target = resolve(root, rel)
   const back = relative(root, target)
@@ -65,7 +75,11 @@ export async function resolveInScope(root: string, raw: string): Promise<ScopeRe
     try {
       canonical = await realpath(probe)
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      const code = (err as NodeJS.ErrnoException).code
+      // Audit R2 — une erreur fs qui n'est pas ENOENT (EACCES sur un
+      // ancêtre, ELOOP sur une boucle de symlinks…) est un REFUS propre et
+      // journalisé, pas une 500 : le chemin existe mais ne se résout pas.
+      if (code !== 'ENOENT') return { ok: false, code: 'unresolvable', reason: `${SCOPE_REASONS.unresolvable} (${code ?? 'erreur fs'}) : ${lex.rel}` }
       // Not there (yet): judge by the deepest existing ancestor.
       tail.unshift(basename(probe))
       const parent = dirname(probe)

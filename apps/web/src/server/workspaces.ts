@@ -70,6 +70,7 @@ import { resolveInScope } from '@nyworkflow/tools'
 import { appendEvent, deriveSession, isSessionId, journalPath, pendingToolCalls, readEvents } from '@nyworkflow/session'
 import type { SessionEvent } from '@nyworkflow/session'
 import { sessionProfiler, type Profiler } from './logs.ts'
+import { refuseCrossOrigin } from './originGuard.ts'
 
 /** M18 — the call's TITLE and TARGET, extracted from its args: the
  * activity log (and the engine view) become self-sufficient — reading a
@@ -312,7 +313,7 @@ export async function resolveWorkspaceRoot(dir: string, name: string): Promise<s
 
 export function createWorkspacesHandler(
   options: WorkspacesHandlerOptions,
-): (req: IncomingMessage, res: ServerResponse) => void {
+): WorkspacesApi {
   const { dir, home } = options
   const profiler = options.profiler
   /** Sessions with a tool decision in flight — a second decision gets a 409. */
@@ -531,6 +532,19 @@ export function createWorkspacesHandler(
     const root = await rootOf(name)
     const scope = await resolveInScope(root, rawPath)
     if (!scope.ok) throw badRequest(`chemin refusé — ${scope.reason}`)
+    // Audit P2 — la taille est vérifiée AVANT la lecture : un fichier de 2 Go
+    // dans le workspace ne passe plus par la mémoire avant son 413.
+    try {
+      const stats = statSync(scope.target as string)
+      if (stats.size > PREVIEW_MAX * 4) {
+        throw new HttpError(413, `fichier trop volumineux pour l'aperçu (max ${PREVIEW_MAX} caractères) — ${stats.size} octets`)
+      }
+    } catch (err) {
+      if (err instanceof HttpError) throw err
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'EISDIR') throw badRequest('c\'est un dossier, pas un fichier')
+      throw notFound('fichier introuvable dans le workspace')
+    }
     let content: string
     try {
       content = await readFile(scope.target as string, 'utf8')
@@ -818,11 +832,31 @@ export function createWorkspacesHandler(
     throw notFound('route inconnue')
   }
 
-  return function workspacesApi(req, res): void {
+  const workspacesApi = function workspacesApi(req: IncomingMessage, res: ServerResponse): void {
+    // Audit S1 — les requêtes cross-origin d'un navigateur n'ont rien à
+    // faire ici (drive-by CSRF : enregistrer un dossier, créer une session
+    // « accept », lancer un shell).
+    if (refuseCrossOrigin(req, res)) return
     handle(req, res).catch((err: unknown) => {
       if (err instanceof HttpError) return send(res, err.status, { error: err.message })
       console.error('[workspaces] erreur interne', err)
       return send(res, 500, { error: 'Erreur interne du serveur de workspaces' })
     })
+  } as WorkspacesApi
+  // Audit R1 — à l'arrêt du serveur, les jobs d'arrière-plan meurent AVEC
+  // lui : plus aucun processus orphelin qui survit à Ctrl+C, son registre
+  // perdu avec le processus.
+  workspacesApi.close = (): void => {
+    jobs.killAll()
   }
+  return workspacesApi
+}
+
+/** Audit R1 — the workspaces handler owns the background shell jobs: the
+ * plugin calls close() on server shutdown so no orphan process survives
+ * the dev/preview server (a running build used to outlive Ctrl+C, its
+ * registry lost with the process). */
+type WorkspacesHandlerFn = (req: IncomingMessage, res: ServerResponse) => void
+export interface WorkspacesApi extends WorkspacesHandlerFn {
+  close(): void
 }

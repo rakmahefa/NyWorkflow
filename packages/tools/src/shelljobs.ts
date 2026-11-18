@@ -148,14 +148,19 @@ export class ShellJobRegistry {
     this.jobs.clear()
   }
 
-  /** Keeps at most JOB_MAX_PER_WORKSPACE * 2 entries per workspace: finished first out. */
+  /** Keeps at most JOB_MAX_PER_WORKSPACE * 2 entries per workspace: finished
+   * first out. Audit R5 — a RUNNING job is NEVER evicted: a live process
+   * leaving the registry becomes unreachable (shell_output/shell_kill would
+   * report « processus inconnu » while it still runs). */
   private evict(workspace: string): void {
     const ofWs = [...this.jobs.values()].filter((j) => j.workspace === workspace)
     const limit = JOB_MAX_PER_WORKSPACE * 2
-    if (ofWs.length <= limit) return
+    let excess = ofWs.length - limit
+    if (excess <= 0) return
     for (const j of ofWs.sort((a, b) => Number(a.running) - Number(b.running) || a.startedAt - b.startedAt)) {
+      if (j.running || excess <= 0) break // sorted finished-first: a running one means no candidate remains
       this.jobs.delete(j.jobId)
-      if (this.jobs.size <= limit) break
+      excess--
     }
   }
 
